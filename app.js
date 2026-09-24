@@ -574,11 +574,27 @@
       if (!res.ok) throw new Error(data.message || '读取失败');
       if (!data.records.length) { $('#libList').innerHTML = '<div class="muted">尚无卦例。</div>'; return; }
       $('#libList').innerHTML = data.records.map(function (r) {
-        return '<div class="lib-item" data-id="' + r.id + '"><span>' + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) +
-          '</span><span class="muted">' + esc((r.created_at || '').slice(0, 10)) + '</span></div>';
+        return '<div class="lib-item" data-id="' + r.id + '"><span>' + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) + '</span>' +
+          '<span class="lib-side"><span class="muted">' + esc((r.created_at || '').slice(0, 10)) + '</span>' +
+          '<button class="lib-del" data-del="' + r.id + '" title="删除此卦例">×</button></span></div>';
       }).join('');
       Array.prototype.forEach.call(document.querySelectorAll('.lib-item'), function (el) {
         el.onclick = function () { loadCast(el.dataset.id); };
+      });
+      Array.prototype.forEach.call(document.querySelectorAll('.lib-del'), function (btn) {
+        btn.onclick = async function (e) {
+          e.stopPropagation();
+          if (!confirm('确定删除此卦例？不可恢复。')) return;
+          try {
+            const res = await apiFetch('/api/records?id=' + encodeURIComponent(btn.dataset.del), { method: 'DELETE' });
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.message || '删除失败');
+            const item = btn.closest('.lib-item');
+            if (item) item.remove();
+            $('#libDetail').innerHTML = '';
+            if (!$('.lib-item')) $('#libList').innerHTML = '<div class="muted">尚无卦例。</div>';
+          } catch (err) { alert('删除失败：' + err.message); }
+        };
       });
     } catch (e) {
       $('#libList').innerHTML = '<div class="muted">读取失败：' + esc(e.message) + '</div>';
@@ -595,9 +611,11 @@
     if (Array.isArray(msgs)) msgs = msgs.length ? { '（旧版记录）': msgs } : {};
     let colHTML = Object.keys(msgs).map(function (m) {
       const cfg = MODELS.filter(function (x) { return x.id === m; })[0] || { label: m, pv: '' };
+      // 兼容两种结构：{模型: [消息...]}（旧）与 {模型: {history: [消息...]}}（现行 aiStates 格式）
+      const arr = Array.isArray(msgs[m]) ? msgs[m] : ((msgs[m] && msgs[m].history) || []);
       return '<div class="ai-col">' +
         '<div class="ai-col-head">' + esc(cfg.label || m) + '<span class="pv-tag">' + esc(cfg.pv || '') + '</span></div>' +
-        msgs[m].map(function (msg) {
+        arr.map(function (msg) {
           return '<div class="msg ' + (msg.role === 'user' ? 'user' : 'ai') + '"><b>' +
             (msg.role === 'user' ? '问' : '断') + '：</b>' + mdLite(msg.content) + '</div>';
         }).join('') + '</div>';
