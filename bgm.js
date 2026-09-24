@@ -12,7 +12,7 @@
   let playing = false, timer = null;
   let enabled = localStorage.getItem('ly_bgm') !== 'off';
 
-  // D 宫五声音阶：D E F# A B（羽调色彩），跨三个八度
+  // D 宫五声音阶：D E F# A B（羽调色彩），跨两个八度余
   const SCALE = [
     73.42, 82.41, 92.50, 110.00, 123.47,
     146.83, 164.81, 185.00, 220.00, 246.94,
