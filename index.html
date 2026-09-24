@@ -135,8 +135,24 @@
   .fu-cell { color: var(--ink-light); font-size: 13px; }
   .kong { color: var(--cinnabar); }
   .bian-cell { color: #4a6741; }
-
-  /* 断卦 */
+  /* 琴音按钮（生成式背景音，见 bgm.js） */
+  #bgmBtn {
+    position: fixed; right: 20px; bottom: 20px; z-index: 60;
+    width: 46px; height: 46px; border-radius: 50%;
+    border: 1.5px solid var(--gold); background: #fdfaf3; color: var(--gold);
+    font-family: inherit; font-size: 20px; cursor: pointer;
+    box-shadow: 0 2px 10px rgba(120, 90, 40, .18);
+    transition: all .25s;
+  }
+  #bgmBtn:hover { border-color: var(--cinnabar); color: var(--cinnabar); }
+  #bgmBtn.on {
+    background: var(--cinnabar); border-color: var(--cinnabar-dark); color: #fff;
+    animation: bgmPulse 3s ease-in-out infinite;
+  }
+  @keyframes bgmPulse {
+    0%, 100% { box-shadow: 0 2px 10px rgba(168, 63, 57, .25); }
+    50% { box-shadow: 0 2px 18px rgba(168, 63, 57, .55); }
+  }
   .use-select {
     font-family: inherit; font-size: 15px; padding: 8px 12px;
     border: 1px solid var(--line); border-radius: 6px; background: #fff;
@@ -307,7 +323,10 @@
   <p class="disclaimer">排盘依京房八宫纳甲法 · 节气按通用公式推算（临界日期或有一日之差）· 本工具仅供术数研究与娱乐参考</p>
 </div>
 
+<button id="bgmBtn" title="琴音 · 点击播放">琴</button>
+
 <script src="core.js"></script>
 <script src="app.js"></script>
+<script src="bgm.js"></script>
 </body>
 </html>
