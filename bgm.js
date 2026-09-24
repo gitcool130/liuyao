@@ -39,11 +39,17 @@
     master.connect(ctx.destination);
 
     bus = ctx.createGain();
-    const dry = ctx.createGain(); dry.gain.value = 0.75;
+    const dry = ctx.createGain(); dry.gain.value = 0.6;
     const conv = ctx.createConvolver(); conv.buffer = impulse(2.8, 3.2);
-    const wet = ctx.createGain(); wet.gain.value = 0.5;
-    bus.connect(dry); dry.connect(master);
-    bus.connect(conv); conv.connect(wet); wet.connect(master);
+    const wet = ctx.createGain(); wet.gain.value = 0.55;
+    // 总线低通：压掉高频毛刺，音色更温润
+    const tone = ctx.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.frequency.value = 1500;
+    tone.Q.value = 0.4;
+    bus.connect(tone);
+    tone.connect(dry); dry.connect(master);
+    tone.connect(conv); conv.connect(wet); wet.connect(master);
   }
 
   // Karplus-Strong 拨弦：生成一整个音符的缓冲
@@ -55,13 +61,18 @@
     const out = buf.getChannelData(0);
     const line = new Float32Array(N);
     for (let i = 0; i < N; i++) line[i] = Math.random() * 2 - 1;
-    // 衰减系数：低频更绵长，高频更收敛；bright 决定音色明暗
-    const damp = Math.min(0.9985, 0.994 + bright * 0.004);
+    // 激励噪声多轮平滑：去掉起音的"扎"，拨弦触感更钝、更棉
+    for (let pass = 0; pass < 3; pass++) {
+      for (let i = 1; i < N; i++) line[i] = (line[i] + line[i - 1]) * 0.5;
+    }
+    // 衰减系数随频率变化：越低越绵长，越高越收敛（高频不刺耳）
+    const t = Math.min(1, Math.max(0, (freq - 70) / 430)); // 0=最低音 1=最高音
+    const damp = 0.997 - t * 0.007 + bright * 0.001;
     let idx = 0;
     for (let i = 0; i < len; i++) {
       const cur = line[idx];
       const nxt = line[(idx + 1) % N];
-      line[idx] = damp * (cur * (0.5 - bright * 0.18) + nxt * (0.5 + bright * 0.18));
+      line[idx] = damp * (cur * (0.5 - bright * 0.1) + nxt * (0.5 + bright * 0.1));
       out[i] = cur;
       idx = (idx + 1) % N;
     }
@@ -82,29 +93,29 @@
   function rand(a, b) { return a + Math.random() * (b - a); }
   function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
-  // 一个乐句：3~7 音，级进为主，偶尔跳进；句后留白 4~9 秒
+  // 一个乐句：3~6 音，级进为主；音区压在中低音域；句后留白 5~10 秒
   function phrase() {
     if (!playing) return;
     // 后台挂起期间 currentTime 冻结，避免在冻结时间上叠加调度，待恢复后再排句
     if (ctx.state !== 'running') { timer = setTimeout(phrase, 1200); return; }
-    const notes = 3 + Math.floor(Math.random() * 5);
+    const notes = 3 + Math.floor(Math.random() * 4);
     let t = ctx.currentTime + 0.05;
     for (let n = 0; n < notes; n++) {
-      // 随机漫步：小步为主
-      const step = pick([-3, -2, -2, -1, -1, -1, 0, 1, 1, 1, 2, 2, 3]);
-      pos = Math.max(2, Math.min(SCALE.length - 3, pos + step));
+      // 随机漫步：小步为主，略偏下行（低音更沉稳）
+      const step = pick([-3, -2, -2, -1, -1, -1, -1, 0, 1, 1, 2]);
+      pos = Math.max(1, Math.min(SCALE.length - 5, pos + step)); // 避开最高三音
       const f = SCALE[pos];
-      const dur = rand(2.2, 3.8);
-      const gain = rand(0.10, 0.20);
-      const bright = rand(-0.5, 0.5);
+      const dur = rand(2.6, 4.5);
+      const gain = rand(0.05, 0.10);
+      const bright = rand(-0.7, 0.3); // 整体偏暗
       pluck(f, t, dur, gain, bright);
-      // 15% 泛音（高音区轻点，似古琴泛音段）
-      if (Math.random() < 0.15) pluck(f * 2, t + rand(0.02, 0.06), 1.6, gain * 0.35, 0.6);
+      // 8% 泛音（更轻，似有似无）
+      if (Math.random() < 0.08) pluck(f * 2, t + rand(0.02, 0.06), 1.4, gain * 0.22, -0.2);
       // 10% 双音（低声部衬一音，似按音应和）
-      if (Math.random() < 0.10 && pos > 3) pluck(SCALE[pos - 3], t + 0.02, dur * 0.9, gain * 0.6, -0.4);
-      t += rand(0.45, 1.5);
+      if (Math.random() < 0.10 && pos > 3) pluck(SCALE[pos - 3], t + 0.02, dur * 0.9, gain * 0.5, -0.6);
+      t += rand(0.5, 1.7);
     }
-    timer = setTimeout(phrase, (t - ctx.currentTime) * 1000 + rand(4000, 9000));
+    timer = setTimeout(phrase, (t - ctx.currentTime) * 1000 + rand(5000, 10000));
   }
 
   function start() {
@@ -113,7 +124,7 @@
     playing = true;
     master.gain.cancelScheduledValues(ctx.currentTime);
     master.gain.setValueAtTime(master.gain.value, ctx.currentTime);
-    master.gain.linearRampToValueAtTime(0.85, ctx.currentTime + 3);
+    master.gain.linearRampToValueAtTime(0.6, ctx.currentTime + 3);
     clearTimeout(timer);
     phrase();
     btn.classList.add('on');
