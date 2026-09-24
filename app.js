@@ -150,12 +150,24 @@
   }
 
   // ---------- 断卦 ----------
+  // 当前所测之事的文本（固定事类返回标签，自定义返回输入内容）
+  function currentQuestion() {
+    const t = $('#useSelect').value;
+    if (t === '__custom__') return ($('#useCustom').value || '').trim();
+    const useMap = { '妻财': '求财·买卖', '官鬼': '功名·官司·疾病', '父母': '考试·文书', '子孙': '子女·医药', '兄弟': '朋友·竞争', 'shi': '自身运势' };
+    return useMap[t] || '';
+  }
+
   function renderAnalysis() {
     const target = $('#useSelect').value;
     const list = $('#conclList');
     const vBox = $('#verdictBox');
-    if (!target) {
-      list.innerHTML = '<li>选择所测之事，先观用神旺衰。通用次第：一观世爻旺衰，二观用神与世应，三审动爻生克，四定旬空月破与应期。</li>';
+    const customInput = $('#useCustom');
+    customInput.hidden = (target !== '__custom__');
+    if (!target || target === '__custom__') {
+      // 空选与自定义：无固定用神可取，旺衰硬规则不适用，给出通用次第
+      list.innerHTML = '<li>选择所测之事，先观用神旺衰。通用次第：一观世爻旺衰，二观用神与世应，三审动爻生克，四定旬空月破与应期。</li>' +
+        (target === '__custom__' ? '<li>自定义所测不作旺衰粗判，所测事项将写入排盘文本交由大模型细断。</li>' : '');
       vBox.hidden = true; lastBullets = [];
       return;
     }
@@ -167,16 +179,16 @@
     vBox.hidden = false;
     vBox.innerHTML = '<b>粗判</b>　' + res.verdict;
   }
-  $('#useSelect').onchange = renderAnalysis;
+  $('#useSelect').onchange = function () { renderAnalysis(); if ($('#useCustom').hidden === false) $('#useCustom').focus(); };
+  $('#useCustom').oninput = function () { /* 输入变化无需重算粗判，buildPanText 实时读取 */ };
 
   // ---------- 排盘文本（复制与 AI 共用） ----------
   function buildPanText(forAI) {
     const pil = pan.pillars;
     let txt = '【六爻排盘】\n';
     txt += '时间：' + fmtDT(selectedDate) + '（' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时，旬空' + pil.kongStr + '）\n';
-    const t = $('#useSelect').value;
-    const useMap = { '妻财': '求财·买卖', '官鬼': '功名·官司·疾病', '父母': '考试·文书', '子孙': '子女·医药', '兄弟': '朋友·竞争', 'shi': '自身运势' };
-    if (t) txt += '所测：' + (useMap[t] || t) + '\n';
+    const q = currentQuestion();
+    if (q) txt += '所测：' + q + '\n';
     txt += '本卦：' + pan.benName + '（' + pan.palace + '宫·' + pan.palaceWx + '）' +
       (pan.hasBian ? ' 之 ' + pan.bianName + '（' + pan.bianPalace + '宫）' : '（静卦）') + '\n';
     txt += '六神　伏神　本卦　　　世应　变爻\n';
@@ -477,7 +489,9 @@
       id: castId,
       datetime: fmtDT(selectedDate),
       pillars: pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时',
-      question: $('#useSelect').value ? $('#useSelect option:checked').textContent : '',
+      question: $('#useSelect').value === '__custom__'
+        ? currentQuestion()
+        : ($('#useSelect').value ? $('#useSelect option:checked').textContent : ''),
       hex: pan.benName + (pan.hasBian ? ' 之 ' + pan.bianName : '（静卦）'),
       tosses: records,
       panText: buildPanText(true),
