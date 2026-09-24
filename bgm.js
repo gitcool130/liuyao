@@ -85,6 +85,8 @@
   // 一个乐句：3~7 音，级进为主，偶尔跳进；句后留白 4~9 秒
   function phrase() {
     if (!playing) return;
+    // 后台挂起期间 currentTime 冻结，避免在冻结时间上叠加调度，待恢复后再排句
+    if (ctx.state !== 'running') { timer = setTimeout(phrase, 1200); return; }
     const notes = 3 + Math.floor(Math.random() * 5);
     let t = ctx.currentTime + 0.05;
     for (let n = 0; n < notes; n++) {
