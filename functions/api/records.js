@@ -19,6 +19,16 @@ function checkAccess(request, env) {
   return code === env.ACCESS_CODE ? null : json({ error: 'ACCESS_REQUIRED', message: '需要访问口令' }, 401);
 }
 
+// 写入鉴权：优先专用卦例库口令 LIB_CODE，未配置则回退全站 ACCESS_CODE；
+// 两者都未配置时保持开放（向后兼容本地/测试环境）
+function writeGuard(request, env) {
+  const code = env.LIB_CODE || env.ACCESS_CODE;
+  if (!code) return null;
+  return (request.headers.get('X-Access-Code') || '') === code
+    ? null
+    : json({ error: 'ACCESS_REQUIRED', message: '装入卦例库需要口令' }, 401);
+}
+
 function noDb() {
   return json({ error: 'NO_DB', message: '服务端未绑定 D1 数据库（变量名应为 LIUYAO_DB）' }, 503);
 }
@@ -42,7 +52,9 @@ export async function onRequestGet(context) {
 
 export async function onRequestPost(context) {
   const { request, env } = context;
-  const denied = checkAccess(request, env); if (denied) return denied;
+  const denied = writeGuard(request, env); if (denied) return denied;
+  // 口令验证探针：POST /api/records?verify=1 只校验口令不落库
+  if (new URL(request.url).searchParams.get('verify')) return json({ ok: true });
   if (!env.LIUYAO_DB) return noDb();
 
   let b;
