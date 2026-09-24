@@ -100,6 +100,7 @@
     records = []; pan = null; curCoins = ['背', '背', '背'];
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
     $('#useSelect').value = ''; lastBullets = [];
+    const uc = $('#useCustom'); if (uc) { uc.value = ''; uc.hidden = true; }
     renderCoins(); renderTossHint(); renderStack();
   };
   $('#dtInput').onchange = function () {
