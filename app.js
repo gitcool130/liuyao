@@ -328,13 +328,19 @@
     return h;
   }
 
-  async function apiFetch(path, opts) {
+  // 请求封装：401 时清除旧口令并提示重输；silent=true 时不弹框（自动保存场景静默跳过）
+  async function apiFetch(path, opts, silent) {
     let res = await fetch(path, Object.assign({ headers: apiHeaders() }, opts || {}));
-    if (res.status === 401) {
-      const code = prompt('此站点已启用访问口令，请输入：');
+    if (res.status === 401 && !silent) {
+      localStorage.removeItem('ly_access_code');
+      renderLoginBtn();
+      const code = prompt('需要口令才能继续，请输入：');
       if (code) {
         localStorage.setItem('ly_access_code', code);
+        renderLoginBtn();
         res = await fetch(path, Object.assign({ headers: apiHeaders() }, opts || {}));
+        if (res.status === 401) localStorage.removeItem('ly_access_code');
+        renderLoginBtn();
       }
     }
     return res;
@@ -417,14 +423,20 @@
     };
   }
 
-  function colBody(id) { return document.getElementById('col-' + id.replace(/[^a-zA-Z0-9]/g, '')); }
+  // 模型 id → 安全 DOM id（带哈希，避免 gpt-5.2 与 gpt-52 之类去符号后撞名）
+  function midSafe(m) {
+    let h = 0;
+    for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) >>> 0;
+    return m.replace(/[^a-zA-Z0-9]/g, '') + h.toString(36);
+  }
+  function colBody(id) { return document.getElementById('col-' + midSafe(id)); }
 
   function renderCols() {
     $('#aiReply').innerHTML = selModels.map(function (m, i) {
       const cfg = MODELS.filter(function (x) { return x.id === m; })[0] || {};
       return '<div class="ai-col">' +
         '<div class="ai-col-head">' + esc(cfg.label || m) + '<span class="pv-tag">' + esc(cfg.pv || '') + '</span></div>' +
-        '<div class="ai-col-body" id="col-' + m.replace(/[^a-zA-Z0-9]/g, '') + '"></div>' +
+        '<div class="ai-col-body" id="col-' + midSafe(m) + '"></div>' +
         '</div>';
     }).join('');
   }
@@ -452,19 +464,21 @@
     autoSaveCast();
   };
 
+  let chatBusy = false;
   async function sendChat() {
     const input = $('#chatInput');
     const q = input.value.trim();
-    if (!q || !Object.keys(aiStates).length) return;
+    if (!q || chatBusy || !Object.keys(aiStates).length) return;
+    chatBusy = true;
     input.value = '';
     const active = Object.keys(aiStates);
     active.forEach(function (m) {
       aiStates[m].history.push({ role: 'user', content: q });
       colBody(m).insertAdjacentHTML('beforeend',
-        '<div class="msg user"><b>问：</b>' + mdLite(q) + '</div><div class="msg ai" id="chatload-' + m.replace(/[^a-zA-Z0-9]/g, '') + '"><span class="loading">推敲中…</span></div>');
+        '<div class="msg user"><b>问：</b>' + mdLite(q) + '</div><div class="msg ai" id="chatload-' + midSafe(m) + '"><span class="loading">推敲中…</span></div>');
     });
     await Promise.all(active.map(async function (m) {
-      const loadEl = document.getElementById('chatload-' + m.replace(/[^a-zA-Z0-9]/g, ''));
+      const loadEl = document.getElementById('chatload-' + midSafe(m));
       try {
         const reply = await callInterpret(m, aiStates[m].history.slice(0, -1));
         aiStates[m].history.push({ role: 'assistant', content: reply });
@@ -478,6 +492,7 @@
         }
       }
     }));
+    chatBusy = false;
     autoSaveCast();
   }
   $('#btnChat').onclick = sendChat;
@@ -501,10 +516,11 @@
 
   async function autoSaveCast() {
     try {
-      const res = await apiFetch('/api/records', { method: 'POST', body: JSON.stringify(recordPayload()) });
+      // silent：未登录时不弹口令框，静默跳过
+      const res = await apiFetch('/api/records', { method: 'POST', body: JSON.stringify(recordPayload()) }, true);
       const data = await res.json();
       if (res.ok && data.id) { castId = data.id; $('#btnSave').textContent = '已入卦例库 ✓'; }
-    } catch (e) { /* 静默：数据库未绑定时不打扰断卦 */ }
+    } catch (e) { /* 静默：数据库未绑定或未登录时不打扰断卦 */ }
   }
 
   $('#btnSave').onclick = async function () {
@@ -519,6 +535,35 @@
     } catch (e) {
       alert('保存失败：' + e.message);
     } finally { btn.disabled = false; }
+  };
+
+  // ---------- 卦例库口令登录 ----------
+  function renderLoginBtn() {
+    const btn = $('#btnLogin'), tip = $('#loginTip');
+    if (!btn) return;
+    const logged = !!localStorage.getItem('ly_access_code');
+    btn.textContent = logged ? '已登录 · 退出' : '口令登录';
+    if (tip) tip.textContent = logged ? '已登录，断卦后自动入卦例库' : '卦例浏览开放，装入需口令';
+  }
+  const _btnLogin = $('#btnLogin');
+  if (_btnLogin) _btnLogin.onclick = async function () {
+    if (localStorage.getItem('ly_access_code')) {
+      localStorage.removeItem('ly_access_code');
+      renderLoginBtn();
+      return;
+    }
+    const code = prompt('请输入卦例库口令：');
+    if (!code) return;
+    localStorage.setItem('ly_access_code', code);
+    // 验证探针：只校验口令不落库
+    try {
+      const res = await fetch('/api/records?verify=1', { method: 'POST', headers: apiHeaders(), body: '{}' });
+      if (res.status === 401) {
+        localStorage.removeItem('ly_access_code');
+        alert('口令错误');
+      }
+    } catch (e) { /* 网络异常时保留输入，实际写入时再校验 */ }
+    renderLoginBtn();
   };
 
   $('#btnLib').onclick = async function () {
@@ -568,6 +613,7 @@
   // ---------- init ----------
   renderModelChips();
   loadModels();
+  renderLoginBtn();
   renderTime();
   renderCoins();
   renderTossHint();
