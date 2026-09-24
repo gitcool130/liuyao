@@ -211,6 +211,13 @@
     display: flex; justify-content: space-between; gap: 8px; font-size: 14px;
   }
   .lib-item:hover { background: #faf5e9; }
+  .lib-side { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .lib-del {
+    font-family: inherit; font-size: 15px; line-height: 1; width: 24px; height: 24px;
+    border: 1px solid var(--line); border-radius: 50%; background: transparent;
+    color: var(--ink-light); cursor: pointer; transition: all .2s;
+  }
+  .lib-del:hover { border-color: var(--cinnabar); color: var(--cinnabar); background: #fbf1ef; }
   .pan-text {
     white-space: pre-wrap; font-family: "Courier New", monospace; font-size: 13px;
     background: #fff; border: 1px solid var(--line); border-radius: 6px;
