@@ -1,4 +1,4 @@
-# 莲斋六爻 · 在线排盘与 AI 断卦
+# 增删六爻 · 在线排盘与 AI 断卦
 
 基于京房纳甲的六爻排盘工具，集成多模型 AI 断卦。前端纯静态（HTML/CSS/JS，零依赖），后端为 Cloudflare Pages Functions + D1 数据库。
 
