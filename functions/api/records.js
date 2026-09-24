@@ -1,8 +1,10 @@
 /* Cloudflare Pages Function: /api/records
  * 卦例库（D1 数据库 LIUYAO_DB）
- *   GET  /api/records          → 卦例列表（不含正文）
- *   GET  /api/records?id=xxx   → 单条卦例详情
- *   POST /api/records          → 新建/更新卦例（传 id 则更新对话记录）
+ *   GET    /api/records          → 卦例列表（不含正文），开放
+ *   GET    /api/records?id=xxx   → 单条卦例详情，开放
+ *   POST   /api/records          → 新建/更新卦例（需 LIB_CODE 口令）
+ *   POST   /api/records?verify=1 → 口令验证探针，不落库
+ *   DELETE /api/records?id=xxx   → 删除卦例（需 LIB_CODE 口令）
  * 绑定：Pages 项目 → Settings → Functions → D1 database bindings → 变量名 LIUYAO_DB
  */
 
@@ -48,6 +50,16 @@ export async function onRequestGet(context) {
     'SELECT id, created_at, datetime, question, hex, pillars FROM casts ORDER BY created_at DESC LIMIT 100'
   ).all();
   return json({ records: results || [] });
+}
+
+export async function onRequestDelete(context) {
+  const { request, env } = context;
+  const denied = writeGuard(request, env); if (denied) return denied;
+  if (!env.LIUYAO_DB) return noDb();
+  const id = new URL(request.url).searchParams.get('id');
+  if (!id) return json({ error: 'NO_ID', message: '缺少 id' }, 400);
+  await env.LIUYAO_DB.prepare('DELETE FROM casts WHERE id = ?').bind(id).run();
+  return json({ ok: true });
 }
 
 export async function onRequestPost(context) {
