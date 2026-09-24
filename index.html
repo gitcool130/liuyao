@@ -265,7 +265,11 @@
       <option value="子孙">子女 · 晚辈 · 医药 · 解忧</option>
       <option value="兄弟">朋友 · 同事 · 竞争 · 破耗</option>
       <option value="shi">自身 · 身体 · 运势</option>
+      <option value="__custom__">自定义（手动输入所测之事）…</option>
     </select>
+    <input type="text" class="use-select" id="useCustom" maxlength="60"
+      placeholder="例如：能否跳槽去新公司？孩子考研顺利吗？（旺衰粗判需选上方固定事类，此处交由 AI 细断）"
+      hidden style="width:100%;box-sizing:border-box">
     <ul class="concl" id="conclList"></ul>
     <div class="verdict" id="verdictBox" hidden></div>
     <p class="muted" style="margin-top:12px">以上为旺衰硬规则的粗判。动爻组合、用神取舍、应期推断皆需通盘细审——可将排盘文本复制予 AI 或明师参断。</p>
