@@ -19,6 +19,20 @@
   const STRONG = ['旺', '相'];   // 旺相
   const WEAK = ['休', '囚', '死']; // 休囚
 
+  // ---------- 五行关系（五值完备，供各规则共用） ----------
+  // 以 myWx（我）为主体，返回对 otherWx（彼）的关系：
+  //   '比和'（同五行）｜'得生'（彼生我）｜'受克'（彼克我）｜'泄'（我生彼）｜'耗'（我克彼）
+  // 五行两两之间必居其一，故本函数对所有输入都有确定返回值——
+  // 各规则禁止再用 else 兜底猜「非生非克即某关系」（同五行不同支会被吞掉）。
+  function relation5(myWx, otherWx) {
+    if (myWx === otherWx) return '比和';
+    if (sheng(otherWx, myWx)) return '得生';
+    if (ke(otherWx, myWx)) return '受克';
+    if (sheng(myWx, otherWx)) return '泄';
+    if (ke(myWx, otherWx)) return '耗';
+    return '比和'; // 不可达：五行关系完备，兜底防脏数据
+  }
+
   // ---------- 规则 1：取用神 ----------
   // target: '妻财'|'官鬼'|'父母'|'子孙'|'兄弟'|'shi'
   // 返回 { primary, all, source: '本卦'|'伏神'|'两现取舍'|null, note }
@@ -28,15 +42,36 @@
     }
     const found = pan.lines.filter(function (l) { return l.lq === target; });
     if (found.length === 0) {
-      const fuLine = pan.lines.find(function (l) { return l.fu && l.fu.lq === target; });
-      if (!fuLine) return { primary: null, all: [], source: null, note: '卦中无' + target + '，亦无伏神，宜另择用神' };
-      const v = Object.assign({}, fuLine, {
-        zhi: fuLine.fu.zhi, wx: fuLine.fu.wx, zhiIdx: fuLine.fu.zhiIdx,
-        lq: target, isFu: true, moving: false, bian: null
-      });
+      // 伏神多现：按古法次序取——临世应者 → 月令旺相者 → 在前之爻
+      // （旧版 find 取首个匹配，与 ruleFu/ruleShi 的解读口径不一致）
+      const fus = pan.lines.filter(function (l) { return l.fu && l.fu.lq === target; });
+      if (!fus.length) return { primary: null, all: [], source: null, note: '卦中无' + target + '，亦无伏神，宜另择用神' };
+      const mz0 = pan.pillars ? pan.pillars.monthZhi : 0;
+      const makeFu = function (fl) {
+        return Object.assign({}, fl, {
+          zhi: fl.fu.zhi, wx: fl.fu.wx, zhiIdx: fl.fu.zhiIdx,
+          lq: target, isFu: true, moving: false, bian: null
+        });
+      };
+      let host = fus.filter(function (l) { return l.pos === pan.shi || l.pos === pan.ying; })[0];
+      let why = '临世应者';
+      if (!host) {
+        const best = fus.map(function (l) {
+          const g = wangXiangXiuQiuSi(l.fu.wx, mz0);
+          const r = GRADES.indexOf(g);
+          return { l: l, g: g, rank: r < 0 ? GRADES.length : r };
+        }).sort(function (a, b) { return a.rank - b.rank; });
+        host = best[0].l;
+        why = best.length > 1 && best[0].rank === best[1].rank
+          ? '在前之爻（皆不临世应且月令旺衰相同）'
+          : '月令' + ZHI[mz0] + '下旺相者（' + best[0].g + '）';
+      }
+      const fuLine = host;
+      const v = makeFu(fuLine);
       return {
-        primary: v, all: [v], source: '伏神',
-        note: '用神' + target + '不上卦，取伏神' + target + fuLine.fu.zhi + '（伏于' + LINE_NAMES[fuLine.pos] + '，飞神' + fuLine.lq + fuLine.zhi + '）'
+        primary: v, all: fus.map(makeFu), source: '伏神',
+        note: '用神' + target + '不上卦，取伏神' + target + fuLine.fu.zhi + '（伏于' + LINE_NAMES[fuLine.pos] + '，飞神' + fuLine.lq + fuLine.zhi +
+          (fus.length > 1 ? '；伏神' + fus.length + '现，取' + why : '') + '）'
       };
     }
     if (found.length === 1) {
@@ -92,19 +127,28 @@
     const mz = pil.monthZhi, mWx = ZHI_WX[mz];
     const grade = wangXiangXiuQiuSi(L.wx, mz);
     const nm = nameOf(L, target);
+    const rel = relation5(L.wx, mWx);
     if (mz === L.zhiIdx) {
       js.push({ tag: '月建', rule: '临月建', text: nm + '临月建' + ZHI[mz] + '，当令最旺。', basis: '月建为提纲，临之则旺' });
-    } else if (sheng(mWx, L.wx)) {
+    } else if (rel === '比和') {
+      // 同五行不同支（如月建子水、用神亥水）：得月令同气之扶，非当令，亦非克耗
+      js.push({
+        tag: '月建', rule: '月建同气',
+        text: nm + '与月建' + ZHI[mz] + '同属' + mWx + '，同气而扶（' + grade + '），虽不如临月建之当令，亦为得令有气。',
+        basis: '月建同五行异支者，同气相扶而得令，不作克月建论'
+      });
+    } else if (rel === '得生') {
       js.push({ tag: '月建', rule: '月建生扶', text: nm + '得月建' + ZHI[mz] + mWx + '生扶（' + grade + '）。', basis: '得令者相' });
-    } else if (ke(mWx, L.wx)) {
+    } else if (rel === '受克') {
       js.push({ tag: '月建', rule: '月建克伤', text: nm + '被月建' + ZHI[mz] + mWx + '所克（' + grade + '），失令。', basis: '月建为提纲，克则衰' });
-    } else if (sheng(L.wx, mWx)) {
+    } else if (rel === '泄') {
       js.push({ tag: '月建', rule: '泄气于月', text: nm + '生月建' + ZHI[mz] + mWx + '，泄气于时令（' + grade + '）。', basis: '生令者休' });
     } else {
       js.push({ tag: '月建', rule: '克月建', text: nm + '克月建' + ZHI[mz] + mWx + '，力耗于时令（' + grade + '）。', basis: '克令者囚' });
     }
     return { grade: grade, judgments: js };
   }
+
 
   // ---------- 规则 3：月破（真假之辨） ----------
   function ruleYuePo(L, pil, grade, daySupports, target) {
@@ -125,23 +169,32 @@
     const js = [];
     const dz = pil.dayZhi, dWx = ZHI_WX[dz];
     const nm = nameOf(L, target);
+    const rel = relation5(L.wx, dWx);
     let supports = false; // 日辰生扶与否（供月破真假判定）
     if (dz === L.zhiIdx) {
       supports = true;
       js.push({ tag: '日辰', rule: '临日辰', text: nm + '临日辰' + ZHI[dz] + '，得日主拱扶。', basis: '日辰为六爻之主宰，临之则旺' });
-    } else if (sheng(dWx, L.wx)) {
+    } else if (rel === '得生') {
       supports = true;
       js.push({ tag: '日辰', rule: '日辰生扶', text: nm + '得日辰' + ZHI[dz] + dWx + '生扶。', basis: '日辰生用，衰亦有用' });
-    } else if (ke(dWx, L.wx)) {
+    } else if (rel === '受克') {
       js.push({ tag: '日辰', rule: '日辰克伤', text: nm + '被日辰' + ZHI[dz] + dWx + '所克。', basis: '日辰克用，旺相亦损' });
-    } else if (sheng(L.wx, dWx)) {
+    } else if (rel === '泄') {
       js.push({ tag: '日辰', rule: '泄气于日', text: nm + '生日辰' + ZHI[dz] + dWx + '，泄气于日。', basis: '用神泄气，力量外散' });
+    } else if (rel === '耗') {
+      // 用神克日辰：耗气而非受克，更非比和拱扶（不可计入 daySupports）
+      js.push({
+        tag: '日辰', rule: '耗于日辰',
+        text: nm + '克日辰' + ZHI[dz] + dWx + '，力耗于日，非受克亦非得扶，用神耗气则力减。',
+        basis: '用神克日辰为耗气，不为拱扶，故月破真假、真空判定不以此作救'
+      });
     } else {
       supports = true; // 比和亦为拱扶
       js.push({ tag: '日辰', rule: '日辰比和', text: nm + '与日辰' + ZHI[dz] + dWx + '比和拱扶。', basis: '比和者拱' });
     }
     return { supports: supports, judgments: js };
   }
+
 
   // ---------- 规则 5：日冲分支（暗动闭环的关键） ----------
   // 动爻被冲=冲散；静爻被冲：先查旺衰——旺相=暗动，休囚=日破
@@ -246,6 +299,44 @@
     return { judgments: js, kind: kind };
   }
 
+  // ---------- 规则 8b：其余动爻对用神的作用 ----------
+  // 卦中最活跃的力量来源是动爻。旧版只判用神自身的动变（ruleDongBian），
+  // 全卦其余动爻（及动爻化出之变爻）对用神的生克完全未入判定链——结构性缺环。
+  // 此处按五行五值关系逐一列明：原神发动生用（吉）、忌神发动克用（凶）、
+  // 用神生动爻（泄）、用神克动爻（耗）、比和同气。
+  function ruleMovingOthers(pan, L, target) {
+    const js = [];
+    if (!pan || !pan.lines) return js;
+    pan.lines.forEach(function (M) {
+      if (!M.moving) return;
+      if (M.pos === L.pos) return; // 用神自身动变由 ruleDongBian 判；用神为伏神时 pos 为飞神位，飞伏关系由 ruleFu 判
+      const rel = relation5(L.wx, M.wx);
+      const who = LINE_NAMES[M.pos] + M.lq + M.zhi + M.wx;
+      if (rel === '得生') {
+        js.push({ tag: '动爻', rule: '动爻生用', text: '他爻' + who + '发动来生用神，原神有力，事有可图。', basis: '原神发动生用，为吉' });
+      } else if (rel === '受克') {
+        js.push({ tag: '动爻', rule: '动爻克用', text: '他爻' + who + '发动来克用神，忌神当道，用神受伤。', basis: '忌神发动克用，为凶' });
+      } else if (rel === '泄') {
+        js.push({ tag: '动爻', rule: '泄于动爻', text: '用神生' + who + '而发动，用神泄气于动爻，力量外散。', basis: '用神生动爻为泄气' });
+      } else if (rel === '耗') {
+        js.push({ tag: '动爻', rule: '耗于动爻', text: '用神克' + who + '而发动，用神虽能制之，亦自耗其力。', basis: '用神克动爻为耗' });
+      } else {
+        js.push({ tag: '动爻', rule: '动爻比和', text: '他爻' + who + '发动，与用神比和同气，可相助而不相伤。', basis: '比和同气' });
+      }
+      // 变爻（动而化出之支）亦参与对用神的生克
+      if (M.bian) {
+        const rb = relation5(L.wx, M.bian.wx);
+        const bw = '变爻' + M.bian.lq + M.bian.zhi + M.bian.wx;
+        if (rb === '得生') {
+          js.push({ tag: '动爻', rule: '变爻生用', text: who + '化出' + bw + '，变爻生用神，助力在后。', basis: '变爻生用' });
+        } else if (rb === '受克') {
+          js.push({ tag: '动爻', rule: '变爻克用', text: who + '化出' + bw + '，变爻克用神，后患在变。', basis: '变爻克用' });
+        }
+      }
+    });
+    return js;
+  }
+
   // ---------- 规则 9：与世爻关系 ----------
   function ruleShi(pan, L, target) {
     const js = [];
@@ -290,8 +381,12 @@
       js.push({ tag: '伏神', rule: '飞来生伏', text: '飞神' + fly.lq + fly.zhi + fly.wx + '生伏神，伏而得生，如得长生，终可出而有用。', basis: '飞来生伏得长生' });
     } else if (ke(fly.wx, L.wx)) {
       js.push({ tag: '伏神', rule: '飞来克伏', text: '飞神' + fly.lq + fly.zhi + fly.wx + '克伏神，伏被压伤，难于引拔。', basis: '飞来克伏遭害' });
+    } else if (fly.wx === L.wx) {
+      js.push({ tag: '伏神', rule: '飞伏同气', text: '飞神' + fly.lq + fly.zhi + '与伏神同属' + fly.wx + '，同气相求，伏而不伤，引来较易。', basis: '飞伏同气，伏而可出' });
+    } else if (ke(L.wx, fly.wx)) {
+      js.push({ tag: '伏神', rule: '伏克飞神', text: '伏神克飞神' + fly.lq + fly.zhi + fly.wx + '，伏而能制飞，虽耗己力，出伏之门可开。', basis: '伏克飞者，伏神有力可出' });
     } else {
-      js.push({ tag: '伏神', rule: '飞伏无关', text: '飞神' + fly.lq + fly.zhi + '与伏神无生克，待日月生扶之期引拔。', basis: '' });
+      js.push({ tag: '伏神', rule: '伏生飞神', text: '伏神生飞神' + fly.lq + fly.zhi + fly.wx + '，伏而泄气于飞，须日月生扶方易引出。', basis: '伏生飞为泄气，待生扶之期' });
     }
     if (chong(fly.zhiIdx, pil.dayZhi)) {
       js.push({ tag: '伏神', rule: '日冲飞神', text: '日辰冲开飞神，伏神得出之机已现。', basis: '冲飞则伏出' });
@@ -300,20 +395,37 @@
   }
 
   // ---------- M4：三合局 / 刑 / 害（卦内动爻 + 日月） ----------
-  // 三合局：卦中动爻地支（含变爻）三支成局
+  // 三合局：卦中动爻地支三支成局；变爻亦参与——
+  // 旧版只统计本卦动爻，漏判「两动爻 + 一变爻」型三合（如动爻申、动爻子，另一动爻化辰）。
+  // 取源顺序把本卦动爻排在变爻之前，贪心匹配优先用本卦动爻，避免同爻本变双算。
   function ruleSanHe(pan, target) {
     const js = [];
-    const parts = pan.lines.filter(function (l) { return l.moving; }).map(function (l) { return l.zhiIdx; });
-    if (parts.length < 3) return js;
+    const src = [];
+    pan.lines.forEach(function (l) {
+      if (!l.moving) return;
+      src.push({ zhiIdx: l.zhiIdx, from: '本卦' + LINE_NAMES[l.pos] + l.lq + l.zhi, owner: 'p' + l.pos });
+    });
+    pan.lines.forEach(function (l) {
+      if (!l.moving || !l.bian) return;
+      src.push({ zhiIdx: l.bian.zhiIdx, from: '变爻' + l.bian.lq + l.bian.zhi, owner: 'b' + l.pos });
+    });
+    if (src.length < 3) return js;
     LY.SANHE.forEach(function (sh) {
-      const hit = sh.zhis.every(function (z) { return parts.indexOf(z) >= 0; });
-      if (hit) {
-        js.push({
-          tag: '三合', rule: sh.zhis.map(function (z) { return ZHI[z]; }).join('') + '三合' + sh.wx + '局',
-          text: '动爻' + sh.zhis.map(function (z) { return ZHI[z]; }).join('、') + '成三合' + sh.wx + '局，党同气而势成。',
-          basis: '三合成局，其力专'
-        });
-      }
+      const used = [], detail = [];
+      const hit = sh.zhis.every(function (z) {
+        const s = src.filter(function (x) { return x.zhiIdx === z && used.indexOf(x.owner) < 0; })[0];
+        if (!s) return false;
+        used.push(s.owner);
+        detail.push(ZHI[z] + '（' + s.from + '）');
+        return true;
+      });
+      if (!hit) return;
+      const byBian = detail.some(function (d) { return d.indexOf('（变爻') >= 0; });
+      js.push({
+        tag: '三合', rule: sh.zhis.map(function (z) { return ZHI[z]; }).join('') + '三合' + sh.wx + '局',
+        text: detail.join('、') + '成三合' + sh.wx + '局，党同气而势成。' + (byBian ? '（含动爻化出之支）' : ''),
+        basis: '三合成局，其力专；动爻与其化出之爻同参成局'
+      });
     });
     return js;
   }
@@ -344,10 +456,12 @@
     const J = ctx.judgments;
     J.forEach(function (j) {
       const t = j.tag + ':' + j.rule;
-      if (['月建:临月建', '月建:月建生扶', '日辰:临日辰', '日辰:日辰生扶', '日辰:日辰比和',
-        '动变:化回头生', '动变:化进神', '日冲:暗动', '日合:合起', '伏神:飞来生伏', '伏神:日冲飞神'].indexOf(t) >= 0) supports.push(t);
+      if (['月建:临月建', '月建:月建同气', '月建:月建生扶', '日辰:临日辰', '日辰:日辰生扶', '日辰:日辰比和',
+        '动变:化回头生', '动变:化进神', '日冲:暗动', '日合:合起', '伏神:飞来生伏', '伏神:飞伏同气', '伏神:日冲飞神',
+        '动爻:动爻生用', '动爻:变爻生用'].indexOf(t) >= 0) supports.push(t);
       if (['月建:月建克伤', '月破:真月破', '日辰:日辰克伤', '日冲:日破', '日冲:冲散',
-        '旬空:真空', '动变:化回头克', '动变:化退神', '日合:合绊', '伏神:飞来克伏'].indexOf(t) >= 0) harms.push(t);
+        '旬空:真空', '动变:化回头克', '动变:化退神', '日合:合绊', '伏神:飞来克伏',
+        '动爻:动爻克用', '动爻:变爻克用'].indexOf(t) >= 0) harms.push(t);
     });
     let trend;
     if (!ctx.hasYongshen) {
@@ -402,9 +516,10 @@
     const dayhe = ruleDayHe(L, pil, month.grade, target);
     const xunkong = ruleXunKong(L, pil, yuepo.zhen, day.supports, month.grade, target);
     const dongbian = ruleDongBian(L, target);
+    const others = ruleMovingOthers(pan, L, target);
 
     [month.judgments, day.judgments, yuepo.judgments, daychong.judgments, dayhe.judgments,
-      xunkong.judgments, dongbian.judgments].forEach(function (arr) {
+      xunkong.judgments, dongbian.judgments, others].forEach(function (arr) {
       arr.forEach(function (j) { judgments.push(j); bullets.push(j.text); });
     });
     ruleShi(pan, L, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
@@ -447,6 +562,7 @@
   }
 
   // ---------- 导出（规则函数全部可独立单测） ----------
+  LY.relation5 = relation5;
   LY.pickYongshen = pickYongshen;
   LY.wangXiangXiuQiuSi = wangXiangXiuQiuSi;
   LY.ruleMonth = ruleMonth;
@@ -456,6 +572,7 @@
   LY.ruleDayHe = ruleDayHe;
   LY.ruleXunKong = ruleXunKong;
   LY.ruleDongBian = ruleDongBian;
+  LY.ruleMovingOthers = ruleMovingOthers;
   LY.ruleShi = ruleShi;
   LY.ruleFu = ruleFu;
   LY.ruleSanHe = ruleSanHe;
@@ -463,13 +580,10 @@
   LY.aggregateTrend = aggregateTrend;
   LY.analyze = analyze;
 
-  // 旧 API 兼容
+  // 旧 API 兼容（语义同 relation5，仅输出名沿用旧版）
+  const REL_TEXT = { '比和': '比和', '得生': '生我', '泄': '泄气', '受克': '克伤', '耗': '受制' };
   LY.relationText = function (selfWx, otherWx) {
-    if (selfWx === otherWx) return '比和';
-    if (sheng(otherWx, selfWx)) return '生我';
-    if (sheng(selfWx, otherWx)) return '泄气';
-    if (ke(otherWx, selfWx)) return '克伤';
-    if (ke(selfWx, otherWx)) return '受制';
-    return '';
+    return REL_TEXT[relation5(selfWx, otherWx)] || '';
   };
 })(typeof window !== 'undefined' ? window : globalThis);
+

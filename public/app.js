@@ -2,6 +2,19 @@
 (function () {
   const C = window.LY;
 
+  // 核心脚本加载守卫（core/*.js 依次挂载 window.LY）：
+  // 任一核心文件 404/被缓存或插件拦截时，旧版会在 renderTime() 处抛
+  // 「C.fourPillars is not a function」并让整页交互全部失效且无任何提示。
+  if (!C || typeof C.fourPillars !== 'function' || typeof C.paipan !== 'function' || typeof C.analyze !== 'function') {
+    const box = document.createElement('div');
+    box.style.cssText = 'margin:16px;padding:16px;line-height:1.8;border:1px solid #b22c2c;border-radius:8px;background:#fff8f6;color:#3a2b22;font-size:14px';
+    box.innerHTML = '<b>排盘内核未能加载</b><br>' +
+      '核心脚本（core/*.js）没有就绪，页面无法排盘。请先强制刷新（Ctrl+F5 / Cmd+Shift+R）。<br>' +
+      '若仍失败：可能是浏览器插件或 CDN 缓存拦截了 core/ 下的脚本。';
+    document.body.insertBefore(box, document.body.firstChild);
+    return;
+  }
+
   const $ = function (s) { return document.querySelector(s); };
 
   const LINE_NAMES = ['初爻', '二爻', '三爻', '四爻', '五爻', '上爻'];
@@ -11,6 +24,9 @@
     9: { name: '重', sym: '━━━━━ ○', desc: '老阳 · 发动' },
     6: { name: '交', sym: '━━　━━ ✕', desc: '老阴 · 发动' }
   };
+
+  // 手动录入标记：初始三背不可直接当作「已定结果」展示（未点任何东西即显示「重·老阳·发动」会误导）
+  let manualTouched = false;
 
   let selectedDate = new Date();
   let records = [];            // 已定之爻 {coins, backs, val, mode}
@@ -66,10 +82,10 @@
         ? '<div class="warn">⚠ 历法精度降级：' + selectedDate.getFullYear() + ' 年超出节气时刻表覆盖范围（1900–2100），月柱与年柱按典型交节日近似（±2 日以内）；日柱、时柱不受影响。古籍卦例回归请注意此项。</div>'
         : '');
     const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
-    if (!$('#dtInput').value) {
-      $('#dtInput').value = selectedDate.getFullYear() + '-' + p2(selectedDate.getMonth() + 1) + '-' + p2(selectedDate.getDate()) +
-        'T' + p2(selectedDate.getHours()) + ':' + p2(selectedDate.getMinutes());
-    }
+    // 始终与 selectedDate 同步：切模式/锁定时刻恢复/补录改时后，
+    // #timeInfo 与输入框必须指向同一时刻（旧版仅在输入框为空时赋值，二者会不一致）
+    $('#dtInput').value = selectedDate.getFullYear() + '-' + p2(selectedDate.getMonth() + 1) + '-' + p2(selectedDate.getDate()) +
+      'T' + p2(selectedDate.getHours()) + ':' + p2(selectedDate.getMinutes());
     $('#dtInput').disabled = (timeMode === 'live'); // 现场模式不可改时间
   }
 
@@ -86,6 +102,7 @@
       btn.onclick = function () {
         if (pendingToss && pendingToss.mode === 'blind') return; // 已摇出，不可翻看
         if (revealed) return; // 已揭晓的盲摇结果不可翻（下一爻请点[摇卦]）
+        manualTouched = true;
         curCoins[+btn.dataset.i] = curCoins[+btn.dataset.i] === '背' ? '字' : '背';
         renderCoins(); renderTossHint();
       };
@@ -107,6 +124,12 @@
       const nb = revealed.coins.filter(function (x) { return x === '背'; }).length;
       hint.innerHTML = '<b>第 ' + records.length + ' 爻已落</b> · ' + t.name + '（' + nb + ' 背 ' + (3 - nb) + ' 字）→ ' + t.sym + ' 　' + t.desc +
         '<div class="muted" style="font-size:12px;margin-top:2px">盲摇已定 · ' + (records.length < 6 ? '请摇下一爻' : '六爻已成') + '</div>';
+      return;
+    }
+    if (!records.length && !manualTouched) {
+      // 初始态：默认三背不是「已定结果」，不可直接显示「重·老阳·发动」
+      hint.innerHTML = '<b>点[摇卦]</b>由密码学熵源定爻，再点[落爻]记入；亦可自行翻铜钱后直接[落爻]手动录入。' +
+        '<div class="muted" style="font-size:12px;margin-top:2px">静心默念所测之事，六爻依次自初爻装起</div>';
       return;
     }
     const n = backCount();
@@ -140,6 +163,7 @@
   function resetTossState() {
     pendingToss = null;
     revealed = null;
+    manualTouched = false;
     curCoins = ['背', '背', '背'];
   }
 
@@ -227,6 +251,8 @@
     const lbl = $('#dtLabel');
     if (lbl) lbl.textContent = timeMode === 'live' ? '占问时刻（现场摇卦 · 首摇锁定）：' : '占问时刻（补录模式 · 可改）：';
     renderTime();
+    // 六爻已成时：时刻变了必须重排盘，否则 #timeInfo 显示锁定时刻而 pan.pillars 仍是补录时刻
+    if (records.length === 6) computePan();
   };
 
   $('#dtInput').onchange = function () {
@@ -406,17 +432,38 @@
         tip: (m.configured === false) ? '后台未配 key' : (MODEL_TIPS[m.id] || '')
       };
     });
-    selModels = loadSelModels();
+    // 合并而非覆盖：清单异步返回期间用户已点选的模型不得被静默丢弃
+    const current = (selModels || []).filter(function (id) {
+      return MODELS.some(function (x) { return x.id === id; });
+    });
+    loadSelModels().forEach(function (id) {
+      if (current.indexOf(id) < 0) current.push(id);
+    });
+    selModels = current.length ? current : DEFAULT_MODELS.slice();
     renderModelChips();
   }
 
   async function loadModels() {
+    const warn = $('#modelWarn');
     try {
       const res = await fetch('/api/models');
-      if (!res.ok) return;
+      if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
+      if (!data || !Array.isArray(data.models) || !data.models.length) throw new Error('模型清单为空');
       applyModels(data.models);
-    } catch (e) { /* 本地打开或接口不存在时保留默认清单 */ }
+      // 服务端配置告警（后台变量写错、模型缺 key 等）直接展示，不再静默
+      const ws = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+      if (warn) {
+        if (ws.length) { warn.hidden = false; warn.textContent = '⚠ ' + ws.join('；'); }
+        else { warn.textContent = ''; warn.hidden = true; }
+      }
+    } catch (e) {
+      // 本地打开或接口异常：保留内置清单，但要让用户知道「芯片是内置兜底清单」
+      if (warn) {
+        warn.hidden = false;
+        warn.textContent = '⚠ 未能读取后台模型清单（' + (e.message || '接口不可用') + '），当前显示内置清单，可能遗漏已在后台配置的模型或未配 key。';
+      }
+    }
   }
 
   let selModels = loadSelModels();
@@ -431,9 +478,10 @@
   }
 
   function renderModelChips() {
+    // 模型 id/label/pv/tip 来自后台环境变量（CUSTOM_PROVIDERS / GPT_MODELS），一律转义后入 DOM
     $('#modelChips').innerHTML = MODELS.map(function (m) {
-      return '<button class="mchip' + (selModels.indexOf(m.id) >= 0 ? ' on' : '') + '" data-m="' + m.id + '" title="' + esc(m.tip || '') + '">' +
-        '<span class="pv">' + m.pv + '</span>' + m.label + (m.tip ? '<span class="pv"> · ' + m.tip + '</span>' : '') + '</button>';
+      return '<button class="mchip' + (selModels.indexOf(m.id) >= 0 ? ' on' : '') + '" data-m="' + esc(m.id) + '" title="' + esc(m.tip || '') + '">' +
+        '<span class="pv">' + esc(m.pv) + '</span>' + esc(m.label) + (m.tip ? '<span class="pv"> · ' + esc(m.tip) + '</span>' : '') + '</button>';
     }).join('');
     Array.prototype.forEach.call(document.querySelectorAll('.mchip'), function (btn) {
       btn.onclick = function () {
@@ -462,9 +510,16 @@
     return h;
   }
 
+  // 请求头浅合并：调用方传入的 headers 不得整体覆盖 Content-Type / 口令头
+  function withHeaders(opts) {
+    const o = Object.assign({}, opts || {});
+    o.headers = Object.assign({}, apiHeaders(), o.headers || {});
+    return o;
+  }
+
   // 请求封装：401 时清除旧口令并提示重输；silent=true 时不弹框（自动保存场景静默跳过）
   async function apiFetch(path, opts, silent) {
-    let res = await fetch(path, Object.assign({ headers: apiHeaders() }, opts || {}));
+    let res = await fetch(path, withHeaders(opts));
     if (res.status === 401 && !silent) {
       localStorage.removeItem('ly_access_code');
       renderLoginBtn();
@@ -472,7 +527,7 @@
       if (code) {
         localStorage.setItem('ly_access_code', code);
         renderLoginBtn();
-        res = await fetch(path, Object.assign({ headers: apiHeaders() }, opts || {}));
+        res = await fetch(path, withHeaders(opts));
         if (res.status === 401) localStorage.removeItem('ly_access_code');
         renderLoginBtn();
       }
@@ -613,8 +668,10 @@
     });
     await Promise.all(active.map(async function (m) {
       const loadEl = document.getElementById('chatload-' + midSafe(m));
+      // 本次追问已入栈，须整段送出：旧版 slice(0,-1) 把刚入栈的问题切掉，大模型收不到追问
+      const historySnapshot = aiStates[m].history.slice();
       try {
-        const reply = await callInterpret(m, aiStates[m].history.slice(0, -1));
+        const reply = await callInterpret(m, historySnapshot);
         aiStates[m].history.push({ role: 'assistant', content: reply });
         if (loadEl) loadEl.innerHTML = mdLite(reply);
       } catch (e) {
@@ -622,7 +679,8 @@
           const box = document.createElement('div');
           loadEl.innerHTML = '';
           loadEl.appendChild(box);
-          renderFailBox(box, m, aiStates[m].history.slice(0, -1), e);
+          // 失败降级：手动提示词须含本次追问（同样用整段历史）
+          renderFailBox(box, m, historySnapshot, e);
         }
       }
     }));

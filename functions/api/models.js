@@ -6,7 +6,7 @@
  */
 
 // 解析逻辑统一在 _lib.js，与 interpret.js 白名单共享同一口径
-import { gptModelList, customProviders, customKeyEnv, json } from './_lib.js';
+import { gptModelList, customProviders, customProviderWarnings, customKeyEnv, json } from './_lib.js';
 
 export async function onRequestGet(context) {
   const { env } = context;
@@ -38,5 +38,10 @@ export async function onRequestGet(context) {
     return true;
   });
 
-  return json({ models: models });
+  // 配置告警一并回传：后台 CUSTOM_PROVIDERS 写错时页面能直接看到原因
+  const warnings = customProviderWarnings(env);
+  const unkeyed = models.filter(function (m) { return !m.configured; }).map(function (m) { return m.id; });
+  if (unkeyed.length) warnings.push('以下模型未配置密钥（不可用）：' + unkeyed.join('、'));
+
+  return json({ models: models, warnings: warnings });
 }

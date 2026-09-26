@@ -227,5 +227,158 @@ eq('交节当刻起属本月', C.ZHI[C.monthZhiIndex(2026, 9, 7, 22, 41)], '酉'
 eq('立春前一分钟属前一年', C.GAN[C.yearGanZhiIndex(2026, 2, 4, 4, 1) % 10] + C.ZHI[C.yearGanZhiIndex(2026, 2, 4, 4, 1) % 12], '乙巳');
 eq('立春当刻起属新年', C.GAN[C.yearGanZhiIndex(2026, 2, 4, 4, 2) % 10] + C.ZHI[C.yearGanZhiIndex(2026, 2, 4, 4, 2) % 12], '丙午');
 
+// ---------- 12. relation5 五值完备（月建/日辰兜底漏判的根因修复） ----------
+eq('relation5 比和', C.relation5('水', '水'), '比和');
+eq('relation5 得生', C.relation5('木', '水'), '得生');
+eq('relation5 受克', C.relation5('木', '金'), '受克');
+eq('relation5 泄', C.relation5('木', '火'), '泄');
+eq('relation5 耗', C.relation5('木', '土'), '耗');
+// 五值遍历：任意两行必有确定关系（旧版 else 兜底会把「同五行不同支」吞成克/比和）
+(function () {
+  const WX = ['金', '木', '水', '火', '土'];
+  let uncovered = 0;
+  WX.forEach(function (a) { WX.forEach(function (b) { if (!C.relation5(a, b)) uncovered++; }); });
+  eq('relation5 全覆盖 25 组合', uncovered, 0);
+})();
+eq('旧 relationText 与 relation5 同源', C.relationText('木', '土'), '受制');
+
+// ---------- 13. 规则回归：同五行不同支不得落入兜底 ----------
+// #1 月建子水 / 用神亥水：旧版穿落 else 误报「用神克月建」，与 grade='旺' 自相矛盾
+const Lhai = mkLine({ zhi: '亥', zhiIdx: 11, wx: '水', lq: '子孙' });
+const mHai = C.ruleMonth(Lhai, mkPil({ monthZhi: 0 }), '子孙');
+eq('月建子水/用神亥水 → 月建同气', mHai.judgments[0].rule, '月建同气');
+eq('月建同气 grade 为旺', mHai.grade, '旺');
+eq('月建同气不误报克月建', mHai.judgments[0].rule === '克月建', false);
+eq('月建同气文本不自相矛盾', mHai.judgments[0].text.indexOf('克月建') < 0, true);
+
+// #2 用神木 / 日辰土：旧版落 else 误判「日辰比和」且 supports=true（污染月破/真空/trend）
+const Lmu = mkLine({ zhi: '寅', zhiIdx: 2, wx: '木', lq: '官鬼' });
+const dMu = C.ruleDay(Lmu, mkPil({ monthZhi: 2, dayZhi: 4 }), '官鬼'); // 日辰辰土
+eq('用神木克日辰土 → 耗于日辰', dMu.judgments[0].rule, '耗于日辰');
+eq('耗于日辰不计日辰生扶', dMu.supports, false);
+eq('耗于日辰不误报比和', dMu.judgments[0].rule === '日辰比和', false);
+// 交叉影响：耗不得救月破 → 真破（同一 pan 只换月令为申，寅申相冲）
+const yuepoMu = C.ruleYuePo(Lmu, mkPil({ monthZhi: 8, dayZhi: 4 }), '死', dMu.supports, '官鬼');
+eq('耗于日辰不得救月破（真破）', yuepoMu.zhen, true);
+// 交叉影响：耗不得救旬空 → 休囚+空+无扶 = 真空
+const kongMu = C.ruleXunKong(Object.assign({}, Lmu, { zhiIdx: 2 }), mkPil({ monthZhi: 8, dayZhi: 4, kong: [2], kongStr: '寅卯' }), false, dMu.supports, '死', '官鬼');
+eq('休囚耗气又旬空 → 真空', kongMu.zhen, true);
+// 对照：日辰子水生用神寅木 → 日辰生扶（原路径不受影响）
+eq('日辰生扶路径仍生效', C.ruleDay(Lmu, mkPil({ monthZhi: 2, dayZhi: 0 }), '官鬼').supports, true);
+// 对照：日辰寅木临用神 → 临日辰
+eq('临日辰路径仍生效', C.ruleDay(Lmu, mkPil({ monthZhi: 2, dayZhi: 2 }), '官鬼').judgments[0].rule, '临日辰');
+
+// ---------- 14. #3 其余动爻对用神的作用（原判定链缺环） ----------
+(function () {
+  const pan = {
+    lines: [
+      mkLine({ pos: 0, zhi: '巳', zhiIdx: 5, wx: '火', lq: '妻财' }),
+      // 动爻寅木生用神巳火（原神发动）
+      mkLine({ pos: 1, zhi: '寅', zhiIdx: 2, wx: '木', lq: '兄弟', moving: true }),
+      // 动爻子水克用神巳火（忌神发动），且化出亥水再克
+      mkLine({ pos: 2, zhi: '子', zhiIdx: 0, wx: '水', lq: '父母', moving: true, bian: { lq: '兄弟', zhi: '亥', zhiIdx: 11, wx: '水' } }),
+      mkLine({ pos: 3 }), mkLine({ pos: 4 }), mkLine({ pos: 5 })
+    ],
+    shi: 0, ying: 3, pillars: mkPil({})
+  };
+  const ms = C.ruleMovingOthers(pan, pan.lines[0], '妻财');
+  const rules = ms.map(function (j) { return j.rule; });
+  eq('动爻生用（原神发动）', rules.indexOf('动爻生用') >= 0, true);
+  eq('动爻克用（忌神发动）', rules.indexOf('动爻克用') >= 0, true);
+  eq('变爻克用（后患在变）', rules.indexOf('变爻克用') >= 0, true);
+  eq('动爻判定数（2 动爻各 1 + 1 变爻）', ms.length, 3);
+  // 用神自身动变不在此判（由 ruleDongBian 管），不重复计数
+  const msSelf = C.ruleMovingOthers(pan, pan.lines[2], '父母');
+  eq('用神自身动变不重复计入', msSelf.some(function (j) { return j.text.indexOf('三爻') >= 0; }), false);
+  // 汇聚表：动爻生用入 supports、动爻克用入 harms
+  const agg = C.aggregateTrend({ hasYongshen: true, grade: '旺', daySupports: false, zhenKong: false, zhenYuePo: false, judgments: ms });
+  eq('动爻生用计入 supports', agg.supports.indexOf('动爻:动爻生用') >= 0, true);
+  eq('动爻克用计入 harms', agg.harms.indexOf('动爻:动爻克用') >= 0, true);
+  // analyze 全链：真实排盘（地泽临，二爻官鬼卯木动、用神妻财亥水静）中出现动爻标签
+  const cast2 = C.paipan([1, 9, 0, 0, 0, 0], new Date(2026, 8, 24, 10, 0));
+  const res2 = C.analyze(cast2, '妻财');
+  const yongPos2 = res2.yongshen ? res2.yongshen.line.pos : -1;
+  const otherMoving = cast2.lines.some(function (l) { return l.moving && l.pos !== yongPos2; });
+  eq('analyze 用例存在他爻发动', otherMoving, true);
+  eq('analyze 判定链含动爻标签', res2.judgments.some(function (j) { return j.tag === '动爻'; }), true);
+})();
+
+// ---------- 15. #7 三合局纳入变爻（两动爻 + 一变爻） ----------
+(function () {
+  const panSH = {
+    lines: [
+      mkLine({ pos: 0, zhi: '申', zhiIdx: 8, moving: true, lq: '兄弟' }),
+      mkLine({ pos: 1, zhi: '子', zhiIdx: 0, moving: true, lq: '父母' }),
+      mkLine({ pos: 2, zhi: '戌', zhiIdx: 10, moving: true, lq: '官鬼', bian: { lq: '父母', zhi: '辰', zhiIdx: 4, wx: '土' } }),
+      mkLine({ pos: 3 }), mkLine({ pos: 4 }), mkLine({ pos: 5 })
+    ]
+  };
+  const s = C.ruleSanHe(panSH, '官鬼');
+  eq('两动爻+一变爻成申子辰水局', s.length === 1 && s[0].text.indexOf('三合水局') >= 0, true);
+  eq('三合文本标注变爻来源', s[0].text.indexOf('（变爻') >= 0, true);
+  eq('三合文本含来源标注', s[0].text.indexOf('（本卦') >= 0, true);
+  // 同一爻本变不得双算：单动爻（本申 变辰）只有两支，不成局
+  const panSH2 = {
+    lines: [
+      mkLine({ pos: 0, zhi: '申', zhiIdx: 8, moving: true, lq: '兄弟', bian: { lq: '父母', zhi: '辰', zhiIdx: 4, wx: '土' } }),
+      mkLine({ pos: 1 }), mkLine({ pos: 2 }), mkLine({ pos: 3 }), mkLine({ pos: 4 }), mkLine({ pos: 5 })
+    ]
+  };
+  eq('单爻本变两支不成局', C.ruleSanHe(panSH2, '官鬼').length, 0);
+})();
+
+// ---------- 16. #11/#12 伏神取法与飞伏同气 ----------
+(function () {
+  // 伏神两现：乾宫首卦父母（辰、戌）两现，其一伏于世下 → 取临世应者
+  const mkFuPan = function () {
+    return {
+      lines: [
+        mkLine({ pos: 0, zhi: '子', zhiIdx: 0, wx: '水', lq: '兄弟', fu: { lq: '父母', zhi: '辰', wx: '土', zhiIdx: 4 } }),
+        mkLine({ pos: 1, zhi: '寅', zhiIdx: 2, wx: '木', lq: '妻财' }),
+        mkLine({ pos: 2, zhi: '辰', zhiIdx: 4, wx: '土', lq: '子孙' }),
+        mkLine({ pos: 3, zhi: '午', zhiIdx: 6, wx: '火', lq: '官鬼', fu: { lq: '父母', zhi: '戌', wx: '土', zhiIdx: 10 } }),
+        mkLine({ pos: 4, zhi: '申', zhiIdx: 8, wx: '金', lq: '兄弟' }),
+        mkLine({ pos: 5, zhi: '戌', zhiIdx: 10, wx: '土', lq: '子孙' })
+      ], shi: 0, ying: 3, pillars: mkPil({ monthZhi: 0 })
+    };
+  };
+  const pk = C.pickYongshen(mkFuPan(), '父母');
+  eq('伏神两现取临世应者', pk.primary.pos, 0);
+  eq('伏神两现说明取法', pk.note.indexOf('临世应') >= 0, true);
+  eq('伏神 all 列出全部候选', pk.all.length, 2);
+  // 皆不临世应 → 退取在前之爻（伏神同六亲必同五行，旺衰恒同）
+  // 注意：ying 必须避开候选位（原 ying=3 会让 pos3 命中「临世应」）
+  const pan2 = mkFuPan();
+  pan2.ying = 5;
+  pan2.lines[0].fu = null;
+  pan2.lines[1].fu = { lq: '父母', zhi: '辰', wx: '土', zhiIdx: 4 };
+  const pk2 = C.pickYongshen(pan2, '父母');
+  eq('伏神皆不临世应退取前爻', pk2.primary.pos, 1);
+  eq('退取时说明理由', pk2.note.indexOf('在前之爻') >= 0, true);
+
+  // #12 飞伏同气：飞神与伏神同五行
+  const panSame = {
+    lines: [
+      mkLine({ pos: 0, zhi: '子', zhiIdx: 0, wx: '水', lq: '兄弟', fu: { lq: '子孙', zhi: '亥', wx: '水', zhiIdx: 11 } }),
+      mkLine({ pos: 1 }), mkLine({ pos: 2 }), mkLine({ pos: 3 }), mkLine({ pos: 4 }), mkLine({ pos: 5 })
+    ], shi: 0, ying: 3, pillars: mkPil({})
+  };
+  const fuL = Object.assign({}, panSame.lines[0], { isFu: true, wx: '水', zhi: '亥', zhiIdx: 11, lq: '子孙' });
+  const rf = C.ruleFu(panSame, fuL, mkPil({}), '子孙');
+  eq('飞伏同气单独成条（不再落「无生克」）', rf.some(function (j) { return j.rule === '飞伏同气'; }), true);
+  eq('飞伏同气不误报无生克', rf.some(function (j) { return j.rule === '飞伏无关'; }), false);
+  eq('飞伏同气计入 supports', C.aggregateTrend({ hasYongshen: true, grade: '旺', daySupports: false, zhenKong: false, zhenYuePo: false, judgments: rf }).supports.indexOf('伏神:飞伏同气') >= 0, true);
+  // 伏克飞：伏神能制飞神（旧版误入「飞伏无关」）
+  const panKe = {
+    lines: [
+      mkLine({ pos: 0, zhi: '子', zhiIdx: 0, wx: '水', lq: '兄弟' }),
+      mkLine({ pos: 1 }), mkLine({ pos: 2 }), mkLine({ pos: 3 }), mkLine({ pos: 4 }), mkLine({ pos: 5 })
+    ], shi: 0, ying: 3, pillars: mkPil({})
+  };
+  const fuL2 = Object.assign({}, panKe.lines[0], { isFu: true, wx: '土', zhi: '辰', zhiIdx: 4, lq: '父母' });
+  eq('伏克飞单列', C.ruleFu(panKe, fuL2, mkPil({}), '父母').some(function (j) { return j.rule === '伏克飞神'; }), true);
+})();
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);
+

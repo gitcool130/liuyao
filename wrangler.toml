@@ -21,8 +21,12 @@ database_id = "42279a23-7032-42bb-b675-bb7a2015fcc0"
 # 密钥用 secret（wrangler pages secret put 或 Pages 后台加密设置），不要写进此文件：
 #   GEMINI_API_KEY    Google AI Studio key（AIza 开头）
 #   DEEPSEEK_API_KEY  DeepSeek key（sk- 开头）
-# Gemini 走 CF AI Gateway 原生路径（绕开 Google 对数据中心 IP 的拒绝），并关闭 thinking
-GEMINI_BASE_URL = "https://gateway.ai.cloudflare.com/v1/88497ab707363a498e48af20a3d52aa9/liuyao-gw/google-ai-studio/v1beta"
+# Gemini 走 CF AI Gateway 原生路径（绕开 Google 对数据中心 IP 的拒绝），并关闭 thinking。
+# 该地址含账号 ID 与网关名，属基础设施信息，不再写进本文件（仓库可公开）：
+# 已通过 `wrangler pages secret put GEMINI_BASE_URL` 设为 Pages secret（production）。
+# 换账号/换网关时重设即可，模板：
+#   https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/<GATEWAY_NAME>/google-ai-studio/v1beta
+# 未配置时后端回退 Google 原生端点 generativelanguage.googleapis.com（数据中心 IP 常被拒）
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
 # ---- GPT / OpenAI 兼容供应商（后台也可直接设这三个变量）----
