@@ -148,11 +148,30 @@ C.nightZiMode = 'day';
 const pDay = C.fourPillars(late);
 eq('默认夜子时归当日', pDay.dayGZ, C.fourPillars(new Date(2026, 8, 24, 12, 0)).dayGZ);
 eq('默认时支为子', pDay.hourZhi, 0);
+// 夜子时正法：时干按【次日】日干五鼠遁（辛丑日 23:30 → 次日壬寅遁 → 庚子时；najia/lunar-javascript 实证一致）
+eq('夜子时时干按次日日干遁', pDay.hourGZ, '庚子');
+eq('早子时时干按当日日干遁', C.fourPillars(new Date(2026, 8, 24, 0, 30)).hourGZ, '戊子');
+eq('亥时不受夜子时影响', C.fourPillars(new Date(2026, 8, 24, 22, 30)).hourGZ, '己亥');
 C.nightZiMode = 'next';
 const pNext = C.fourPillars(late);
 eq('夜子时归次日（day-advances 流派）', pNext.dayGZ, C.fourPillars(new Date(2026, 8, 25, 12, 0)).dayGZ);
 eq('夜子标记', pNext.nightZi, true);
+eq('换日说时柱', pNext.hourGZ, '庚子');
 C.nightZiMode = 'day'; // 还原默认
+
+// ---------- 11·五、ruleShi 伏神伏世下（不误报用神持世） ----------
+(function () {
+  // 乾坤 nid：乾为天（世在六爻/上九）。构造伏神虚拟爻：伏于世爻之下
+  const pan = C.paipan([1, 1, 1, 1, 1, 1], new Date(2026, 8, 24, 10, 0)); // 乾为天，静卦
+  const S = pan.lines[pan.shi];
+  const fuVirtual = mkLine({ pos: pan.shi, isFu: true, wx: '火', zhi: '巳', zhiIdx: 5, lq: '子孙' });
+  const rs = C.ruleShi(pan, fuVirtual, '子孙');
+  eq('伏神伏世下：不误报用神持世', rs.some(function (j) { return j.rule === '用神持世'; }), false);
+  eq('伏神伏世下：出「用神伏世下」判定', rs.some(function (j) { return j.rule === '用神伏世下'; }), true);
+  // 对照：非伏神本爻持世 → 正常报持世
+  const rs2 = C.ruleShi(pan, Object.assign({}, S, { isFu: false }), '父母');
+  eq('本爻持世正常报持世', rs2.some(function (j) { return j.rule === '用神持世'; }), true);
+})();
 
 // ---------- 12. 节气分钟级边界 ----------
 // 2026 白露 09-07 22:41：22:40 仍属申月（七月节后为酉…白露交节后为酉月）

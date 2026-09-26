@@ -235,7 +235,16 @@
     if (target === 'shi') return js;
     const S = pan.lines[pan.shi];
     if (L.pos === pan.shi) {
-      js.push({ tag: '世爻', rule: '用神持世', text: '用神持世，事在己身，吉凶应之最切。', basis: '用神持世，事体切身' });
+      if (L.isFu) {
+        // 用神为伏神、伏于世爻之下：pos 承自飞神（世爻），不可误断「用神持世」
+        js.push({
+          tag: '世爻', rule: '用神伏世下',
+          text: '用神不上卦，伏于世爻之下（飞神' + S.lq + S.zhi + '），事体切身而伏藏，须待出伏之日方可发用。',
+          basis: '伏神伏于世上，事关于己；须冲飞、生扶之日得出'
+        });
+      } else {
+        js.push({ tag: '世爻', rule: '用神持世', text: '用神持世，事在己身，吉凶应之最切。', basis: '用神持世，事体切身' });
+      }
     } else if (sheng(L.wx, S.wx)) {
       js.push({ tag: '世爻', rule: '用神生世', text: '用神生世爻（' + S.lq + S.zhi + '），事来就我。', basis: '' });
     } else if (ke(L.wx, S.wx)) {

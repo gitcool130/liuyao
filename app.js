@@ -43,6 +43,7 @@
   // 补录模式：时间可编辑（为既往时刻补卦）
   let timeMode = 'live';       // 'live' | 'backfill'
   let timeLocked = false;      // 现场模式一旦开摇即锁
+  let lockedDate = null;       // 首摇锁定的时刻（切补录改时后切回现场，据此恢复，防绕过锁定）
 
   // ---------- 时间 ----------
   function fmtDT(dt) {
@@ -132,6 +133,7 @@
     if (timeMode === 'live' && !timeLocked) {
       selectedDate = new Date();
       timeLocked = true;
+      lockedDate = selectedDate; // 记忆锁定时刻，供模式往返后恢复
       renderTime();
     }
     pendingToss = { mode: 'blind', coins: null, val: null };
@@ -172,6 +174,7 @@
     records = []; pan = null; lastBullets = []; lastAnalysis = null;
     resetTossState();
     timeLocked = false;           // 重新起卦解锁时间，等待新的首摇
+    lockedDate = null;
     if (timeMode === 'live') selectedDate = new Date();
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
     $('#useSelect').value = '';
@@ -183,10 +186,17 @@
   $('#btnTimeMode').onclick = function () {
     timeMode = (timeMode === 'live') ? 'backfill' : 'live';
     if (timeMode === 'backfill') {
-      timeLocked = false; // 补录允许改时间
+      timeLocked = false; // 补录允许改时间；首摇锁定时刻由 lockedDate 记忆，切回现场时恢复
     } else {
-      timeLocked = records.length > 0 || !!pendingToss; // 已有进度的现场模式：保持锁定
-      if (!timeLocked) selectedDate = new Date();
+      const hasProgress = records.length > 0 || !!pendingToss;
+      timeLocked = hasProgress;
+      if (hasProgress) {
+        // 已开摇的现场模式：恢复首摇锁定的时刻——补录期间改过时间也不得污染锁定值
+        if (lockedDate) selectedDate = new Date(lockedDate.getTime());
+      } else {
+        lockedDate = null; // 尚未开摇：解除记忆，取当前时刻
+        selectedDate = new Date();
+      }
     }
     this.textContent = (timeMode === 'live') ? '切换补录模式' : '切回现场摇卦';
     const lbl = $('#dtLabel');

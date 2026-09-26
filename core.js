@@ -17,8 +17,13 @@ if (typeof window === 'undefined') {
   require('./core/analyze.js');
   module.exports = globalThis.LY;
 } else {
-  // 浏览器兜底：若单独引入本文件（旧页面），提示正确用法
+  // 浏览器兜底：若单独引入本文件（旧页面），提示正确用法与完整顺序
   if (!window.LY || !window.LY.paipan) {
-    console.warn('[liuyao] 请按序加载 core/ 目录五个文件，详见 index.html');
+    console.warn('[liuyao] 缺少核心模块。请按以下顺序加载 core/ 目录五个文件（顺序不可颠倒，后者依赖前者挂载的全局 LY）：\n' +
+      '  <script src="core/data.js"></script>       <!-- 易学常量 -->\n' +
+      '  <script src="core/data-jieqi.js"></script> <!-- 节气表（1900-2100） -->\n' +
+      '  <script src="core/calendar.js"></script>   <!-- 四柱/旬空/节气 -->\n' +
+      '  <script src="core/paipan.js"></script>     <!-- 纳甲排盘 -->\n' +
+      '  <script src="core/analyze.js"></script>    <!-- 断卦规则链 -->');
   }
 }

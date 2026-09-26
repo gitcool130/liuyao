@@ -29,7 +29,7 @@ function toNajia(v) { return v === 1 ? 1 : v === 0 ? 2 : v === 9 ? 3 : 4; }
 function toShifa(v) { return v === 1 ? '7' : v === 0 ? '8' : String(v); }
 
 // ---------- 一、历法差分（日期维度） ----------
-// 日期避开交节临界日与 23 时（晚子时流派差异单列）
+// 日期避开交节临界日与 23 时（23 时段由「夜子时专项」单列覆盖，见 diffNightZi）
 const DATES = [
   [1949, 10, 1, 12, 0], [1966, 3, 15, 10, 30], [1984, 6, 15, 11, 0], [1997, 7, 1, 9, 30],
   [2000, 1, 10, 15, 0], [2008, 8, 20, 14, 0], [2020, 5, 20, 8, 0], [2024, 2, 20, 13, 45],
@@ -84,6 +84,60 @@ function diffCalendar() {
       bug++; bugLog.push('[六神] ' + d.join('-') + ' mine=' + myBeasts.join(',') + ' najia=' + njBeasts.join(',') + ' shifa=' + sfBeasts.join(','));
     }
   });
+}
+
+// ---------- 一·五、夜子时专项差分（23:00–24:00，双流派显式映射） ----------
+// 流派实证（见 tools/gen-jieqi 同源验证）：
+//   najia / lunar-javascript：日柱归当日，时干按【次日】日干五鼠遁（夜子时正法）
+//     → 对应 LY.nightZiMode = 'day'（本引擎默认）
+//   iching-shifa：日柱进位次日（换日说）→ 对应 LY.nightZiMode = 'next'
+// 各按流派映射后比对，任何不一致均为 BUG（无流派豁免——流派已显式对齐）
+const NIGHT_DATES = [
+  [1949, 9, 30, 23, 5], [1966, 3, 15, 23, 30], [1997, 6, 30, 23, 59],
+  [2000, 12, 31, 23, 0], [2026, 2, 10, 23, 15], [2026, 9, 24, 23, 30],
+  [2077, 11, 11, 23, 45], [2100, 12, 30, 23, 10]
+];
+function diffNightZi() {
+  console.log('== 夜子时专项差分（' + NIGHT_DATES.length + ' 个 23 时点 × 双流派映射） ==');
+  const prevMode = LY.nightZiMode;
+  NIGHT_DATES.forEach(function (d) {
+    const dt = new Date(d[0], d[1] - 1, d[2], d[3], d[4]);
+    const nj = najiaCast(CAL_TOSSES.map(toNajia), { date: dt });
+    const sf = shifaDecode(CAL_TOSSES.map(toShifa).join(''), {
+      year: d[0], month: d[1], day: d[2], hour: d[3], minute: d[4]
+    });
+    const lu = L.Lunar.fromDate(dt);
+    const tag = d.join('-');
+
+    function nfield(name, mineV, refs) {
+      checked++;
+      const bad = refs.filter(function (r) { return r.v !== mineV; });
+      if (bad.length) {
+        bug++;
+        bugLog.push('[夜子时' + name + '] ' + tag + ' mine=' + mineV + ' ' +
+          bad.map(function (r) { return r.n + '=' + r.v; }).join(' '));
+      }
+    }
+
+    // 正法（day 流派）：对 najia + lunar-javascript
+    LY.nightZiMode = 'day';
+    const dayP = LY.fourPillars(dt);
+    nfield('日柱', dayP.dayGZ, [{ n: 'najia', v: nj.ganzhi.day }, { n: 'lunar', v: lu.getDayInGanZhi() }]);
+    nfield('时柱', dayP.hourGZ, [{ n: 'najia', v: nj.ganzhi.hour }, { n: 'lunar', v: lu.getTimeInGanZhi() }]);
+    nfield('旬空', dayP.kongStr, [{ n: 'najia', v: nj.ganzhi.xkong }]);
+    nfield('六神', LY.paipan(CAL_TOSSES, dt).lines.map(function (l) { return l.beast; }).join(','),
+      [{ n: 'najia', v: nj.god6.map(normBeast).join(',') }]);
+
+    // 换日说（next 流派）：对 iching-shifa
+    LY.nightZiMode = 'next';
+    const nextP = LY.fourPillars(dt);
+    nfield('换日柱', nextP.dayGZ, [{ n: 'shifa', v: sf.ganZhiDay.gz }]);
+    nfield('换日时柱', nextP.hourGZ, [{ n: 'shifa', v: sf.ganZhiHour.gz }]);
+    nfield('换日旬空', nextP.kongStr, [{ n: 'shifa', v: sf.dayKong }]);
+    nfield('换日六神', LY.paipan(CAL_TOSSES, dt).lines.map(function (l) { return l.beast; }).join(','),
+      [{ n: 'shifa', v: sf.benGua.yaoList.map(function (y) { return normBeast(y.liuShou); }).join(',') }]);
+  });
+  LY.nightZiMode = prevMode;
 }
 
 // ---------- 二、排盘差分（4096 爻组合 × 固定日期） ----------
@@ -189,6 +243,7 @@ function diffJieqi() {
 
 // ---------- 运行 ----------
 diffCalendar();
+diffNightZi();
 diffPaipan();
 diffJieqi();
 

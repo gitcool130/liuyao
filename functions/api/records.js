@@ -73,7 +73,10 @@ export async function onRequestPost(context) {
   try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
   if (!b.panText) return json({ error: 'NO_PAN', message: '缺少排盘文本' }, 400);
 
-  const id = b.id || crypto.randomUUID();
+  // id 策略：客户端可携带 id（复用/更新场景），但必须通过格式校验；
+  // 缺失或非法一律服务端生成 UUID，杜绝空主键、超长主键与伪造覆盖
+  const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  const id = (typeof b.id === 'string' && ID_RE.test(b.id)) ? b.id : crypto.randomUUID();
   await env.LIUYAO_DB.prepare(
     'INSERT INTO casts (id, created_at, datetime, pillars, question, hex, tosses, pan_text, messages) ' +
     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ' +

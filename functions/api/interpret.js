@@ -17,6 +17,9 @@
  *   ACCESS_CODE       选填，设置后页面需输入访问口令
  */
 
+// 供应商解析共享层（白名单 / 自定义供应商 / json 响应），与 models.js 同一口径
+import { customProviders, customKeyEnv, modelWhitelist, json } from './_lib.js';
+
 const SYSTEM_PROMPT = [
   '你是一位精通京房纳甲六爻的卦师，治学严谨，断卦有据。',
   '收到排盘后按以下次序通盘论断：',
@@ -27,37 +30,6 @@ const SYSTEM_PROMPT = [
   '若信息不足，明确指出需补充何事，不得臆造。',
   '用户后续追问时，保持卦理一致，延续断卦思路作答。'
 ].join('\n');
-
-// 各供应商可用模型白名单（服务端校验，防止任意模型名注入）
-// GPT（OpenAI 兼容接口）的模型清单由环境变量 GPT_MODELS 配置（逗号分隔），
-// 后台即可增删模型，无需改代码；默认为 2026-09 OpenAI 主力三档
-// 自定义供应商：环境变量 CUSTOM_PROVIDERS（JSON 数组），每个元素
-//   { "id": "kimi", "label": "Moonshot", "base": "https://api.moonshot.cn/v1", "models": ["kimi-k2"] }
-// id 需为小写字母数字；对应密钥环境变量为 <ID大写>_API_KEY（如 KIMI_API_KEY，后台设为 secret）
-// 接口须兼容 OpenAI chat/completions 协议（Kimi/Qwen/GLM/硅基流动/中转站等均支持）
-function customProviders(env) {
-  try {
-    const arr = JSON.parse(env.CUSTOM_PROVIDERS || '[]');
-    if (!Array.isArray(arr)) return [];
-    return arr.filter(function (p) {
-      return p && typeof p.id === 'string' && /^[a-z][a-z0-9]*$/.test(p.id) &&
-        Array.isArray(p.models) && p.models.length;
-    });
-  } catch (e) { return []; }
-}
-function customKeyEnv(id) { return id.toUpperCase().replace(/[^A-Z0-9]/g, '_') + '_API_KEY'; }
-
-function modelWhitelist(env) {
-  const gptModels = (env.GPT_MODELS || 'gpt-6-luna,gpt-6-sol,gpt-6-astra')
-    .split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-  const wl = {
-    gemini: ['gemini-3.6-flash', 'gemini-3.8-flash'],
-    deepseek: ['deepseek-flash', 'deepseek-v4-pro'],
-    gpt: gptModels
-  };
-  customProviders(env).forEach(function (p) { wl[p.id] = p.models.slice(0, 8); });
-  return wl;
-}
 
 function providerConfig(env, provider) {
   if (provider === 'gemini') {
@@ -104,13 +76,6 @@ function inferProvider(model, wl) {
   if (wl.gpt.indexOf(model) >= 0) return 'gpt';
   if (model.indexOf('gpt-') === 0 || model.indexOf('o1') === 0 || model.indexOf('o3') === 0) return 'gpt';
   return null;
-}
-
-function json(data, status) {
-  return new Response(JSON.stringify(data), {
-    status: status || 200,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' }
-  });
 }
 
 export async function onRequestPost(context) {

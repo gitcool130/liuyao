@@ -5,9 +5,10 @@
  *
  * —— 子时切分流派声明（M2）——
  * LY.nightZiMode = 'day'（默认）：23:00–24:00 为当日夜子时，
- *   日柱不变、时干依当日日干五鼠遁（主流派，与旧版行为一致）；
- * LY.nightZiMode = 'next'：23:00–24:00 归次日，日柱进一位
- *   （换日说，部分门派采用）。
+ *   日柱不变、时干依【次日】日干五鼠遁起子时（夜子时正法，
+ *   与 najia / lunar-javascript 两裁判库实证一致：如辛丑日 23:30 得庚子时）；
+ * LY.nightZiMode = 'next'：23:00–24:00 归次日，日柱与时柱整体进一位
+ *   （换日说，iching-shifa 采用，部分门派从之）。
  * ============================================================ */
 (function (root) {
   const LY = root.LY = root.LY || {};
@@ -52,10 +53,12 @@
   const YEAR0 = 1900;
 
   // 第 idx 个交节的绝对分钟数 → { y, m, d, hour, minute }
+  // absMin 恒为非负（锚点为表首 1900 小寒，差分累加只增），此处做非负取余
+  // 兜底：即使传入负值也保证 rem ∈ [0,1440)，与 floor 天数分解自洽
   function termAbsToDate(absMin) {
     const dayJdn = LY.JIEQI_ANCHOR_JDN + Math.floor(absMin / 1440);
     const date = jdnToDate(dayJdn);
-    const rem = absMin % 1440;
+    const rem = ((absMin % 1440) + 1440) % 1440;
     return { y: date.y, m: date.m, d: date.d, hour: Math.floor(rem / 60), minute: rem % 60 };
   }
 
@@ -64,7 +67,11 @@
   function termMoment(year, month) {
     if (year < YEAR0 || year > 2100) return null; // 表覆盖 1900-2100
     const idx = (year - YEAR0) * 12 + (month - 1);
-    const t = termAbsToDate(TERM_ABS[idx]);
+    const abs = TERM_ABS[idx];
+    if (!(abs >= 0)) { // 边界断言：差分链损坏（首项为负或表被篡改）时显式失败，不静默给错值
+      throw new Error('JIEQI_DELTAS 损坏：term #' + idx + ' 绝对分钟=' + abs);
+    }
+    const t = termAbsToDate(abs);
     return { y: t.y, m: t.m, day: t.d, hour: t.hour, minute: t.minute };
   }
 
@@ -129,7 +136,10 @@
     const mGan = (WUHU[GAN[yIdx % 10]] + monthsFromYin) % 10;
     const dIdx = dayGanZhiIndex(y, m, d);
     const hZhi = Math.floor((h + 1) / 2) % 12;
-    const hGan = (WUSHU[GAN[dIdx % 10]] + hZhi) % 10;
+    // 夜子时时干：'day' 流派日柱不进，但时干须以【次日】日干起五鼠遁
+    // （夜子时正法；'next' 流派日柱已进位到次日，直接用当值日干即可）
+    const dIdxForHour = (h === 23 && !nightZi) ? (dIdx + 1) % 60 : dIdx;
+    const hGan = (WUSHU[GAN[dIdxForHour % 10]] + hZhi) % 10;
     // 旬空
     const xunStart = dIdx - (dIdx % 10);
     const startBranch = xunStart % 12;
