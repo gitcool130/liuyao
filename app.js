@@ -13,10 +13,36 @@
   };
 
   let selectedDate = new Date();
-  let records = [];            // 已定之爻 {coins, backs, val}
+  let records = [];            // 已定之爻 {coins, backs, val, mode}
   let curCoins = ['背', '背', '背'];
   let pan = null;
   let lastBullets = [];
+  let lastAnalysis = null;
+
+  // ---------- 盲摆状态机（M5/M6/M8） ----------
+  // pendingToss: null | { coins, val, mode: 'blind' }
+  //   blind：点[摇卦]后爻值已由 crypto 熵源内定，UI 不显示字/背，点[落爻]才揭晓记入
+  //   manual：用户自行翻铜钱后直接落爻（后果自负）
+  let pendingToss = null;
+
+  // 密码学随机源（M8）：优先 crypto.getRandomValues，无则降级并警告
+  function secureCoin() {
+    const c = (typeof crypto !== 'undefined' && crypto.getRandomValues) ? crypto : null;
+    if (c) return c.getRandomValues(new Uint8Array(1))[0] & 1; // 0/1 均匀
+    console.warn('当前环境无 crypto.getRandomValues，降级 Math.random');
+    return Math.random() < 0.5 ? 1 : 0;
+  }
+  function cryptoToss() {
+    const coins = [secureCoin(), secureCoin(), secureCoin()].map(function (b) { return b ? '背' : '字'; });
+    const backs = coins.filter(function (x) { return x === '背'; }).length;
+    return { coins: coins, backs: backs, val: tossValFromBacks(backs) };
+  }
+
+  // ---------- 时间锁（M7） ----------
+  // 现场摇卦（默认）：第一次摇卦瞬间锁定时刻，dtInput 不可编辑
+  // 补录模式：时间可编辑（为既往时刻补卦）
+  let timeMode = 'live';       // 'live' | 'backfill'
+  let timeLocked = false;      // 现场模式一旦开摇即锁
 
   // ---------- 时间 ----------
   function fmtDT(dt) {
@@ -27,7 +53,8 @@
   function renderTime() {
     const pil = C.fourPillars(selectedDate);
     $('#timeInfo').innerHTML =
-      '<div class="muted">公历 ' + fmtDT(selectedDate) + '</div>' +
+      '<div class="muted">公历 ' + fmtDT(selectedDate) +
+      (timeMode === 'live' ? '（现场摇卦 · ' + (timeLocked ? '已锁定于首摇' : '开摇即锁定') + '）' : '（补录模式 · 时间可改）') + '</div>' +
       '<div class="gz">' + pil.yearGZ + '年 · ' + pil.monthGZ + '月 · <b>' + pil.dayGZ + '日</b> · ' + pil.hourGZ + '时</div>' +
       '<div class="muted">月建 <b class="kong">' + C.ZHI[pil.monthZhi] + '</b> ｜ 日辰 <b class="kong">' + C.ZHI[pil.dayZhi] + '</b> ｜ 旬空 <b class="kong">' + pil.kongStr + '</b></div>';
     const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
@@ -35,15 +62,20 @@
       $('#dtInput').value = selectedDate.getFullYear() + '-' + p2(selectedDate.getMonth() + 1) + '-' + p2(selectedDate.getDate()) +
         'T' + p2(selectedDate.getHours()) + ':' + p2(selectedDate.getMinutes());
     }
+    $('#dtInput').disabled = (timeMode === 'live'); // 现场模式不可改时间
   }
 
   // ---------- 起卦 ----------
+  // blind 遮蔽：已摇未落期间，铜钱显示「？」，不泄露爻象（M5）
   function renderCoins() {
+    const hidden = !!(pendingToss && pendingToss.mode === 'blind');
     $('#coinRow').innerHTML = curCoins.map(function (c, i) {
-      return '<button class="coin' + (c === '字' ? ' is-zhi' : '') + '" data-i="' + i + '">' + c + '</button>';
+      return '<button class="coin' + (hidden ? ' is-hidden' : (c === '字' ? ' is-zhi' : '')) + '" data-i="' + i + '">' +
+        (hidden ? '？' : c) + '</button>';
     }).join('');
     Array.prototype.forEach.call(document.querySelectorAll('.coin'), function (btn) {
       btn.onclick = function () {
+        if (pendingToss && pendingToss.mode === 'blind') return; // 已摇出，不可翻看
         curCoins[+btn.dataset.i] = curCoins[+btn.dataset.i] === '背' ? '字' : '背';
         renderCoins(); renderTossHint();
       };
@@ -53,10 +85,17 @@
   function tossValFromBacks(n) { return n === 1 ? 1 : n === 2 ? 0 : n === 3 ? 9 : 6; }
 
   function renderTossHint() {
+    const hint = $('#tossHint');
+    if (pendingToss && pendingToss.mode === 'blind') {
+      // 盲摆中：只报进度，不报结果
+      hint.innerHTML = '<b>第 ' + (records.length + 1) + ' 爻已摇出</b> · 请落爻';
+      return;
+    }
     const n = backCount();
     const v = tossValFromBacks(n);
     const t = TOSS_MEAN[v];
-    $('#tossHint').innerHTML = '<b>' + t.name + '</b>（' + n + ' 背 ' + (3 - n) + ' 字）→ ' + t.sym + ' 　' + t.desc;
+    hint.innerHTML = '<b>' + t.name + '</b>（' + n + ' 背 ' + (3 - n) + ' 字）→ ' + t.sym + ' 　' + t.desc +
+      '<div class="muted" style="font-size:12px;margin-top:2px">手动录入 · 后果自负</div>';
   }
   function renderStack() {
     let html = '';
@@ -67,7 +106,9 @@
         html += '<div class="yao-slot' + (r.val === 9 || r.val === 6 ? ' moving-y' : '') + '">' +
           '<span class="nm">' + LINE_NAMES[i] + '</span><span>' + t.sym + '</span></div>';
       } else if (i === records.length) {
-        html += '<div class="yao-slot current"><span class="nm">' + LINE_NAMES[i] + '</span><span>？</span></div>';
+        // 当前爻：盲摆中显示已摇出，否则显示待摇
+        html += '<div class="yao-slot current"><span class="nm">' + LINE_NAMES[i] + '</span><span>' +
+          (pendingToss && pendingToss.mode === 'blind' ? '已摇出' : '？') + '</span></div>';
       } else {
         html += '<div class="yao-slot"><span class="nm">' + LINE_NAMES[i] + '</span><span>—</span></div>';
       }
@@ -78,32 +119,83 @@
       '六爻已成。';
   }
 
+  function resetTossState() {
+    pendingToss = null;
+    curCoins = ['背', '背', '背'];
+  }
+
+  // 摇卦（M5）：crypto 熵源内定，摇与落之间不可反悔
   $('#btnRandom').onclick = function () {
-    curCoins = curCoins.map(function () { return Math.random() < 0.5 ? '背' : '字'; });
-    renderCoins(); renderTossHint();
+    if (records.length >= 6) return;
+    if (pendingToss && pendingToss.mode === 'blind') return; // 已摇出，禁重摇
+    // 现场模式：首摇瞬间锁定占时（M7）
+    if (timeMode === 'live' && !timeLocked) {
+      selectedDate = new Date();
+      timeLocked = true;
+      renderTime();
+    }
+    pendingToss = { mode: 'blind', coins: null, val: null };
+    const t = cryptoToss();
+    pendingToss.coins = t.coins; pendingToss.backs = t.backs; pendingToss.val = t.val;
+    curCoins = t.coins.slice(); // 暂存（落爻时揭晓显示后随重置）
+    renderCoins(); renderTossHint(); renderStack();
   };
+
+  // 落爻：揭晓并记入（blind），或手动录入（manual）
   $('#btnConfirm').onclick = function () {
     if (records.length >= 6) return;
-    const n = backCount();
-    records.push({ coins: curCoins.slice(), backs: n, val: tossValFromBacks(n) });
-    curCoins = ['背', '背', '背'];
+    let rec;
+    if (pendingToss && pendingToss.mode === 'blind') {
+      rec = { coins: pendingToss.coins.slice(), backs: pendingToss.backs, val: pendingToss.val, mode: 'blind' };
+    } else {
+      // 手动模式：用户自主定结果（后果自负）
+      const n = backCount();
+      rec = { coins: curCoins.slice(), backs: n, val: tossValFromBacks(n), mode: 'manual' };
+    }
+    records.push(rec);
+    resetTossState();
     renderCoins(); renderTossHint(); renderStack();
     if (records.length === 6) computePan();
   };
+
+  // 撤销（M6 修复）：撤销必须彻底重置当前爻状态（含 curCoins 与盲摆内定值），
+  // 杜绝「复制上一爻」与「摇后撤销再摇」两类状态残留
   $('#btnUndo').onclick = function () {
-    if (!records.length) return;
-    records.pop(); pan = null;
+    if (!records.length) { resetTossState(); renderCoins(); renderTossHint(); renderStack(); return; }
+    records.pop(); pan = null; lastBullets = []; lastAnalysis = null;
+    resetTossState(); // ★ 关键修复：清掉 curCoins / pendingToss
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
-    renderStack();
-  };
-  $('#btnReset').onclick = function () {
-    records = []; pan = null; curCoins = ['背', '背', '背'];
-    $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
-    $('#useSelect').value = ''; lastBullets = [];
-    const uc = $('#useCustom'); if (uc) { uc.value = ''; uc.hidden = true; }
     renderCoins(); renderTossHint(); renderStack();
   };
+
+  $('#btnReset').onclick = function () {
+    records = []; pan = null; lastBullets = []; lastAnalysis = null;
+    resetTossState();
+    timeLocked = false;           // 重新起卦解锁时间，等待新的首摇
+    if (timeMode === 'live') selectedDate = new Date();
+    $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
+    $('#useSelect').value = '';
+    const uc = $('#useCustom'); if (uc) { uc.value = ''; uc.hidden = true; }
+    renderTime(); renderCoins(); renderTossHint(); renderStack();
+  };
+
+  // 时间模式切换（M7）：现场摇卦 ↔ 补录
+  $('#btnTimeMode').onclick = function () {
+    timeMode = (timeMode === 'live') ? 'backfill' : 'live';
+    if (timeMode === 'backfill') {
+      timeLocked = false; // 补录允许改时间
+    } else {
+      timeLocked = records.length > 0 || !!pendingToss; // 已有进度的现场模式：保持锁定
+      if (!timeLocked) selectedDate = new Date();
+    }
+    this.textContent = (timeMode === 'live') ? '切换补录模式' : '切回现场摇卦';
+    const lbl = $('#dtLabel');
+    if (lbl) lbl.textContent = timeMode === 'live' ? '占问时刻（现场摇卦 · 首摇锁定）：' : '占问时刻（补录模式 · 可改）：';
+    renderTime();
+  };
+
   $('#dtInput').onchange = function () {
+    if (timeMode === 'live') return; // 现场模式时间已锁（保险：disabled 之外双保险）
     if (!this.value) return;
     selectedDate = new Date(this.value);
     renderTime();
@@ -174,11 +266,16 @@
     }
     const res = C.analyze(pan, target);
     lastBullets = res.bullets;
+    lastAnalysis = res;
     list.innerHTML = res.bullets.map(function (b) {
       return '<li' + (b.indexOf('⚠') >= 0 ? ' class="warn"' : '') + '>' + b + '</li>';
     }).join('');
     vBox.hidden = false;
-    vBox.innerHTML = '<b>粗判</b>　' + res.verdict;
+    const TREND_LABEL = { '吉': '趋吉', '凶': '趋凶', '平': '持平', '待审': '待审' };
+    vBox.innerHTML = '<b>粗判（' + TREND_LABEL[res.trend] + '）</b>　' + res.verdict +
+      (res.yingqiClues && res.yingqiClues.length
+        ? '<div class="muted" style="margin-top:6px">应期线索：' + res.yingqiClues.join('；') + '</div>'
+        : '');
   }
   $('#useSelect').onchange = function () { renderAnalysis(); if ($('#useCustom').hidden === false) $('#useCustom').focus(); };
   $('#useCustom').oninput = function () { /* 输入变化无需重算粗判，buildPanText 实时读取 */ };
@@ -204,7 +301,7 @@
         (L.moving && L.bian ? L.bian.lq + L.bian.gan + L.bian.zhi : '') + '\n';
     }
     if (lastBullets.length) {
-      txt += '\n【旺衰粗判】\n';
+      txt += '\n【旺衰粗判（规则链 · 非评分制）】\n';
       lastBullets.forEach(function (b) {
         txt += '- ' + b.replace(/<[^>]+>/g, '') + '\n';
       });

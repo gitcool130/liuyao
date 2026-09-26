@@ -87,6 +87,7 @@
   }
   .coin:active { transform: scale(.94); }
   .coin.is-zhi { background: radial-gradient(circle at 35% 30%, #f5efe2, #d9cdb2); color: var(--ink-light); }
+  .coin.is-hidden { background: radial-gradient(circle at 35% 30%, #efe9dc, #cfc3a6); color: var(--ink-light); cursor: default; }
   .toss-hint { text-align: center; font-size: 15px; margin: 8px 0 16px; }
   .toss-hint b { color: var(--cinnabar); }
   .btn {
@@ -244,8 +245,9 @@
     <h2>占时</h2>
     <div id="timeInfo"></div>
     <div class="date-row">
-      <span class="muted">占问时刻（可改）： </span>
+      <span class="muted" id="dtLabel">占问时刻（现场摇卦 · 首摇锁定）：</span>
       <input type="datetime-local" id="dtInput">
+      <button class="btn ghost" id="btnTimeMode" title="现场摇卦：首摇瞬间锁定时刻，不可改；补录模式：为既往时刻补卦，时间可改">切换补录模式</button>
     </div>
   </section>
 
@@ -254,13 +256,13 @@
     <h2>起卦</h2>
     <div class="cast-grid">
       <div class="cast-left">
-        <div class="muted" style="text-align:center" id="stepHint">静心默念所测之事，自下而上摇六次。点铜钱可翻转「背 / 字」。</div>
+        <div class="muted" style="text-align:center" id="stepHint">静心默念所测之事，自下而上摇六次。点[摇卦]由天定（摇出即定，不可反悔）；亦可自行点铜钱手动录入（后果自负）。</div>
         <div class="coin-row" id="coinRow"></div>
         <div class="toss-hint" id="tossHint"></div>
         <div class="btn-row">
-          <button class="btn" id="btnRandom">掷铜钱</button>
-          <button class="btn primary" id="btnConfirm">定此爻</button>
-          <button class="btn ghost" id="btnUndo">撤销上一爻</button>
+          <button class="btn" id="btnRandom">摇卦</button>
+          <button class="btn primary" id="btnConfirm">落爻</button>
+          <button class="btn ghost" id="btnUndo">撤销重摇此卦</button>
         </div>
       </div>
       <div class="yao-stack" id="yaoStack"></div>
@@ -329,12 +331,16 @@
     <div id="libDetail" style="margin-top:12px"></div>
   </section>
 
-  <p class="disclaimer">排盘依京房八宫纳甲法 · 节气按通用公式推算（临界日期或有一日之差）· 本工具仅供术数研究与娱乐参考</p>
+  <p class="disclaimer">排盘依京房八宫纳甲法 · 节气交节时刻查表（1900-2100，分钟级）· 摇卦用密码学随机源，摇出即定 · 本工具仅供术数研究与娱乐参考</p>
 </div>
 
 <button id="bgmBtn" title="琴音 · 点击播放">琴</button>
 
-<script src="core.js"></script>
+<script src="core/data.js"></script>
+<script src="core/data-jieqi.js"></script>
+<script src="core/calendar.js"></script>
+<script src="core/paipan.js"></script>
+<script src="core/analyze.js"></script>
 <script src="app.js"></script>
 <script src="bgm.js"></script>
 </body>

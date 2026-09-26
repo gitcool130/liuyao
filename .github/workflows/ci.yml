@@ -1,0 +1,46 @@
+# 质量门禁：单测 + 三库差分 + 语法检查。只验证，不部署（部署走 wrangler direct upload）。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装测试裁判库（devDependencies，不进生产）
+        run: npm ci
+
+      - name: 核心单测（37 项基础 + 49 项规则链）
+        run: npm test
+
+      - name: 三库交叉差分（najia × iching-shifa × lunar-javascript，10 万+字段）
+        run: npm run test:diff
+        env:
+          TZ: Asia/Shanghai # 节气表以北京时生成，差分须同时区
+
+      - name: 前端语法与加载顺序检查
+        run: |
+          node --check app.js
+          node --check bgm.js
+          node --check core/data.js
+          node --check core/calendar.js
+          node --check core/paipan.js
+          node --check core/analyze.js
+          node -e "
+          const fs=require('fs');
+          const html=fs.readFileSync('index.html','utf8');
+          const s=[...html.matchAll(/<script src=\"([^\"]+)\"><\/script>/g)].map(m=>m[1]);
+          const expect=['core/data.js','core/data-jieqi.js','core/calendar.js','core/paipan.js','core/analyze.js','app.js','bgm.js'];
+          if(JSON.stringify(s)!==JSON.stringify(expect)){console.error('脚本加载顺序错误:',s);process.exit(1)}
+          console.log('脚本加载顺序 ✓');
+          "

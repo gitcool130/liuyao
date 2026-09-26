@@ -1,0 +1,16 @@
+{
+  "name": "liuyao",
+  "version": "2.0.0",
+  "private": true,
+  "description": "六爻排盘工具（生产零依赖，npm 仅用于测试层裁判库）",
+  "scripts": {
+    "test": "node test-core.js && node test-rules.js",
+    "test:diff": "node test-diff.mjs",
+    "gen:jieqi": "node tools/gen-jieqi.js"
+  },
+  "devDependencies": {
+    "lunar-javascript": "^1.7.3",
+    "@taoracle/najia": "^0.1.0",
+    "iching-shifa": "^1.8.0"
+  }
+}
