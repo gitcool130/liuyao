@@ -137,7 +137,7 @@ const agg4 = C.aggregateTrend({ hasYongshen: true, grade: '休', daySupports: fa
 eq('无生无克→平', agg4.trend, '平');
 
 // ---------- 10. 源码级验收：analyze.js 代码中无 score 残留（剔除注释后扫描） ----------
-const src = fs.readFileSync(__dirname + '/core/analyze.js', 'utf8')
+const src = fs.readFileSync(__dirname + '/public/core/analyze.js', 'utf8')
   .replace(/\/\*[\s\S]*?\*\//g, '')   // 块注释
   .replace(/\/\/.*$/gm, '');          // 行注释
 eq('analyze.js 代码无 score 字样', (src.match(/\bscore\b/g) || []).length, 0);

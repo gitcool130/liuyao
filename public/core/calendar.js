@@ -50,7 +50,13 @@
     for (let i = 0; i < ds.length; i++) { acc += ds[i]; abs[i] = acc; }
     return abs;
   })();
-  const YEAR0 = 1900;
+  const YEAR0 = 1900, YEAR_END = 2100;
+
+  // 表外年份（<1900 或 >2100）的降级近似：十二「节」的典型交节日（公历日）
+  // 实测交节日逐年浮动：小寒 5–7、立春 3–5、惊蛰 5–6、清明 4–6、立夏 5–6、
+  // 芒种 5–7、小暑 7–8、立秋 7–8、白露 7–8、寒露 8–9、立冬 7–8、大雪 6–8。
+  // 此处取众数，误差 ±2 日；仅在表外年份启用，并由 fourPillars().outOfTable 标记。
+  const APPROX_TERM_DAY = [6, 4, 6, 5, 6, 6, 7, 8, 8, 8, 7, 7];
 
   // 第 idx 个交节的绝对分钟数 → { y, m, d, hour, minute }
   // absMin 恒为非负（锚点为表首 1900 小寒，差分累加只增），此处做非负取余
@@ -91,7 +97,7 @@
   function monthZhiIndex(y, m, d, hour, minute) {
     const t = termMoment(y, m);
     const hh = hour || 0, mm = minute || 0;
-    if (!t) return d >= 15 ? (m % 12) : ((m - 1 + 12) % 12); // 超表范围兜底（不应发生于 1900-2100）
+    if (!t) return d >= APPROX_TERM_DAY[m - 1] ? (m % 12) : ((m - 1 + 12) % 12); // 表外降级（见 APPROX_TERM_DAY，±2 日）
     const cur = d * 1440 + hh * 60 + mm;
     const term = t.day * 1440 + t.hour * 60 + t.minute;
     return cur >= term ? (m % 12) : ((m - 1 + 12) % 12);
@@ -103,9 +109,16 @@
     if (m < 2) yy--;
     else if (m === 2) {
       const t = termMoment(y, 2); // 立春
-      const cur = d * 1440 + (hour || 0) * 60 + (minute || 0);
-      const term = t.day * 1440 + t.hour * 60 + t.minute;
-      if (cur < term) yy--;
+      if (!t) {
+        // 表外年份：无交节时刻可查，退化为「立春在 2 月 4 日」的典型近似。
+        // 此前此处直接取 t.day，遇表外年份（如 1660 年——古籍卦例年代）
+        // 会抛 TypeError 使整个排盘中断（实测 1660/1850/1899/2101 全崩）。
+        if (d < APPROX_TERM_DAY[1]) yy--;
+      } else {
+        const cur = d * 1440 + (hour || 0) * 60 + (minute || 0);
+        const term = t.day * 1440 + t.hour * 60 + t.minute;
+        if (cur < term) yy--;
+      }
     }
     return ((yy - 4) % 60 + 60) % 60;
   }
@@ -145,6 +158,7 @@
     const startBranch = xunStart % 12;
     const kong = [(startBranch + 10) % 12, (startBranch + 11) % 12];
     return {
+      outOfTable: (y < YEAR0 || y > YEAR_END), // 历法精度降级标记：月柱/年柱为近似值，UI 须提示
       yearIdx: yIdx, yearGZ: ganzhiOfIndex(yIdx),
       monthGZ: GAN[mGan] + ZHI[mz], monthZhi: mz, monthGan: mGan,
       dayIdx: dIdx, dayGZ: ganzhiOfIndex(dIdx), dayGan: dIdx % 10, dayZhi: dIdx % 12,

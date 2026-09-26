@@ -90,6 +90,17 @@ eq('节气表上限 2100', !!C.termMoment(2100, 12), true);
 eq('表外 1899 返回 null', C.termMoment(1899, 12), null);
 eq('表外 2101 返回 null', C.termMoment(2101, 1), null);
 
+// 表外年份排盘降级（回归：曾于 2 月立春分支直接取 null.day，抛 TypeError 中断排盘）
+const pOut = C.fourPillars(new Date(1660, 1, 5, 10, 0));
+eq('表外 1660-02 出四柱（不抛异常）', !!pOut.dayGZ, true);
+eq('表外 1660 outOfTable 标记', pOut.outOfTable, true);
+eq('表外 2150-02 亦不抛异常', !!C.fourPillars(new Date(2150, 1, 5, 10, 0)).yearGZ, true);
+eq('表外降级 立春前年柱归前一年', C.fourPillars(new Date(1660, 1, 3, 10, 0)).yearGZ, C.fourPillars(new Date(1659, 5, 3, 10, 0)).yearGZ);
+eq('表外降级 立春后年柱归本年', C.fourPillars(new Date(1660, 1, 5, 10, 0)).yearGZ, C.fourPillars(new Date(1660, 5, 3, 10, 0)).yearGZ);
+eq('表内年份 outOfTable=false', C.fourPillars(new Date(2026, 8, 24, 10, 0)).outOfTable, false);
+eq('表内下限 1900 outOfTable=false', C.fourPillars(new Date(1900, 5, 1, 10, 0)).outOfTable, false);
+eq('表内上限 2100 outOfTable=false', C.fourPillars(new Date(2100, 5, 1, 10, 0)).outOfTable, false);
+
 // 17. 夜子时段：日柱归属 + 时干五鼠遁（23:00–24:00）
 const pNight = C.fourPillars(new Date(2026, 8, 24, 23, 30));  // 辛丑日
 eq('夜子时 日柱归当日', pNight.dayGZ, C.fourPillars(new Date(2026, 8, 24, 12, 0)).dayGZ);

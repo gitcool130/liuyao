@@ -27,12 +27,13 @@ jobs:
 
       - name: 静态语法检查（浏览器脚本 + Pages Functions）
         run: |
-          node --check app.js
-          node --check bgm.js
-          node --check core/data.js
-          node --check core/calendar.js
-          node --check core/paipan.js
-          node --check core/analyze.js
+          node --check public/app.js
+          node --check public/bgm.js
+          node --check public/core/data.js
+          node --check public/core/data-jieqi.js
+          node --check public/core/calendar.js
+          node --check public/core/paipan.js
+          node --check public/core/analyze.js
           node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON -e "
           // Functions 为 ESM（含 import 声明），动态 import 既验语法也验依赖解析
           // 注：Pages Functions 的 .js 一律按 ESM 处理，与 package.json 的 type 无关，
@@ -43,9 +44,30 @@ jobs:
           "
           node -e "
           const fs=require('fs');
-          const html=fs.readFileSync('index.html','utf8');
+          const html=fs.readFileSync('public/index.html','utf8');
           const s=[...html.matchAll(/<script src=\"([^\"]+)\"><\/script>/g)].map(m=>m[1]);
           const expect=['core/data.js','core/data-jieqi.js','core/calendar.js','core/paipan.js','core/analyze.js','app.js','bgm.js'];
           if(JSON.stringify(s)!==JSON.stringify(expect)){console.error('脚本加载顺序错误:',s);process.exit(1)}
           console.log('脚本加载顺序 ✓');
+          "
+
+      - name: 部署隔离断言（敏感文件不得进入部署目录）
+        run: |
+          # 部署根为 public/。若源码/配置/测试落到 public/ 内，会直接以静态资源
+          # 形式暴露到公网（含 Account ID、D1 UUID、网关路径），此步强制拦截。
+          # 背景：Cloudflare Pages direct upload 不支持 .pagesignore/.assetsignore
+          #      （已实测），隔离只能靠目录物理边界，故须由 CI 守住。
+          node -e "
+          const fs=require('fs'), path=require('path');
+          const forbidden=/^(wrangler\.toml|schema\.sql|package\.json|package-lock\.json|README\.md|\.assetsignore|\.pagesignore|\.gitignore)$/;
+          const found=[];
+          (function walk(d){
+            for(const e of fs.readdirSync(d,{withFileTypes:true})){
+              const f=path.join(d,e.name);
+              if(e.isDirectory()) walk(f);
+              else if(forbidden.test(e.name) || /^test-/.test(e.name) || /^tools$/.test(path.basename(d))) found.push(f);
+            }
+          })('public');
+          if(found.length){ console.error('❌ 部署目录含敏感文件，将于公网泄露:', found); process.exit(1); }
+          console.log('✅ 部署目录隔离（public/ 内无源码、配置与测试）');
           "

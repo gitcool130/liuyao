@@ -93,7 +93,7 @@ const out = [
   ''
 ].join('\n');
 
-fs.writeFileSync(path.join(__dirname, '..', 'core', 'data-jieqi.js'), out);
+fs.writeFileSync(path.join(__dirname, '..', 'public', 'core', 'data-jieqi.js'), out);
 
 // 摘要 + 人工抽查样本
 console.log('生成完成：' + (YEAR1 - YEAR0 + 1) * 12 + ' 条交节时刻');

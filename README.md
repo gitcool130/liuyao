@@ -4,17 +4,17 @@
 
 ## 技术要点
 
-### 排盘引擎（core/ 四层，纯浏览器端零运行时依赖）
+### 排盘引擎（public/core/ 四层，纯浏览器端零运行时依赖）
 
 引擎按「易学数据 → 历法底座 → 排盘事实 → 断卦符号」四层拆分，保持 `window.LY` 对外 API 兼容，`<script>` 全局挂载（file:// 直开可用，零构建）：
 
 | 文件 | 职责 |
 |------|------|
-| `core/data.js` | 八卦纳甲表、64 卦名、冲合刑害、进退神、三合局等易学常量 |
-| `core/data-jieqi.js` | 十二节交节时刻表（1900–2100，分钟级，约 15KB 差分压缩） |
-| `core/calendar.js` | JDN 双锚点四柱、五虎遁/五鼠遁、旬空、节气查表、夜子时流派开关 |
-| `core/paipan.js` | 京房八宫变爻法、纳甲装配、六亲、世应、六神、伏神（纯函数，零 I/O） |
-| `core/analyze.js` | 断卦符号层：规则判定链，输出结构化 `judgments[]` |
+| `public/core/data.js` | 八卦纳甲表、64 卦名、冲合刑害、进退神、三合局等易学常量 |
+| `public/core/data-jieqi.js` | 十二节交节时刻表（1900–2100，分钟级，约 15KB 差分压缩） |
+| `public/core/calendar.js` | JDN 双锚点四柱、五虎遁/五鼠遁、旬空、节气查表、夜子时流派开关 |
+| `public/core/paipan.js` | 京房八宫变爻法、纳甲装配、六亲、世应、六神、伏神（纯函数，零 I/O） |
+| `public/core/analyze.js` | 断卦符号层：规则判定链，输出结构化 `judgments[]` |
 
 - **京房纳甲**：八宫卦序变爻法生成全部 64 卦（本宫 → 一世至五世 → 游魂 → 归魂）
 - **节气精确到分钟**：十二节交节时刻查表（1900–2100 共 2412 项，由 lunar-javascript 离线生成差分压缩表，运行时零计算只查表）——替换旧版通用公式（临界日 ±1 日误差，月建一错全盘错）
@@ -22,7 +22,7 @@
 - **断卦符号化（无评分制）**：废弃旧版 +2.5/-2 算术评分，改为规则判定链——每条规则独立函数、可单测，输出 `judgments[]`（tag/rule/text/basis 典据）+ `trend`（吉/凶/平/待审，规则汇聚表驱动）+ `yingqiClues`（应期线索，只出线索不下结论）
 - **暗动闭环**：静爻被日冲，先查月令旺衰（旺相=暗动，休囚=日破）——修复旧版「文字说了一套、代码没做」
 - **规则覆盖**：月建档（旺相休囚死）、真假月破、日辰生克拱扶、冲散/暗动/日破、合起合绊、静空/动空/真空（旬空+月破）、回头生克冲合、进神退神、三合局、相刑相害、飞伏生克、用神两现取舍、伏神引拔、伏神伏世下（不误报用神持世）
-- **质量保障**：`test-core.js` 37 项基础自检 + `test-rules.js` 56 项规则链单测 + `test-diff.mjs` 三库交叉差分（见下）
+- **质量保障**：`test-core.js` 64 项基础自检 + `test-rules.js` 62 项规则链单测 + `test-diff.mjs` 三库交叉差分（见下）；CI 另有「部署隔离断言」守住 `public/` 边界
 
 ### 三库交叉差分（test-diff.mjs，devDependencies 不进生产）
 
@@ -35,6 +35,10 @@
 已达成：**104,780 个字段三方零差异、零流派分歧**；节气表 1900–2100 全量 2412 项与 lunar-javascript 对齐（误差 = 0）。差分两度抓出真实存量 bug：① 64 卦名表中「山火贲」曾被误标（旅卦覆卦混淆）；② 夜子时时干曾被错按当日日干五鼠遁（辛丑日 23:30 误得戊子时，正法为次日壬寅遁得庚子时）——均在补入 23 时段差分样本后暴露，已修复并回归。
 
 > 待办：经典卦例回归（golden test）——《增删卜易》《卜筮正宗》带完整装卦的卦例（≥10 例）需人工从定本提取（含原文时间、爻值、期望断语），数据就绪后补入测试层。
+> ⚠️ **精度前提**：《增删卜易》卦例多发生于清康熙年间（约 1660–1690），早于节气表覆盖下限 1900。
+> 现可正常排盘且不中断（`outOfTable` 降级：日柱、时柱为精确值，月柱、年柱按典型交节日近似 ±2 日），
+> 但若要求与古籍原文干支**逐柱全真吻合**，需先把节气表下限扩展至 1600 年代——
+> 用天文算法（如 VSOP87 系）离线生成，仍走「生成产物 + 三库差分验证」的既有路径，运行时依旧零依赖。
 
 ## 验收标准（M1–M12）
 
@@ -42,7 +46,7 @@
 
 | 里程碑 | 验收标准 | 落点 |
 |---|---|---|
-| M1 节气精确化 | 1900–2100 十二节交节时刻与 lunar-javascript 全量一致（误差 = 0），表外年份显式返回 null | `test-diff.mjs` diffJieqi（2412 项）、`test-core.js` 表范围项 |
+| M1 节气精确化 | 1900–2100 十二节交节时刻与 lunar-javascript 全量一致（误差 = 0）；**表外年份降级不中断**：月柱/年柱按典型交节日近似（±2 日）并由 `fourPillars().outOfTable` 标记，UI 与排盘文本同步提示——绝不抛异常、绝不静默给错值 | `test-diff.mjs` diffJieqi（2412 项）、`test-core.js` 表范围与表外降级项 |
 | M2 子时流派 | 默认 `day` 时 23:00–24:00 日柱归当日、时干按**次日**日干五鼠遁；`next` 时整体进次日。两流派分别与 najia/lunar-javascript、iching-shifa 对齐 | `test-rules.js` 夜子时组、`test-diff.mjs` diffNightZi |
 | M3 断卦符号化 | ① 源码中无 `score` 字样（扫描时剔除注释）；② 输出必为 `judgments[]`（每条含 tag/rule/text/basis）；③ `trend` 仅由规则汇聚表求得，不由算术分值决定；④ 应为期线索只给线索不下结论 | `test-rules.js` 第 9/10 组（源码扫描 + 汇聚表驱动）、`analyze.js` aggregateTrend |
 | M4 规则补全 | 三合局、进神退神、相刑相害、飞伏生克各有命中/不命中两用例外 | `test-rules.js` 第 4–8 组 |
@@ -115,17 +119,25 @@
 
 ## 文件说明
 
+### 部署目录 `public/`（唯一上传至公网 CDN 的范围）
+
 | 文件 | 说明 |
 |------|------|
-| `index.html` | 页面结构（摇卦、排盘、AI 卡片、模型芯片、卦例库） |
-| `app.js` | 前端逻辑（盲摆状态机、时间锁、排盘渲染、多模型对比、进阶探讨、失败降级） |
-| `core/data.js` | 易学常量（八卦纳甲、64 卦名、冲合刑害、进退神、三合局） |
-| `core/data-jieqi.js` | 十二节交节时刻表（生成产物，勿手改；由 `tools/gen-jieqi.js` 重新生成） |
-| `core/calendar.js` | 历法底座（JDN 四柱、五虎遁/五鼠遁、旬空、节气查表、夜子时开关） |
-| `core/paipan.js` | 排盘事实引擎（纳甲/六亲/世应/六神/伏神，纯函数） |
-| `core/analyze.js` | 断卦符号层（规则判定链，judgments/trend/yingqiClues） |
-| `core.js` | Node 聚合入口（浏览器请按序加载 core/ 五文件，见 index.html） |
-| `test-core.js` | 排盘引擎 56 项基础自检（历法锚点、节气边界、夜子时、纳甲六亲、卦序） |
+| `public/index.html` | 页面结构（摇卦、排盘、AI 卡片、模型芯片、卦例库） |
+| `public/app.js` | 前端逻辑（盲摆状态机、时间锁、排盘渲染、多模型对比、进阶探讨、失败降级） |
+| `public/bgm.js` | 生成式琴音引擎（Karplus-Strong 拨弦建模） |
+| `public/core/data.js` | 易学常量（八卦纳甲、64 卦名、冲合刑害、进退神、三合局） |
+| `public/core/data-jieqi.js` | 十二节交节时刻表（生成产物，勿手改；由 `tools/gen-jieqi.js` 重新生成） |
+| `public/core/calendar.js` | 历法底座（JDN 四柱、五虎遁/五鼠遁、旬空、节气查表、夜子时开关） |
+| `public/core/paipan.js` | 排盘事实引擎（纳甲/六亲/世应/六神/伏神，纯函数） |
+| `public/core/analyze.js` | 断卦符号层（规则判定链，judgments/trend/yingqiClues） |
+
+### 仓库内（**不**进入部署目录，物理隔离于公网之外）
+
+| 文件 | 说明 |
+|------|------|
+| `core.js` | Node 聚合入口（浏览器请按序加载 `public/core/` 五文件，见 `public/index.html`） |
+| `test-core.js` | 排盘引擎 64 项基础自检（历法锚点、节气边界、表外降级不中断、夜子时、纳甲六亲、卦序） |
 | `test-rules.js` | 断卦规则链 62 项单测（暗动闭环、进退神、三合、夜子时正法、伏神伏世下、两现取舍、交节边界等） |
 | `test-diff.mjs` | 三库交叉差分（4096 组合 + 历法时点 + 夜子时双流派 + 节气全量，10 万+字段） |
 | `tools/gen-jieqi.js` | 节气表离线生成器（lunar-javascript → 差分压缩表） |
@@ -133,10 +145,17 @@
 | `functions/api/models.js` | 模型清单接口 |
 | `functions/api/records.js` | 卦例库接口（id 服务端校验/生成，防伪造覆盖） |
 | `functions/api/_lib.js` | 供应商解析共享层（`_` 前缀不路由，白名单与清单共用一口径） |
-| `.github/workflows/ci.yml` | CI 质量门禁（单测 + 差分 + 语法检查，只验证不部署） |
+| `.github/workflows/ci.yml` | CI 质量门禁（单测 + 差分 + 语法检查 + 部署隔离断言，只验证不部署） |
 | `schema.sql` | D1 建表语句（id 双层兜底：应用层 UUID + DDL DEFAULT 表达式） |
-| `wrangler.toml` | 部署配置（D1 绑定 + 环境变量说明） |
+| `wrangler.toml` | 部署配置（D1 绑定 + 环境变量说明；`pages_build_output_dir = "public"`） |
 | `package.json` | 仅 devDependencies（测试裁判库），生产构建零 npm 依赖 |
+
+> **为什么要有 `public/` 这一层**：`functions/` 由 wrangler 单独编译为 Pages Functions，不受此目录约束。
+> 此前 `pages_build_output_dir = "."` 会把 `wrangler.toml`（含 Account ID、D1 UUID、AI Gateway 路径）、
+> `schema.sql`、测试脚本、README 全部作为静态资源上传到公网，任何人可直接下载整套架构拓扑。
+> 经实测，Cloudflare Pages **direct upload 不支持 `.pagesignore` / `.assetsignore`**
+> （`.assetsignore` 仅对 Workers 静态资源生效，放上去反而自身被上传），
+> 因此隔离必须依靠目录物理边界；CI 中的「部署隔离断言」用于防止后续误改回归。
 
 ## 环境变量（Pages 后台 → Settings → Environment variables）
 
@@ -186,21 +205,26 @@
 
 ```bash
 npm install                       # 安装测试裁判库（devDependencies）
-npx wrangler pages dev .          # 本地起 Pages（需先在 wrangler.toml 绑定 D1）
+npx wrangler pages dev public     # 本地起 Pages（部署根为 public/，需先在 wrangler.toml 绑定 D1）
 npm test                          # 快速环：基础自检 56 项 + 规则链单测 62 项（无需裁判库）
 npm run test:all                  # 完整环：上者 + 三库交叉差分（CI 即用此命令）
-npm run test:diff                 # 仅差分（须在 UTC+8 时区运行，建议 TZ=Asia/Shanghai）
+npm run test:diff                 # 仅差分（差分本身时区无关，CI 仍固定 TZ=Asia/Shanghai）
 npm run gen:jieqi                 # 重新生成节气表（改覆盖范围时用）
 ```
 
 > 审查提示：若 `raw.githubusercontent.com` 不可达（部分网络环境会静默超时，导致误判"文件不存在"），可用 CDN 镜像取源：
-> `https://cdn.jsdelivr.net/gh/idavailable/liuyao@main/core/calendar.js`；或直接读 Git 对象树 `git ls-tree -r --name-only origin/main`。
+> `https://cdn.jsdelivr.net/gh/idavailable/liuyao@main/public/core/calendar.js`；或直接读 Git 对象树 `git ls-tree -r --name-only origin/main`。
 
 ## 部署
 
 ```bash
-npx wrangler pages deploy . --project-name=liuyao --branch=main
+npx wrangler pages deploy public --project-name=liuyao --branch=main
 ```
+
+> 部署根是 `public/`（`wrangler.toml` 内 `pages_build_output_dir` 已固定）。
+> 部署后请确认 `https://<域名>/wrangler.toml` **不可**取到真实内容
+> （若返回 `text/html` 即页面回退，说明隔离正常；返回 `application/toml` 即为泄露）。
+> 注意本项目对未知路径有 SPA 回退，故不能只看 HTTP 状态码，必须比对 `Content-Type`。
 
 D1 建库：控制台创建后将 `database_id` 填入 wrangler.toml，并执行 `schema.sql`。
 

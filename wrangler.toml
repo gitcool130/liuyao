@@ -1,8 +1,15 @@
 name = "liuyao"
 compatibility_date = "2026-09-24"
-pages_build_output_dir = "."
+# 部署根仅为 public/（index.html + app.js + bgm.js + core/）。
+# 源码、配置、测试、文档一律留在仓库根，不在部署范围内——
+# 此前 pages_build_output_dir = "." 会把 wrangler.toml（含 Account ID、
+# D1 UUID、网关路径）、schema.sql、测试脚本、README 全部作为静态资源
+# 上传公网，任意人可直接下载。
+# 注意：.assetsignore 对 Pages direct upload 无效（已实测），
+# 唯一可靠的隔离方式就是让敏感文件不在部署目录内。
+pages_build_output_dir = "public"
 
-# 本地开发：npx wrangler pages dev .
+# 本地开发：npx wrangler pages dev public
 # 线上部署后，在 Pages 项目 → Settings → Functions 中做同样的绑定
 
 [[d1_databases]]

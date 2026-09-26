@@ -57,7 +57,10 @@
       '<div class="muted">公历 ' + fmtDT(selectedDate) +
       (timeMode === 'live' ? '（现场摇卦 · ' + (timeLocked ? '已锁定于首摇' : '开摇即锁定') + '）' : '（补录模式 · 时间可改）') + '</div>' +
       '<div class="gz">' + pil.yearGZ + '年 · ' + pil.monthGZ + '月 · <b>' + pil.dayGZ + '日</b> · ' + pil.hourGZ + '时</div>' +
-      '<div class="muted">月建 <b class="kong">' + C.ZHI[pil.monthZhi] + '</b> ｜ 日辰 <b class="kong">' + C.ZHI[pil.dayZhi] + '</b> ｜ 旬空 <b class="kong">' + pil.kongStr + '</b></div>';
+      '<div class="muted">月建 <b class="kong">' + C.ZHI[pil.monthZhi] + '</b> ｜ 日辰 <b class="kong">' + C.ZHI[pil.dayZhi] + '</b> ｜ 旬空 <b class="kong">' + pil.kongStr + '</b></div>' +
+      (pil.outOfTable
+        ? '<div class="warn">⚠ 历法精度降级：' + selectedDate.getFullYear() + ' 年超出节气时刻表覆盖范围（1900–2100），月柱与年柱按典型交节日近似（±2 日以内）；日柱、时柱不受影响。古籍卦例回归请注意此项。</div>'
+        : '');
     const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
     if (!$('#dtInput').value) {
       $('#dtInput').value = selectedDate.getFullYear() + '-' + p2(selectedDate.getMonth() + 1) + '-' + p2(selectedDate.getDate()) +
@@ -295,6 +298,7 @@
     const pil = pan.pillars;
     let txt = '【六爻排盘】\n';
     txt += '时间：' + fmtDT(selectedDate) + '（' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时，旬空' + pil.kongStr + '）\n';
+    if (pil.outOfTable) txt += '注：该年超出节气时刻表覆盖范围（1900–2100），月柱与年柱按典型交节日近似（±2 日以内），日柱与时柱为精确值。\n';
     const q = currentQuestion();
     if (q) txt += '所测：' + q + '\n';
     txt += '本卦：' + pan.benName + '（' + pan.palace + '宫·' + pan.palaceWx + '）' +
