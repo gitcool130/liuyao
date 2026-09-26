@@ -92,7 +92,9 @@
 
 - **摇卦**：一键盲摆（crypto 熵源、摇出即定、确认前不泄露爻象）或手动录入（后果自负）
 - **完整排盘**：卦名卦宫、纳甲六亲、世应、六神、伏神、动爻变卦、旬空、月破、干支四柱（节气精确到分钟）
-- **旺衰粗判（规则链）**：取用神（含两现取舍/伏神）→ 月建档 → 真假月破 → 日辰 → 暗动/日破 → 合起合绊 → 旬空/真空 → 动变（回头生克/进退神）→ 世爻关系 → 飞伏生克 → 三合刑害，趋势由规则汇聚（非算术评分），附应期线索
+- **旺衰粗判（规则链）**：取用神（含两现取舍/多现伏神取临世应）→ 月建档 → 真假月破 → 日辰 → 暗动/日破 → 合起合绊 → 旬空/真空 → 动变（回头生克/进退神）→ **其余动爻对用神的生克（原神发动/忌神发动）** → 世爻关系 → 飞伏生克 → 三合刑害，趋势由规则汇聚（非算术评分），附应期线索
+  - 五行关系统一走 `relation5()` 五值完备函数（比和/得生/受克/泄/耗），各规则不再用 `else` 兜底猜关系——历史 bug：月建子水配用神亥水（同五行异支）曾落兜底误报「克月建」，用神克日辰曾被误判「日辰比和」并污染月破真假与真空判定
+
 - **AI 断卦**：排盘文本交给大模型按京房纳甲体系论断（用神 → 旺衰生克 → 吉凶 → 应期 → 白话总结），术语规范引自《增删卜易》《卜筮正宗》
 - **多模型对比**：可同时勾选多个模型并列输出断卦结果，互为参照
 - **进阶探讨**：断卦后可继续追问，各模型独立上下文，保持卦理一致
@@ -164,7 +166,7 @@
 | 变量 | 说明 |
 |------|------|
 | `GEMINI_API_KEY` | secret，Google AI Studio key（AIza 开头） |
-| `GEMINI_BASE_URL` | 默认走 CF AI Gateway 原生路径（见 wrangler.toml） |
+| `GEMINI_BASE_URL` | **secret**，CF AI Gateway 原生路径。含账号 ID 与网关名，故不写进仓库，用 `wrangler pages secret put GEMINI_BASE_URL` 设置；模板：`https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/<GATEWAY_NAME>/google-ai-studio/v1beta`。未配置则回退 Google 原生端点（数据中心 IP 常被拒） |
 
 **DeepSeek 通道**
 
@@ -206,11 +208,15 @@
 ```bash
 npm install                       # 安装测试裁判库（devDependencies）
 npx wrangler pages dev public     # 本地起 Pages（部署根为 public/，需先在 wrangler.toml 绑定 D1）
-npm test                          # 快速环：基础自检 56 项 + 规则链单测 62 项（无需裁判库）
+npm test                          # 快速环：基础自检 64 项 + 规则链单测 102 项（无需裁判库）
+npm run test:fn                   # Functions 层单测 27 项（jsonWithin 合法性/常量时间口令/模型名白名单）
+npm run test:ui                   # UI 冒烟 49 断言（Playwright + Edge 通道，需先起本地静态服务）
 npm run test:all                  # 完整环：上者 + 三库交叉差分（CI 即用此命令）
 npm run test:diff                 # 仅差分（差分本身时区无关，CI 仍固定 TZ=Asia/Shanghai）
 npm run gen:jieqi                 # 重新生成节气表（改覆盖范围时用）
 ```
+
+> UI 冒烟用法：`node test-shake.js [baseURL]`，默认 `http://127.0.0.1:8931`（可指向线上验证）。需 `playwright-core`（`npm i -D playwright-core`）与本机 Edge/Chrome。
 
 > 审查提示：若 `raw.githubusercontent.com` 不可达（部分网络环境会静默超时，导致误判"文件不存在"），可用 CDN 镜像取源：
 > `https://cdn.jsdelivr.net/gh/idavailable/liuyao@main/public/core/calendar.js`；或直接读 Git 对象树 `git ls-tree -r --name-only origin/main`。

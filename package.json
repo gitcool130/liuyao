@@ -15,8 +15,9 @@
     "gen:jieqi": "node tools/gen-jieqi.js"
   },
   "devDependencies": {
-    "lunar-javascript": "^1.7.3",
     "@taoracle/najia": "^0.1.0",
-    "iching-shifa": "^1.8.0"
+    "iching-shifa": "^1.8.0",
+    "lunar-javascript": "^1.7.3",
+    "playwright-core": "^1.63.0"
   }
 }
