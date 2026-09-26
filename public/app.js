@@ -24,6 +24,10 @@
   //   blind：点[摇卦]后爻值已由 crypto 熵源内定，UI 不显示字/背，点[落爻]才揭晓记入
   //   manual：用户自行翻铜钱后直接落爻（后果自负）
   let pendingToss = null;
+  // revealed: null | { coins, val } —— 盲摆落爻后的揭晓态：
+  //   铜钱展示本次摇出的真实字/背，只读不可翻，直到下一次[摇卦]/[撤销]/[重置]才清除。
+  //   （此前落爻后直接重置回「背背背」，用户全程只见背面，误以为摇卦失效）
+  let revealed = null;
 
   // 密码学随机源（M8）：优先 crypto.getRandomValues，无则降级并警告
   function secureCoin() {
@@ -73,13 +77,15 @@
   // blind 遮蔽：已摇未落期间，铜钱显示「？」，不泄露爻象（M5）
   function renderCoins() {
     const hidden = !!(pendingToss && pendingToss.mode === 'blind');
-    $('#coinRow').innerHTML = curCoins.map(function (c, i) {
-      return '<button class="coin' + (hidden ? ' is-hidden' : (c === '字' ? ' is-zhi' : '')) + '" data-i="' + i + '">' +
+    const showing = revealed ? revealed.coins : curCoins;
+    $('#coinRow').innerHTML = showing.map(function (c, i) {
+      return '<button class="coin' + (hidden ? ' is-hidden' : (c === '字' ? ' is-zhi' : '')) + (revealed && !hidden ? ' is-revealed' : '') + '" data-i="' + i + '">' +
         (hidden ? '？' : c) + '</button>';
     }).join('');
     Array.prototype.forEach.call(document.querySelectorAll('.coin'), function (btn) {
       btn.onclick = function () {
         if (pendingToss && pendingToss.mode === 'blind') return; // 已摇出，不可翻看
+        if (revealed) return; // 已揭晓的盲摇结果不可翻（下一爻请点[摇卦]）
         curCoins[+btn.dataset.i] = curCoins[+btn.dataset.i] === '背' ? '字' : '背';
         renderCoins(); renderTossHint();
       };
@@ -93,6 +99,14 @@
     if (pendingToss && pendingToss.mode === 'blind') {
       // 盲摆中：只报进度，不报结果
       hint.innerHTML = '<b>第 ' + (records.length + 1) + ' 爻已摇出</b> · 请落爻';
+      return;
+    }
+    if (revealed) {
+      // 揭晓态：报告刚落之爻的真实结果（records.length 已含本爻，即第 N 爻）
+      const t = TOSS_MEAN[revealed.val];
+      const nb = revealed.coins.filter(function (x) { return x === '背'; }).length;
+      hint.innerHTML = '<b>第 ' + records.length + ' 爻已落</b> · ' + t.name + '（' + nb + ' 背 ' + (3 - nb) + ' 字）→ ' + t.sym + ' 　' + t.desc +
+        '<div class="muted" style="font-size:12px;margin-top:2px">盲摇已定 · ' + (records.length < 6 ? '请摇下一爻' : '六爻已成') + '</div>';
       return;
     }
     const n = backCount();
@@ -125,6 +139,7 @@
 
   function resetTossState() {
     pendingToss = null;
+    revealed = null;
     curCoins = ['背', '背', '背'];
   }
 
@@ -132,6 +147,7 @@
   $('#btnRandom').onclick = function () {
     if (records.length >= 6) return;
     if (pendingToss && pendingToss.mode === 'blind') return; // 已摇出，禁重摇
+    revealed = null; // 清除上一爻的揭晓态，进入新一轮盲摆
     // 现场模式：首摇瞬间锁定占时（M7）
     if (timeMode === 'live' && !timeLocked) {
       selectedDate = new Date();
@@ -158,7 +174,13 @@
       rec = { coins: curCoins.slice(), backs: n, val: tossValFromBacks(n), mode: 'manual' };
     }
     records.push(rec);
-    resetTossState();
+    if (rec.mode === 'blind') {
+      // 盲摆落爻：揭晓真实铜钱并展示，供用户核对（只读），下次摇卦才清除
+      pendingToss = null;
+      revealed = { coins: rec.coins.slice(), val: rec.val };
+    } else {
+      resetTossState();
+    }
     renderCoins(); renderTossHint(); renderStack();
     if (records.length === 6) computePan();
   };
