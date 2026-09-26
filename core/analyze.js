@@ -42,11 +42,28 @@
     if (found.length === 1) {
       return { primary: found[0], all: found, source: '本卦', note: '用神' + target + found[0].zhi + '（' + LINE_NAMES[found[0].pos] + '）' };
     }
-    // 两现取舍：发动者 → 临世应者 → 旺者（古法），余为辅
+    // 两现取舍（古法次序）：发动者 → 临世应者 → 旺者 → 在前之爻
     let pick = found.find(function (l) { return l.moving; });
     let how = '发动者';
     if (!pick) { pick = found.find(function (l) { return l.shi || l.ying; }); how = '临世应者'; }
-    if (!pick) { pick = found[0]; how = '在前之爻（皆静不临世应，姑取初现）'; }
+    if (!pick) {
+      // 皆静且不临世应：按月令旺相休囚死比较取旺者（旺＞相＞休＞囚＞死）
+      const mz = pan.pillars ? pan.pillars.monthZhi : 0;
+      const scored = found.map(function (l) {
+        const g = wangXiangXiuQiuSi(l.wx, mz);
+        return { l: l, g: g, rank: GRADES.indexOf(g) < 0 ? GRADES.length : GRADES.indexOf(g) };
+      });
+      const bestRank = Math.min.apply(null, scored.map(function (s) { return s.rank; }));
+      const best = scored.filter(function (s) { return s.rank === bestRank; });
+      if (best.length === 1) {
+        pick = best[0].l;
+        how = '月令' + ZHI[mz] + '下之旺者（' + best[0].g + '，另一现为' +
+          scored.filter(function (s) { return s !== best[0]; }).map(function (s) { return s.g; }).join('/') + '）';
+      } else {
+        pick = found[0];
+        how = '在前之爻（皆静不临世应，且月令旺衰相同' + (best[0].g ? '，同为' + best[0].g : '') + '，姑取初现）';
+      }
+    }
     return {
       primary: pick, all: found, source: '两现取舍',
       note: '用神' + target + '两现，古法宜取' + how + '为主，余为辅——今取' + LINE_NAMES[pick.pos] + pick.zhi + '为主'

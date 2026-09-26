@@ -36,6 +36,25 @@
 
 > 待办：经典卦例回归（golden test）——《增删卜易》《卜筮正宗》带完整装卦的卦例（≥10 例）需人工从定本提取（含原文时间、爻值、期望断语），数据就绪后补入测试层。
 
+## 验收标准（M1–M12）
+
+重构分期（M1–M12）的验收口径，供外部审查与后续贡献者对照。源码注释中的「M3 验收」即指本表：
+
+| 里程碑 | 验收标准 | 落点 |
+|---|---|---|
+| M1 节气精确化 | 1900–2100 十二节交节时刻与 lunar-javascript 全量一致（误差 = 0），表外年份显式返回 null | `test-diff.mjs` diffJieqi（2412 项）、`test-core.js` 表范围项 |
+| M2 子时流派 | 默认 `day` 时 23:00–24:00 日柱归当日、时干按**次日**日干五鼠遁；`next` 时整体进次日。两流派分别与 najia/lunar-javascript、iching-shifa 对齐 | `test-rules.js` 夜子时组、`test-diff.mjs` diffNightZi |
+| M3 断卦符号化 | ① 源码中无 `score` 字样（扫描时剔除注释）；② 输出必为 `judgments[]`（每条含 tag/rule/text/basis）；③ `trend` 仅由规则汇聚表求得，不由算术分值决定；④ 应为期线索只给线索不下结论 | `test-rules.js` 第 9/10 组（源码扫描 + 汇聚表驱动）、`analyze.js` aggregateTrend |
+| M4 规则补全 | 三合局、进神退神、相刑相害、飞伏生克各有命中/不命中两用例外 | `test-rules.js` 第 4–8 组 |
+| M5 盲摆防刷卦 | 摇出即定不可反悔；确认前不泄露爻象（铜钱显示「？」、爻位显示「已摇出」即已摇出）；熵源为 `crypto.getRandomValues` | `app.js` pendingToss 状态机、`index.html` `.is-hidden` 样式 |
+| M6 撤销正确性 | 撤销后 `curCoins`/`pendingToss` 彻底重置，不得复制上一爻结果 | `app.js` resetTossState() |
+| M7 时间锁 | 现场模式首摇瞬间锁定占时且不可编辑；补录模式可改；模式往返不得污染锁定值 | `app.js` timeLocked/lockedDate、`dtInput.disabled` 双保险 |
+| M8 随机源 | 生产代码无 `Math.random` 用于爻值生成 | `app.js` secureCoin/cryptoToss |
+| M9 三库差分 | 4096 爻组合 + 历法时点 + 夜子时双流派 + 节气全量，三方比对零 BUG、零未裁决流派分歧 | `test-diff.mjs`（10 万+字段） |
+| M12 CI 门禁 | push/PR 触发：单测 + 差分 + 语法检查 + 脚本加载顺序，只验证不部署 | `.github/workflows/ci.yml`、`npm run test:all` |
+
+> 暗动闭环（M3 核心）的验收方式是「翻转证明」：同一静爻、同一日辰，仅改月令旺衰即令结论在暗动/日破之间翻转——见 `test-rules.js` 第 2 组。
+
 ### 多模型 AI 断卦（functions/api/interpret.js）
 
 - **供应商路由 + 模型白名单**：按模型名自动推断供应商，服务端白名单校验防任意模型名注入
@@ -106,8 +125,8 @@
 | `core/paipan.js` | 排盘事实引擎（纳甲/六亲/世应/六神/伏神，纯函数） |
 | `core/analyze.js` | 断卦符号层（规则判定链，judgments/trend/yingqiClues） |
 | `core.js` | Node 聚合入口（浏览器请按序加载 core/ 五文件，见 index.html） |
-| `test-core.js` | 排盘引擎 37 项基础自检 |
-| `test-rules.js` | 断卦规则链 56 项单测（暗动闭环、进退神、三合、夜子时正法、伏神伏世下、交节边界等） |
+| `test-core.js` | 排盘引擎 56 项基础自检（历法锚点、节气边界、夜子时、纳甲六亲、卦序） |
+| `test-rules.js` | 断卦规则链 62 项单测（暗动闭环、进退神、三合、夜子时正法、伏神伏世下、两现取舍、交节边界等） |
 | `test-diff.mjs` | 三库交叉差分（4096 组合 + 历法时点 + 夜子时双流派 + 节气全量，10 万+字段） |
 | `tools/gen-jieqi.js` | 节气表离线生成器（lunar-javascript → 差分压缩表） |
 | `functions/api/interpret.js` | 断卦接口（多供应商路由 + 流式 SSE 拼接） |
@@ -115,7 +134,7 @@
 | `functions/api/records.js` | 卦例库接口（id 服务端校验/生成，防伪造覆盖） |
 | `functions/api/_lib.js` | 供应商解析共享层（`_` 前缀不路由，白名单与清单共用一口径） |
 | `.github/workflows/ci.yml` | CI 质量门禁（单测 + 差分 + 语法检查，只验证不部署） |
-| `schema.sql` | D1 建表语句 |
+| `schema.sql` | D1 建表语句（id 双层兜底：应用层 UUID + DDL DEFAULT 表达式） |
 | `wrangler.toml` | 部署配置（D1 绑定 + 环境变量说明） |
 | `package.json` | 仅 devDependencies（测试裁判库），生产构建零 npm 依赖 |
 
@@ -168,10 +187,14 @@
 ```bash
 npm install                       # 安装测试裁判库（devDependencies）
 npx wrangler pages dev .          # 本地起 Pages（需先在 wrangler.toml 绑定 D1）
-npm test                          # 基础自检 37 项 + 规则链单测 49 项
-npm run test:diff                 # 三库交叉差分（须在 UTC+8 时区运行）
+npm test                          # 快速环：基础自检 56 项 + 规则链单测 62 项（无需裁判库）
+npm run test:all                  # 完整环：上者 + 三库交叉差分（CI 即用此命令）
+npm run test:diff                 # 仅差分（须在 UTC+8 时区运行，建议 TZ=Asia/Shanghai）
 npm run gen:jieqi                 # 重新生成节气表（改覆盖范围时用）
 ```
+
+> 审查提示：若 `raw.githubusercontent.com` 不可达（部分网络环境会静默超时，导致误判"文件不存在"），可用 CDN 镜像取源：
+> `https://cdn.jsdelivr.net/gh/idavailable/liuyao@main/core/calendar.js`；或直接读 Git 对象树 `git ls-tree -r --name-only origin/main`。
 
 ## 部署
 

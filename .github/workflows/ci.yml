@@ -20,15 +20,12 @@ jobs:
       - name: 安装测试裁判库（devDependencies，不进生产）
         run: npm ci
 
-      - name: 核心单测（37 项基础 + 49 项规则链）
-        run: npm test
-
-      - name: 三库交叉差分（najia × iching-shifa × lunar-javascript，10 万+字段）
-        run: npm run test:diff
+      - name: 全量测试（单测 + 三库差分）
+        run: npm run test:all
         env:
           TZ: Asia/Shanghai # 节气表以北京时生成，差分须同时区
 
-      - name: 前端语法与加载顺序检查
+      - name: 静态语法检查（浏览器脚本 + Pages Functions）
         run: |
           node --check app.js
           node --check bgm.js
@@ -36,6 +33,14 @@ jobs:
           node --check core/calendar.js
           node --check core/paipan.js
           node --check core/analyze.js
+          node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON -e "
+          // Functions 为 ESM（含 import 声明），动态 import 既验语法也验依赖解析
+          // 注：Pages Functions 的 .js 一律按 ESM 处理，与 package.json 的 type 无关，
+          //     故此处仅本地探测会有 typeless 警告，运行时无影响，显式抑制
+          Promise.all(['_lib','interpret','models','records'].map(m => import('./functions/api/'+m+'.js')))
+            .then(() => console.log('Functions ESM 语法与依赖解析 ✓'))
+            .catch(e => { console.error('Functions 模块加载失败:', e.message); process.exit(1); });
+          "
           node -e "
           const fs=require('fs');
           const html=fs.readFileSync('index.html','utf8');

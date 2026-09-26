@@ -8,6 +8,7 @@
   },
   "scripts": {
     "test": "node test-core.js && node test-rules.js",
+    "test:all": "npm test && npm run test:diff",
     "test:diff": "node test-diff.mjs",
     "gen:jieqi": "node tools/gen-jieqi.js"
   },

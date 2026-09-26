@@ -173,7 +173,53 @@ C.nightZiMode = 'day'; // 还原默认
   eq('本爻持世正常报持世', rs2.some(function (j) { return j.rule === '用神持世'; }), true);
 })();
 
-// ---------- 12. 节气分钟级边界 ----------
+// ---------- 11·六、用神两现取舍（发动者 → 临世应者 → 旺者 → 初现） ----------
+(function () {
+  // 合成卦：六爻皆静，月令子（水旺）
+  function mkPan(lines, monthZhi) {
+    return { lines: lines, shi: 0, ying: 3, pillars: { monthZhi: monthZhi } };
+  }
+  const l = function (o) { return Object.assign(mkLine({ lq: '妻财' }), o); };
+
+  // ① 发动者优先（即使旺衰更差）
+  var p1 = mkPan([
+    l({ pos: 0, zhi: '午', zhiIdx: 6, wx: '火', moving: false }),
+    l({ pos: 3, zhi: '子', zhiIdx: 0, wx: '水', moving: true })
+  ], 0);
+  eq('两现取发动者', C.pickYongshen(p1, '妻财').primary.pos, 3);
+
+  // ② 皆静：临世应者优先（世在 pos 0）
+  var p2 = mkPan([
+    l({ pos: 0, zhi: '午', zhiIdx: 6, wx: '火', shi: true }),
+    l({ pos: 3, zhi: '子', zhiIdx: 0, wx: '水' })
+  ], 0);
+  eq('两现取临世应者', C.pickYongshen(p2, '妻财').primary.pos, 0);
+
+  // ③ 皆静且不临世应：取月令旺者（子月水旺 → 取水爻，尽管水爻在后）
+  var p3 = mkPan([
+    l({ pos: 0, zhi: '午', zhiIdx: 6, wx: '火' }),   // 子月 火死
+    l({ pos: 3, zhi: '子', zhiIdx: 0, wx: '水' })    // 子月 水旺
+  ], 0);
+  var r3 = C.pickYongshen(p3, '妻财');
+  eq('两现皆静取月令旺者', r3.primary.pos, 3);
+  eq('两现取舍注明旺衰依据', r3.note.indexOf('旺者') >= 0, true);
+
+  // ④ 皆静、不临世应、旺衰相同 → 退化取初现
+  var p4 = mkPan([
+    l({ pos: 0, zhi: '子', zhiIdx: 0, wx: '水' }),
+    l({ pos: 3, zhi: '亥', zhiIdx: 11, wx: '水' })
+  ], 0);
+  eq('旺衰相同退取初现', C.pickYongshen(p4, '妻财').primary.pos, 0);
+
+  // ⑤ 旺衰翻转即翻转取舍（闭环：同一卦、仅换月令）
+  var p5 = mkPan([
+    l({ pos: 0, zhi: '午', zhiIdx: 6, wx: '火' }),
+    l({ pos: 3, zhi: '子', zhiIdx: 0, wx: '水' })
+  ], 6); // 午月：火旺水死
+  eq('旺衰翻转则取舍翻转', C.pickYongshen(p5, '妻财').primary.pos, 0);
+})();
+
+
 // 2026 白露 09-07 22:41：22:40 仍属申月（七月节后为酉…白露交节后为酉月）
 eq('交节前一分钟属前月', C.ZHI[C.monthZhiIndex(2026, 9, 7, 22, 40)], '申');
 eq('交节当刻起属本月', C.ZHI[C.monthZhiIndex(2026, 9, 7, 22, 41)], '酉');
