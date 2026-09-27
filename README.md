@@ -22,7 +22,7 @@
 - **断卦符号化（无评分制）**：废弃旧版 +2.5/-2 算术评分，改为规则判定链——每条规则独立函数、可单测，输出 `judgments[]`（tag/rule/text/basis 典据）+ `trend`（吉/凶/平/待审，规则汇聚表驱动）+ `yingqiClues`（应期线索，只出线索不下结论）
 - **暗动闭环**：静爻被日冲，先查月令旺衰（旺相=暗动，休囚=日破）——修复旧版「文字说了一套、代码没做」
 - **规则覆盖**：月建档（旺相休囚死）、真假月破、日辰生克拱扶、冲散/暗动/日破、合起合绊、静空/动空/真空（旬空+月破）、回头生克冲合、进神退神、三合局、相刑相害、飞伏生克、用神两现取舍、伏神引拔、伏神伏世下（不误报用神持世）
-- **质量保障**：`test-core.js` 64 项基础自检 + `test-rules.js` 62 项规则链单测 + `test-diff.mjs` 三库交叉差分（见下）；CI 另有「部署隔离断言」守住 `public/` 边界
+- **质量保障**：`test-core.js` 64 项基础自检 + `test-rules.js` 102 项规则链单测 + `test-functions.mjs` 27 项 Functions 层 + `test-shake.js` 49 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（见下）；CI 另有「部署隔离断言」守住 `public/` 边界
 
 ### 三库交叉差分（test-diff.mjs，devDependencies 不进生产）
 
@@ -58,6 +58,59 @@
 | M12 CI 门禁 | push/PR 触发：单测 + 差分 + 语法检查 + 脚本加载顺序，只验证不部署 | `.github/workflows/ci.yml`、`npm run test:all` |
 
 > 暗动闭环（M3 核心）的验收方式是「翻转证明」：同一静爻、同一日辰，仅改月令旺衰即令结论在暗动/日破之间翻转——见 `test-rules.js` 第 2 组。
+
+## 审计基线与已修项台账
+
+### 审计前必先对齐基线
+
+审计输入**一律以 commit 为准**，不要用线上页面、旧下载快照或第三方缓存的源码当输入——否则会把已修项当新缺陷重报，白跑一轮。先跑：
+
+```bash
+git log -1 --format='%h %cs %s'   # 确认审计对象就是 HEAD
+git status -sb                    # 若显示 ahead，先推送再审计
+```
+
+| commit | 说明 |
+|---|---|
+| `f5a0ca4` | 第二轮审计的**输入**版本：`core/`、`app.js` 尚在仓库根，`ruleMonth` 仍以 `else` 兜底猜五行关系，`app.js` 仍为 `history.slice(0, -1)` |
+| `3e473e2` | 第二轮 P0/P1/P2 **20 项全量修复**（台账见下） |
+| `123425f` | 部署根收敛至 `public/`，源码/配置/测试与公网物理隔离 |
+| `9749c36` | 盲摇落爻后揭晓真实铜钱结果 |
+| `d858b63` | README 与测试同步（当前 HEAD） |
+
+> ⚠️ **历史教训**：第二轮 20 项报告在修复后仍被反复重报，原因是外部审计取的源码是 GitHub main（`f5a0ca4`），而修复提交全部停留在本地未推送。**提交推送之前不要发起外部审计**，否则拿到的必然是旧版的结论。
+
+### 20 项台账（第二轮）
+
+| # | 报告项 | 现状 | 落点 |
+|---|---|---|---|
+| 1 | `ruleMonth` 同五行不同支误报「克月建」 | ✅ 已修：抽 `relation5` 五值完备函数，补「月建同气」分支，删 `else` 兜底 | `public/core/analyze.js` ruleMonth；`test-rules.js` #1（月建子水/用神亥水） |
+| 2 | `ruleDay` 用神克日辰误判「日辰比和」且 `supports=true` | ✅ 已修：补「耗于日辰」分支且 `supports=false` | ruleDay；`test-rules.js` #2 + 交叉项（耗不得救月破→真破） |
+| 3 | 判定链未遍历其余动爻对用神的作用 | ✅ 已修：新增 `ruleMovingOthers`（含动爻变爻），并登记进 `aggregateTrend` 名单 | analyze.js；`test-rules.js` 第 14 组 |
+| 4 | `sendChat` 用 `slice(0, -1)` 切掉追问 | ✅ 已修：整段 `history` 送出（失败降级提示词同样含追问） | `public/app.js` sendChat；`test-shake.js` B 组 3 断言 |
+| 5 | `btnTimeMode` 切回现场后不重排盘 | ✅ 已修：恢复锁定时刻后 `if (records.length === 6) computePan()` | app.js；`test-shake.js` C 组 |
+| 6 | `ruleSanHe` 忽略变爻 | ✅ 已修：本卦动爻 + 变爻同建元素池，同一爻本变不双算 | analyze.js ruleSanHe；`test-rules.js` 第 15 组 |
+| 7 | `ruleFu` 飞伏同五行归入「飞伏无关」 | ✅ 已修：补「飞伏同气」（另含伏克飞/伏生飞） | analyze.js ruleFu；`test-rules.js` 第 16 组 |
+| 8 | `pickYongshen` 伏神取首现 | ✅ 已修：临世应 → 月令旺相者 → 前爻 | analyze.js pickYongshen；`test-rules.js` 第 16 组 |
+| 9 | `ruleYuePo` 真假月破条件简化 | ✅ 已按报告口径：`zhen` 仅在 `WEAK` 成立，旺相即假破（无需额外分支） | analyze.js ruleYuePo；`test-rules.js` 第 3 组 |
+| 10 | `records.js` 对 JSON 字符串 `slice` 产出非法 JSON | ✅ 已修：`jsonWithin` 按结构收缩，落库永远是合法 JSON | `functions/api/records.js`；`test-functions.mjs` |
+| 11 | `ruleDayHe` 动爻被日合一律判「合绊」 | ⚖️ 维持现状（口径分歧，见下） | — |
+| 12 | `ruleXunKong` 真空条件宽窄 | ⚖️ 维持现状（口径分歧，见下） | — |
+| 13 | `checkAccess` 口令字符串直比 | ✅ 已修：`safeEqual`（SHA-256 + 逐字节异或，常量时间，长度不进比较） | records.js；`test-functions.mjs` |
+| 14 | `customProviders` 静默吞错 | ✅ 已修：`console.warn` + `customProviderWarnings` 回传页面告警 | `functions/api/_lib.js`、`models.js`；`test-functions.mjs` |
+| 15 | `renderModelChips` 的 id/pv/label 未转义 | ✅ 已修：全量 `esc()`，上游另有模型名字符集白名单 | app.js + `_lib.js`；`test-shake.js` E 组 |
+| 16 | `loadModels` 失败静默 | ✅ 已修：`#modelWarn` 明示「当前为内置兜底清单」及后台配置告警 | app.js；`test-shake.js` |
+| 17 | `apiFetch` 的 `Object.assign` 整体覆盖 headers | ✅ 已修：`withHeaders` 浅合并，调用方 headers 不吞 Content-Type/口令头 | app.js |
+| 18 | `window.LY` 无回退 | ✅ 已修：加载守卫 + 可读提示并终止初始化 | app.js 顶部；`test-shake.js` D 组 |
+| 19 | `applyModels` 异步返回后无条件重建选择集 | ✅ 已修：合并 + localStorage 恢复，不静默丢弃已选模型 | app.js |
+| 20 | `wrangler.toml` 硬编码 `GEMINI_BASE_URL`（含账号 ID） | ✅ 已修：移出仓库，改 Pages secret（`wrangler pages secret put`） | wrangler.toml 注释 |
+
+### 已知口径分歧（**非** Bug，勿再重报）
+
+以下两项属流派门户之别，不是缺陷。若采纳另一种口径，需同步改 `aggregateTrend` 的 supports/harms 名单并补断言，并先经维护者确认：
+
+- **`ruleDayHe` 动爻逢日合**：本实现动爻一律判「合绊」（依《增删卜易》「动逢合而绊住」），静爻才分旺相「合起」/休囚「合绊」。另有流派主张旺相动爻亦可作「合起」。
+- **`ruleXunKong` 真空条件**：本实现依《卜筮正宗》「旬空逢月破、休囚无救者为真空」（`WEAK` = 休/囚/死）。野鹤另有季节口径——「春土夏金秋是木，三冬逢火是真空」，即仅「死」地成真空。收紧只需把条件改为 `grade === '死'`，但会改变大量存量卦的断语。
 
 ### 多模型 AI 断卦（functions/api/interpret.js）
 
