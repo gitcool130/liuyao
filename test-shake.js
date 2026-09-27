@@ -31,7 +31,8 @@ function eq(name, got, want) {
     const page = await browser.newPage();
     const errs = [];
     page.on('pageerror', e => errs.push(e.message));
-    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#btnRandom', { timeout: 15000 });
 
     console.log('A. 盲摇流程与揭晓');
     eq('初始硬币为三背', await page.$$eval('.coin', e => e.map(x => x.textContent)), ['背', '背', '背']);
@@ -78,9 +79,11 @@ function eq(name, got, want) {
       captured.push(JSON.parse(route.request().postData() || '{}'));
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '断语示例：用神旺相，事可成。' }) });
     });
-    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#btnRandom', { timeout: 15000 });
     console.log('B. 追问历史');
-    for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.click('#btnConfirm'); }
+    for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.waitForTimeout(60); await page.click('#btnConfirm'); await page.waitForTimeout(60); }
+    await page.waitForTimeout(200); // 六爻落定后再点 AI，避免状态机未收敛
     await page.click('#btnAI');
     await page.waitForTimeout(800);
     eq('首次断卦请求已发出', captured.length >= 1, true);
@@ -100,9 +103,11 @@ function eq(name, got, want) {
   // ---------- C. 时间一致性（#5 / #10） ----------
   {
     const page = await browser.newPage();
-    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#btnRandom', { timeout: 15000 });
     console.log('C. 时间锁与显示一致性');
-    for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.click('#btnConfirm'); }
+    for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.waitForTimeout(60); await page.click('#btnConfirm'); await page.waitForTimeout(60); }
+    await page.waitForTimeout(200); // 等 6 爻全部落定、首摇锁定时刻生效后再读取
     const meta1 = await page.$eval('.meta-line', e => e.innerText);
     const time1 = await page.$eval('#timeInfo', e => e.innerText);
     const m1 = meta1.match(/占时 (\d{4}-\d{2}-\d{2} \d{2}:\d{2})/);
@@ -153,7 +158,8 @@ function eq(name, got, want) {
         { id: 'x"><img src=x onerror=alert(1)>', pv: '<script>alert(2)</script>', configured: true }
       ], warnings: ['CUSTOM_PROVIDERS 不是合法 JSON：测试'] })
     }));
-    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.mchip', { state: 'attached', timeout: 15000 }); // 等模型芯片挂载（可能处于折叠态，故用 attached 而非 visible）
     await page.waitForTimeout(300);
     console.log('E. 模型芯片 XSS 转义与告警展示');
     eq('未产生注入的 img 元素', await page.$$eval('#modelChips img', e => e.length), 0);

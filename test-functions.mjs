@@ -61,7 +61,9 @@ console.warn = function () { warns.push(Array.prototype.slice.call(arguments).jo
 eq('非法 JSON → 空数组', customProviders({ CUSTOM_PROVIDERS: '{oops' }), []);
 eq('非法 JSON 有告警', warns.some(function (w) { return w.indexOf('不是合法 JSON') >= 0; }), true);
 eq('非数组 → 空数组', customProviders({ CUSTOM_PROVIDERS: '{"id":"kimi"}' }), []);
-eq('未配置 → 空数组且无告警', customProviders({}), []);
+const warnsBefore = warns.length;
+eq('未配置 → 空数组', customProviders({}), []);
+eq('未配置不产生告警', warns.length, warnsBefore);
 
 // ---------- #8 模型 id 字符集校验 ----------
 eq('合法 id', isSafeModelId('gemini-3.6-flash'), true);

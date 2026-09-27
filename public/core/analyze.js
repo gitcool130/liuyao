@@ -19,11 +19,11 @@
   const STRONG = ['旺', '相'];   // 旺相
   const WEAK = ['休', '囚', '死']; // 休囚
 
-  // ---------- 五行关系（五值完备，供各规则共用） ----------
-  // 以 myWx（我）为主体，返回对 otherWx（彼）的关系：
-  //   '比和'（同五行）｜'得生'（彼生我）｜'受克'（彼克我）｜'泄'（我生彼）｜'耗'（我克彼）
+  // 五行关系：以 myWx（我）为主体，返回「我」对 otherWx（彼）的状态（五值完备，供各规则共用）
+  //   '比和'（同五行）｜'得生'（彼生我）｜'受克'（彼克我）｜'泄'（我生彼，泄气）｜'耗'（我克彼，力耗）
   // 五行两两之间必居其一，故本函数对所有输入都有确定返回值——
   // 各规则禁止再用 else 兜底猜「非生非克即某关系」（同五行不同支会被吞掉）。
+  // ⚠️ 切勿与下面的 relationText 记混：relationText 的文案是「彼对我做了什么」的旧版命名，视角相反。
   function relation5(myWx, otherWx) {
     if (myWx === otherWx) return '比和';
     if (sheng(otherWx, myWx)) return '得生';
@@ -580,7 +580,10 @@
   LY.aggregateTrend = aggregateTrend;
   LY.analyze = analyze;
 
-  // 旧 API 兼容（语义同 relation5，仅输出名沿用旧版）
+  // 旧 API 兼容：语义同 relation5，仅输出名沿用旧版。
+  // ⚠️ 视角相反：relation5(self, other) 描述「self 对 other 的状态」，relationText 的文案则是
+  //    「other 使 self 受到什么待遇」，故 REL_TEXT['耗']='受制' 指的是「other 受制」而非「self 受制」。
+  //    例：relation5('木','土')='耗'（木耗气）｜relationText('木','土')='受制'（土受制）。
   const REL_TEXT = { '比和': '比和', '得生': '生我', '泄': '泄气', '受克': '克伤', '耗': '受制' };
   LY.relationText = function (selfWx, otherWx) {
     return REL_TEXT[relation5(selfWx, otherWx)] || '';

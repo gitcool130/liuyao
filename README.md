@@ -22,7 +22,7 @@
 - **断卦符号化（无评分制）**：废弃旧版 +2.5/-2 算术评分，改为规则判定链——每条规则独立函数、可单测，输出 `judgments[]`（tag/rule/text/basis 典据）+ `trend`（吉/凶/平/待审，规则汇聚表驱动）+ `yingqiClues`（应期线索，只出线索不下结论）
 - **暗动闭环**：静爻被日冲，先查月令旺衰（旺相=暗动，休囚=日破）——修复旧版「文字说了一套、代码没做」
 - **规则覆盖**：月建档（旺相休囚死）、真假月破、日辰生克拱扶、冲散/暗动/日破、合起合绊、静空/动空/真空（旬空+月破）、回头生克冲合、进神退神、三合局、相刑相害、飞伏生克、用神两现取舍、伏神引拔、伏神伏世下（不误报用神持世）
-- **质量保障**：`test-core.js` 64 项基础自检 + `test-rules.js` 102 项规则链单测 + `test-functions.mjs` 27 项 Functions 层 + `test-shake.js` 49 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（见下）；CI 另有「部署隔离断言」守住 `public/` 边界
+- **质量保障**：`test-core.js` 66 项基础自检 + `test-rules.js` 108 项规则链单测 + `test-functions.mjs` 28 项 Functions 层 + `test-shake.js` 49 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（见下）；CI 另有「部署隔离断言」守住 `public/` 边界
 
 ### 三库交叉差分（test-diff.mjs，devDependencies 不进生产）
 
@@ -56,6 +56,7 @@
 | M8 随机源 | 生产代码无 `Math.random` 用于爻值生成 | `app.js` secureCoin/cryptoToss |
 | M9 三库差分 | 4096 爻组合 + 历法时点 + 夜子时双流派 + 节气全量，三方比对零 BUG、零未裁决流派分歧 | `test-diff.mjs`（10 万+字段） |
 | M12 CI 门禁 | push/PR 触发：单测 + 差分 + 语法检查 + 脚本加载顺序，只验证不部署 | `.github/workflows/ci.yml`、`npm run test:all` |
+| M13 卦例回归（**待数据，尚未覆盖**） | 经典卦例 golden test ≥10 例：《增删卜易》《卜筮正宗》带完整装卦的卦例（原文时间、爻值、期望断语），比对 `analyze()` 输出的 rule 序列 | 待补入 `test-rules.js`；数据来源见上文「待办：经典卦例回归」 |
 
 > 暗动闭环（M3 核心）的验收方式是「翻转证明」：同一静爻、同一日辰，仅改月令旺衰即令结论在暗动/日破之间翻转——见 `test-rules.js` 第 2 组。
 
@@ -104,6 +105,30 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | 18 | `window.LY` 无回退 | ✅ 已修：加载守卫 + 可读提示并终止初始化 | app.js 顶部；`test-shake.js` D 组 |
 | 19 | `applyModels` 异步返回后无条件重建选择集 | ✅ 已修：合并 + localStorage 恢复，不静默丢弃已选模型 | app.js |
 | 20 | `wrangler.toml` 硬编码 `GEMINI_BASE_URL`（含账号 ID） | ✅ 已修：移出仓库，改 Pages secret（`wrangler pages secret put`） | wrangler.toml 注释 |
+
+### 测试质量台账（第三轮，15 项）
+
+第三轮审计针对**测试自身的有效性**（自我实现、恒真断言、死代码、计数漂移），与本轮代码改动同批落地：
+
+| # | 报告项 | 核实 | 处理 |
+|---|---|---|---|
+| 1 | `test-core.js` 第 5 项重算五虎遁、留 `mGan` 死变量，未调用 `fourPillars` | ✅ 成立 | 改为 `fourPillars(...).monthGZ === '丁酉'` 端到端断言（+1 项） |
+| 2 | 第 10 项 `eq('甲日六神起', C.BEASTS ? '' : '', '')` 恒真 | ✅ 成立 | 换为「盘面六神序列 === BEASTS 自 `beastStart(日干)` 起」交叉断言（+1 项） |
+| 3 | `test-diff.mjs` 的 `cmp()` 是死函数 | ✅ 成立 | 删除（实际比对逻辑内联在 `fields.forEach`） |
+| 4 | `test-functions.mjs`「无告警」只断言返回值 | ✅ 成立 | 补 `warns.length` 前后对照断言（+1 项） |
+| 5 | `test-rules.js`「无用神路径」实为重复测试 | ✅ 成立，但**建议的修法不可行** | 实测 64 卦 × 5 用神 = 320 组合**无一例**取不到用神（八宫首卦六亲必全 → 伏神恒存在），故改**构造**「去掉伏神」的盘验证该分支，并加 320 组合不可达断言（+6 项） |
+| 6 | `package.json` 声明 `>=18`，但 `playwright-core@1.63.0` 要求 `>=20` | ✅ 成立 | `engines` 提到 `>=20`（package.json + lock 根），CI 本就用 Node 22 |
+| 7 | UI 测试 B/C 组循环内无等待，时序脆弱 | ✅ 成立 | 对齐 A 组补 60ms 间隔 + 循环后 200ms 收敛等待 |
+| 8 | 测试计数三处不一致 | ⚠️ **部分成立** | 真实不一致在 **README 自身**（L25「102 项」vs 文件表「62 项」）；报告所指「test-rules.js 头部注释写 62」不存在，且实测运行时 **102 项**（静态调用点 102，`grep eq(` 数不出循环展开）。已把表内 62 改为 102 |
+| 9 | `test-core.js` 注释「惊恐节」笔误 | ✅ 成立（但只出现 1 次，报告称 2 次不确） | 改为「白露边界」（该段测的确实是白露） |
+| 10 | README「待办：经典卦例回归」未进 M 表 | ✅ 成立 | M 表补 `M13 卦例回归（待数据，尚未覆盖）` |
+| 11 | 源码扫描正则可能误伤字符串常量 | ✅ 成立（当前无 URL 故未爆） | 改为**先剥字符串再剥注释**，并加「剥离后仍含 `function`」守卫 |
+| 12 | `relation5` 与 `relationText` 视角相反且无说明 | ⚠️ **部分成立** | `relation5` 本有五值注释；补 `relationText` 的视角说明与 `REL_TEXT['耗']='受制'` 的反直觉示例，并在 `relation5` 处互相交叉引用 |
+| 13 | `diffJieqi` 迭代上界 15 是魔数 | ✅ 成立 | 提为 `JIE_MAX_ITER` 并注明「12 节 + 起点余量 3」 |
+| 14 | `compatibility_date = "2026-09-24"` 若非当天会被拒 | ❌ **不成立** | 该日期早于当前日期，合法；仅在注释里补「必须是已过去日期、勿改成当天」的提醒 |
+| 15 | UI 测试用 `networkidle` 等待，遇轮询/SSE 会超时 | ✅ 成立 | 改为 `domcontentloaded` + 显式 `waitForSelector`（E 组用 `state:'attached'`，芯片可能处于折叠态） |
+
+> 报告亮点一节（`diffNightZi` 双流派显式映射、`jsonWithin` 反向对照、`safeEqual` 常量时间、暗动「翻转证明」、`public/` 物理隔离）与实际实现一致，无需改动。
 
 ### 已知口径分歧（**非** Bug，勿再重报）
 
@@ -192,8 +217,8 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | 文件 | 说明 |
 |------|------|
 | `core.js` | Node 聚合入口（浏览器请按序加载 `public/core/` 五文件，见 `public/index.html`） |
-| `test-core.js` | 排盘引擎 64 项基础自检（历法锚点、节气边界、表外降级不中断、夜子时、纳甲六亲、卦序） |
-| `test-rules.js` | 断卦规则链 62 项单测（暗动闭环、进退神、三合、夜子时正法、伏神伏世下、两现取舍、交节边界等） |
+| `test-core.js` | 排盘引擎 66 项基础自检（历法锚点、节气边界、表外降级不中断、夜子时、纳甲六亲、卦序、六神起法） |
+| `test-rules.js` | 断卦规则链 108 项单测（暗动闭环、进退神、三合、夜子时正法、伏神伏世下、两现取舍、交节边界等） |
 | `test-diff.mjs` | 三库交叉差分（4096 组合 + 历法时点 + 夜子时双流派 + 节气全量，10 万+字段） |
 | `tools/gen-jieqi.js` | 节气表离线生成器（lunar-javascript → 差分压缩表） |
 | `functions/api/interpret.js` | 断卦接口（多供应商路由 + 流式 SSE 拼接） |
@@ -261,8 +286,8 @@ git status -sb                    # 若显示 ahead，先推送再审计
 ```bash
 npm install                       # 安装测试裁判库（devDependencies）
 npx wrangler pages dev public     # 本地起 Pages（部署根为 public/，需先在 wrangler.toml 绑定 D1）
-npm test                          # 快速环：基础自检 64 项 + 规则链单测 102 项（无需裁判库）
-npm run test:fn                   # Functions 层单测 27 项（jsonWithin 合法性/常量时间口令/模型名白名单）
+npm test                          # 快速环：基础自检 66 项 + 规则链单测 108 项（无需裁判库）
+npm run test:fn                   # Functions 层单测 28 项（jsonWithin 合法性/常量时间口令/模型名白名单）
 npm run test:ui                   # UI 冒烟 49 断言（Playwright + Edge 通道，需先起本地静态服务）
 npm run test:all                  # 完整环：上者 + 三库交叉差分（CI 即用此命令）
 npm run test:diff                 # 仅差分（差分本身时区无关，CI 仍固定 TZ=Asia/Shanghai）

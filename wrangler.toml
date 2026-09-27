@@ -1,4 +1,6 @@
 name = "liuyao"
+# 兼容日期必须是**已过去**的日期：填未来日期 Cloudflare 会直接拒绝部署。
+# 保持为「改动运行时行为的那天」，不要随手改成当天。
 compatibility_date = "2026-09-24"
 # 部署根仅为 public/（index.html + app.js + bgm.js + core/）。
 # 源码、配置、测试、文档一律留在仓库根，不在部署范围内——

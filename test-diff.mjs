@@ -38,12 +38,6 @@ const DATES = [
 ];
 const CAL_TOSSES = [1, 0, 9, 1, 0, 6]; // 固定一卦（含动静爻），历法维度与卦无关
 
-function cmp(label, mine, ref, refName, combo) {
-  if (mine === ref) return true;
-  // 双库皆不一致 → bug；单库不一致 → 流派差异候选
-  return { label, mine, ref, refName, combo };
-}
-
 function diffCalendar() {
   console.log('== 历法差分（' + DATES.length + ' 个时点 × 四柱/旬空/六神） ==');
   DATES.forEach(function (d) {
@@ -221,7 +215,10 @@ function diffJieqi() {
   for (let y = 1900; y <= 2100; y++) {
     let cursor = new Date(y - 1, 11, 15);
     const got = {};
-    for (let i = 0; i < 15; i++) {
+    // getNextJie 逐节推进：一年 12 节，故理论上界 12 次；
+    // 起点取上年 12-15，可能先撞上「大雪」等前一年尾部节 → 留 3 次余量，15 = 12 + 起点余量。
+    const JIE_MAX_ITER = 15;
+    for (let i = 0; i < JIE_MAX_ITER; i++) {
       const lunar = L.Lunar.fromDate(cursor);
       const jq = lunar.getNextJie();
       const s = jq.getSolar();

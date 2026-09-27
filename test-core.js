@@ -15,12 +15,11 @@ const yIdx = C.yearGanZhiIndex(2026, 9, 24);
 eq('2026 年柱', C.GAN[yIdx%10] + C.ZHI[yIdx%12], '丙午');
 // 4. 2026-09-24 月支：白露(9月约第8日)后 → 酉
 eq('2026-09 月支', C.ZHI[C.monthZhiIndex(2026, 9, 24)], '酉');
-// 5. 月干：丙午年五虎遁庚寅起，酉月=庚+7=丁 → 丁酉
-const mZhi = C.monthZhiIndex(2026, 9, 24);
-const mFromYin = (mZhi - 2 + 12) % 12;
-const mGan = (2 + mFromYin) % 10; // 丙午年→丙→寅月起庚? WUHU: 丙→6(庚)
-const mGan2 = (6 + mFromYin) % 10;
-eq('2026-09 月干(五虎遁)', C.GAN[mGan2], '丁');
+// 5. 月柱：丙午年五虎遁庚寅起，酉月 = 庚+7 = 丁 → 丁酉
+// 断言直接调 fourPillars；本测试原本在此重算一遍五虎遁（且留了未使用的 mGan 死变量），
+// 实现写错也照样通过——改为对真实实现的端到端断言。
+eq('2026-09-24 月柱(五虎遁)', C.fourPillars(new Date(2026, 8, 24, 9, 0)).monthGZ, '丁酉');
+eq('2026-09-24 月支', C.fourPillars(new Date(2026, 8, 24, 9, 0)).monthZhi, C.monthZhiIndex(2026, 9, 24));
 // 6. 八宫：泽火革 属坎宫四世
 const ge = C.hexName([1,0,1, 1,1,0]);
 eq('泽火革 卦名', ge, '泽火革');
@@ -40,10 +39,16 @@ eq('大有 宫', C.PALACE[[1,1,1,1,0,1].join('')].palace, '乾');
 eq('大有 游魂=火地晋', C.hexName([0,0,0, 1,0,1]), '火地晋');
 // 9. 64卦宫无重复无遗漏
 eq('八宫卦总数', Object.keys(C.PALACE).length, 64);
-// 10. 六神起法：甲日初爻青龙
-eq('甲日六神起', C.BEASTS ? '' : '', '');
+// 10. 六神起法：自日干起兽，初爻依次排布
+// 原为 `eq('甲日六神起', C.BEASTS ? '' : '', '')`——两分支同为 ''，恒真空断言，已换为真实交叉断言。
 const bs = C.beastStart(0); eq('甲日起兽', bs, 0);
 eq('癸日起兽', C.beastStart(9), 5);
+const panB = C.paipan([1, 1, 1, 1, 1, 1], new Date(2026, 8, 24, 9, 0));
+const bGan = C.GAN.indexOf(C.fourPillars(new Date(2026, 8, 24, 9, 0)).dayGZ[0]);
+eq('六神序列＝BEASTS 自 beastStart(日干) 起',
+  panB.lines.map(function (l) { return l.beast; }).join(','),
+  [0, 1, 2, 3, 4, 5].map(function (i) { return C.BEASTS[(C.beastStart(bGan) + i) % 6]; }).join(','));
+eq('六神序列长度完整', panB.lines.filter(function (l) { return C.BEASTS.indexOf(l.beast) >= 0; }).length, 6);
 // 11. 六亲：乾宫金，午火爻=官鬼
 eq('乾宫午火六亲', C.liuqin('金','火'), '官鬼');
 eq('乾宫戌土六亲', C.liuqin('金','土'), '父母');
@@ -79,7 +84,7 @@ eq('立春当日 年柱', afterLc.yearGZ, '丙午');
 // 同日内精确到分钟（03:59 vs 04:02）
 eq('立春前一分钟 年柱', C.fourPillars(new Date(2026, 1, 4, 4, 1)).yearGZ, '乙巳');
 eq('立春当刻 年柱', C.fourPillars(new Date(2026, 1, 4, 4, 2)).yearGZ, '丙午');
-// 惊恐节边界：2026 白露 09-07 22:41（月支申→酉）
+// 白露边界：2026 白露 09-07 22:41（月支申→酉）
 eq('白露前一日 月支', C.ZHI[C.monthZhiIndex(2026, 9, 6, 23, 0)], '申');
 eq('白露当日 月支', C.ZHI[C.monthZhiIndex(2026, 9, 7, 23, 0)], '酉');
 eq('白露前一分钟 月支', C.ZHI[C.monthZhiIndex(2026, 9, 7, 22, 40)], '申');

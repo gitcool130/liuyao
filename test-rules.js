@@ -122,9 +122,31 @@ const panFu = C.paipan([1, 0, 1, 1, 1, 0], new Date(2026, 8, 24, 9, 0)); // 泽�
 const resFu = C.analyze(panFu, '妻财');
 eq('用神不上卦取伏神', resFu.yongshen.source, '伏神');
 eq('伏神判定含飞神', resFu.judgments.some(function (j) { return j.tag === '伏神'; }), true);
-// 无用神路径：坎为水六亲全? 坎宫水：寅木子孙 辰土官鬼 午火妻财 申金父母 戌土官鬼 子水兄弟 → 全。找全齐则用两现
-const resNone = C.analyze(panFu, '妻财');
-eq('伏神卦 yongshen 有值', !!resNone.yongshen, true);
+// 无用神路径：真实排盘不可达——八宫首卦六亲必全，故伏神恒存在
+// （实测：64 卦 × 5 六亲 = 320 组合，primary/source 为空者 0 例），
+// 故此处构造「本卦无妻财、且去掉其伏神」的盘来验证该分支。
+const panNone = C.paipan([1, 0, 1, 1, 1, 0], new Date(2026, 8, 24, 9, 0)); // 泽火革（妻财伏于三爻）
+panNone.lines.forEach(function (l) { if (l.fu && l.fu.lq === '妻财') l.fu = null; });
+const yNone = C.pickYongshen(panNone, '妻财');
+eq('无伏无现 → primary 为 null', yNone.primary, null);
+eq('无伏无现 → source 为 null', yNone.source, null);
+const resNone = C.analyze(panNone, '妻财');
+eq('无用神 → yongshen 为 null', resNone.yongshen, null);
+eq('无用神 → trend 待审', resNone.trend, '待审');
+// 对照：同一卦保留伏神时必有用神（证上一步是构造而非卦本身无解）
+eq('保留伏神时有解（对照）', C.analyze(panFu, '妻财').yongshen.source, '伏神');
+// 真实排盘的六亲用神必可取得（八宫首卦六亲必全，故伏神恒存）
+const unreachable = (function () {
+  let bad = 0;
+  const targets = ['妻财', '官鬼', '父母', '子孙', '兄弟'];
+  for (let m = 0; m < 64; m++) {
+    const arr = []; for (let i = 0; i < 6; i++) arr.push((m >> i) & 1);
+    const p = C.paipan(arr, new Date(2026, 8, 24, 9, 0));
+    targets.forEach(function (t) { const y = C.pickYongshen(p, t); if (!y || !y.primary) bad++; });
+  }
+  return bad;
+})();
+eq('64 卦 × 5 用神全部取得到（无用神分支现实不可达）', unreachable, 0);
 
 // ---------- 9. 汇聚表 ----------
 const agg1 = C.aggregateTrend({ hasYongshen: true, grade: '旺', daySupports: true, zhenKong: true, zhenYuePo: false, judgments: [{ tag: '旬空', rule: '真空' }] });
@@ -136,11 +158,14 @@ eq('无用神→待审', agg3.trend, '待审');
 const agg4 = C.aggregateTrend({ hasYongshen: true, grade: '休', daySupports: false, zhenKong: false, zhenYuePo: false, judgments: [] });
 eq('无生无克→平', agg4.trend, '平');
 
-// ---------- 10. 源码级验收：analyze.js 代码中无 score 残留（剔除注释后扫描） ----------
+// ---------- 10. 源码级验收：analyze.js 代码中无 score 残留（剔除字符串与注释后扫描） ----------
+// 注意顺序：先剥字符串再剥注释。否则 'https://x' 里的 // 会被当行注释，把后半行代码一并吃掉。
 const src = fs.readFileSync(__dirname + '/public/core/analyze.js', 'utf8')
-  .replace(/\/\*[\s\S]*?\*\//g, '')   // 块注释
-  .replace(/\/\/.*$/gm, '');          // 行注释
+  .replace(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g, '""') // 字符串字面量
+  .replace(/\/\*[\s\S]*?\*\//g, '')               // 块注释
+  .replace(/\/\/.*$/gm, '');                      // 行注释
 eq('analyze.js 代码无 score 字样', (src.match(/\bscore\b/g) || []).length, 0);
+eq('剥离后仍保留代码主体（非空且含函数声明）', src.indexOf('function ') >= 0, true);
 
 // ---------- 11. 夜子时流派（M2） ----------
 const late = new Date(2026, 8, 24, 23, 30);
