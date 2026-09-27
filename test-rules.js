@@ -83,6 +83,27 @@ eq('变爻克本爻=回头克', hkk.judgments.some(function (j) { return j.rule 
 const bh = C.ruleDongBian(mkLine({ zhi: '子', zhiIdx: 0, wx: '水', moving: true, bian: { zhi: '亥', wx: '水', lq: '兄弟' } }), '妻财');
 eq('子化亥=非进神', bh.judgments.some(function (j) { return j.rule === '化进神'; }), false);
 eq('子化亥=退神', bh.judgments.some(function (j) { return j.rule === '化退神'; }), true);
+// 化耗：本爻克变爻（木克土）。旧版 ruleDongBian 独缺此分支——
+// 用神木化土一类动变整条无判定输出（analyze 失声），本轮补齐。
+const hh = C.ruleDongBian(mkLine({ zhi: '寅', zhiIdx: 2, wx: '木', moving: true, bian: { zhi: '未', wx: '土', lq: '妻财' } }), '兄弟');
+eq('本爻克变爻=化耗气', hh.judgments.some(function (j) { return j.rule === '化耗气'; }), true);
+eq('化耗 kind', hh.kind, '化耗');
+// 五值完备性：动变关系必居「比和／得生／受克／泄／耗」之一，任一组合都不得失声
+const FIVE_REL = [
+  ['丑', '土', '未', '土', '化比和'],   // 比和（土化土；丑未相冲故另附化回头冲，属正常）
+  ['寅', '木', '子', '水', '化回头生'], // 得生（水生木）
+  ['寅', '木', '申', '金', '化回头克'], // 受克（金克木）
+  ['寅', '木', '午', '火', '化泄气'],   // 泄（木生火）
+  ['寅', '木', '未', '土', '化耗气']    // 耗（木克土）★ 本轮新增
+];
+FIVE_REL.forEach(function (c) {
+  const r = C.ruleDongBian(mkLine({
+    zhi: c[0], zhiIdx: C.ZHI.indexOf(c[0]), wx: c[1], moving: true,
+    bian: { zhi: c[2], wx: c[3], lq: '妻财' }
+  }), '兄弟');
+  eq('动变五值完备（' + c[1] + '→' + c[3] + '）', r.judgments.some(function (j) { return j.rule === c[4]; }), true);
+  eq('动变五值必有 kind（' + c[1] + '→' + c[3] + '）', r.kind !== null, true);
+});
 
 // ---------- 6. 贲卦修复回归（差分发现的真实 bug） ----------
 eq('下离上艮=山火贲', C.hexName([1, 0, 1, 0, 0, 1]), '山火贲');
@@ -157,6 +178,20 @@ const agg3 = C.aggregateTrend({ hasYongshen: false, grade: '', daySupports: fals
 eq('无用神→待审', agg3.trend, '待审');
 const agg4 = C.aggregateTrend({ hasYongshen: true, grade: '休', daySupports: false, zhenKong: false, zhenYuePo: false, judgments: [] });
 eq('无生无克→平', agg4.trend, '平');
+// 失令（休囚）虽得日辰生扶，亦不与吉断——旧版「有生扶→吉」兜底分支把 STRONG 门废掉，
+// 使「用神泄气于月／克月建 ＋ 日辰生扶」被静默判吉，与《增删卜易》「月建为提纲」相左。
+const agg5 = C.aggregateTrend({ hasYongshen: true, grade: '休', daySupports: true, zhenKong: false, zhenYuePo: false,
+  judgments: [{ tag: '月建', rule: '泄气于月' }, { tag: '日辰', rule: '日辰生扶' }] });
+eq('休（泄气于月）得日生→平', agg5.trend, '平');
+eq('泄气于月不入 harms（非伤克）', agg5.harms.length, 0);
+eq('泄气于月不入 supports', agg5.supports.indexOf('月建:泄气于月'), -1);
+const agg6 = C.aggregateTrend({ hasYongshen: true, grade: '囚', daySupports: true, zhenKong: false, zhenYuePo: false,
+  judgments: [{ tag: '月建', rule: '克月建' }, { tag: '日辰', rule: '日辰生扶' }] });
+eq('囚（克月建）得日生→平', agg6.trend, '平');
+// 对照：旺相得生扶仍判吉（STRONG 门真正生效，而非被兜底分支架空）
+const agg7 = C.aggregateTrend({ hasYongshen: true, grade: '相', daySupports: true, zhenKong: false, zhenYuePo: false,
+  judgments: [{ tag: '月建', rule: '月建生扶' }, { tag: '日辰', rule: '日辰生扶' }] });
+eq('相（月建生扶）得日生→吉', agg7.trend, '吉');
 
 // ---------- 10. 源码级验收：analyze.js 代码中无 score 残留（剔除字符串与注释后扫描） ----------
 // 注意顺序：先剥字符串再剥注释。否则 'https://x' 里的 // 会被当行注释，把后半行代码一并吃掉。
@@ -196,6 +231,27 @@ C.nightZiMode = 'day'; // 还原默认
   // 对照：非伏神本爻持世 → 正常报持世
   const rs2 = C.ruleShi(pan, Object.assign({}, S, { isFu: false }), '父母');
   eq('本爻持世正常报持世', rs2.some(function (j) { return j.rule === '用神持世'; }), true);
+})();
+
+// ---------- 11·六、伏神 pos 传递（ruleShi「用神伏世下」的隐式依赖） ----------
+// ruleShi 用 L.pos === pan.shi 区分「用神持世」与「用神伏世下」，该判定隐式依赖
+// pickYongshen 取伏神时保留飞神位的 pos（makeFu 用 Object.assign 复制 fl，pos 随之带出）。
+// 若日后有人改 makeFu 丢掉 pos，此处会静默误报「用神持世」——故直接钉住这一传递。
+(function () {
+  let fuCases = 0, posBad = 0;
+  for (let m = 0; m < 64; m++) {
+    const arr = []; for (let i = 0; i < 6; i++) arr.push((m >> i) & 1);
+    const p = C.paipan(arr, new Date(2026, 8, 24, 10, 0));
+    ['妻财', '官鬼', '父母', '子孙', '兄弟'].forEach(function (t) {
+      const y = C.pickYongshen(p, t);
+      if (!y || y.source !== '伏神') return;
+      fuCases++;
+      const host = p.lines[y.primary.pos]; // pos 应为飞神位
+      if (!host || !host.fu || host.fu.lq !== t) posBad++;
+    });
+  }
+  eq('伏神用例样本数 > 0', fuCases > 0, true);
+  eq('伏神 pos 恒承自飞神位（' + fuCases + ' 例）', posBad, 0);
 })();
 
 // ---------- 11·六、用神两现取舍（发动者 → 临世应者 → 旺者 → 初现） ----------

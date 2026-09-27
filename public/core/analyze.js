@@ -242,6 +242,12 @@
   }
 
   // ---------- 规则 7：旬空（静空/动空/真空） ----------
+  // 真空口径（本项目取宽口径，README「已知口径分歧」已登记）：
+  //   (a) 旬空 + 月破（zhenYuePo）→ 真空；
+  //   (b) 休囚（休/囚/死）且无日辰生扶 → 真空。
+  // 野鹤老人季节口径更窄（「春土夏金秋是木，三冬逢火是真空」），只承认「死」为真空；
+  // 本实现按 WEAK 全集判，属流派选择而非缺陷——外部审计勿再按野鹤口径重报。
+  // 注意 daySupports 对「用神克日辰（耗于日辰）」置 false，故用神克日不会误当拱扶。
   function ruleXunKong(L, pil, zhenYuePo, daySupports, grade, target) {
     const js = [];
     if (pil.kong.indexOf(L.zhiIdx) < 0) return { isKong: false, zhen: false, judgments: js };
@@ -284,11 +290,21 @@
         kind = '退神';
         js.push({ tag: '动变', rule: '化退神', text: '　' + L.zhi + '化' + b.zhi + '为退神，同气渐退，其势日衰。', basis: '《增删卜易》：卯化寅、午化巳之类为退神' });
       } else {
+        kind = '比和'; // 与本函数其余分支一致：动变五值（比和/回生/回克/泄/耗）必有 kind
         js.push({ tag: '动变', rule: '化比和', text: '　化比和，其气不变。', basis: '' });
       }
     } else if (sheng(L.wx, b.wx)) {
       kind = '化泄';
       js.push({ tag: '动变', rule: '化泄气', text: '　化泄气，力量外散。', basis: '动而生变爻，泄气之象' });
+    } else if (ke(L.wx, b.wx)) {
+      // 五行关系五值完备（比和/得生/受克/泄/耗），此处补齐最后一值「耗」。
+      // 旧版缺此分支：用神木化土（木克土）一类动变整条无判定输出，analyze 对之失声。
+      kind = '化耗';
+      js.push({
+        tag: '动变', rule: '化耗气',
+        text: '　化耗气，克制变爻而自损其力。',
+        basis: '用神克变爻为耗气，力有所损；非「四大凶」（月克/日克/动爻克/化回头克），故与化泄同等不计入 harms'
+      });
     }
     if (chong(L.zhiIdx, ZHI.indexOf(b.zhi))) {
       js.push({ tag: '动变', rule: '化回头冲', text: '　变爻' + b.zhi + '回头冲本爻' + L.zhi + '，反复之象。', basis: '' });
@@ -309,7 +325,10 @@
     if (!pan || !pan.lines) return js;
     pan.lines.forEach(function (M) {
       if (!M.moving) return;
-      if (M.pos === L.pos) return; // 用神自身动变由 ruleDongBian 判；用神为伏神时 pos 为飞神位，飞伏关系由 ruleFu 判
+      if (M.pos === L.pos) return; // 用神自身动变由 ruleDongBian 判。
+      // 用神为伏神时 L.pos 承自飞神（makeFu 用 Object.assign 保留 pos），故 M.pos === L.pos
+      // 即「飞神自身发动」——此路径被跳过：飞伏生克（含飞神及其变爻对伏神的作用）统一由
+      // ruleFu 处理，此处不重复判，也不单独检查飞神化出之变爻。属可接受边界，非缺陷。
       const rel = relation5(L.wx, M.wx);
       const who = LINE_NAMES[M.pos] + M.lq + M.zhi + M.wx;
       if (rel === '得生') {
@@ -470,12 +489,14 @@
       trend = '凶';
     } else if (harms.length > 0 && supports.length === 0 && WEAK.indexOf(ctx.grade) >= 0) {
       trend = '凶';
-    } else if (harms.length === 0 && supports.length > 0 && STRONG.indexOf(ctx.grade) >= 0) {
-      trend = '吉';
     } else if (harms.length === 0 && supports.length === 0) {
       trend = '平';
-    } else if (supports.length > 0 && harms.length === 0) {
-      trend = '吉';  // 有生扶而无伤克
+    } else if (harms.length === 0 && supports.length > 0) {
+      // 有生扶而无伤克：旺相（得月令）者直判吉；休囚失令者虽得日辰生扶，亦不与吉断。
+      // 旧版此处原为两条等价分支（「STRONG→吉」+「有生扶→吉」），后者把前者的 STRONG 门
+      // 完全废掉——「月建泄气/克月建（休囚）＋日辰生扶」被静默判吉，与《增删卜易》
+      // 「月建为提纲，失令者纵得日生亦难成」相左。二者合并后 STRONG 门真正生效。
+      trend = STRONG.indexOf(ctx.grade) >= 0 ? '吉' : '平';
     } else {
       trend = '平';  // 生克互见，成败在应期细审
     }

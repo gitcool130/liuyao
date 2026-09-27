@@ -71,7 +71,7 @@
   // year 年 month 月（公历）之「节」的交节时刻 → { y, m, day, hour, minute }
   // 月节对应：1月小寒 2月立春 … 12月大雪
   function termMoment(year, month) {
-    if (year < YEAR0 || year > 2100) return null; // 表覆盖 1900-2100
+    if (year < YEAR0 || year > YEAR_END) return null; // 表覆盖 YEAR0–YEAR_END（勿硬编码上界，改范围时只改一处）
     const idx = (year - YEAR0) * 12 + (month - 1);
     const abs = TERM_ABS[idx];
     if (!(abs >= 0)) { // 边界断言：差分链损坏（首项为负或表被篡改）时显式失败，不静默给错值

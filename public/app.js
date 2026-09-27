@@ -77,7 +77,7 @@
       '<div class="muted">公历 ' + fmtDT(selectedDate) +
       (timeMode === 'live' ? '（现场摇卦 · ' + (timeLocked ? '已锁定于首摇' : '开摇即锁定') + '）' : '（补录模式 · 时间可改）') + '</div>' +
       '<div class="gz">' + pil.yearGZ + '年 · ' + pil.monthGZ + '月 · <b>' + pil.dayGZ + '日</b> · ' + pil.hourGZ + '时</div>' +
-      '<div class="muted">月建 <b class="kong">' + C.ZHI[pil.monthZhi] + '</b> ｜ 日辰 <b class="kong">' + C.ZHI[pil.dayZhi] + '</b> ｜ 旬空 <b class="kong">' + pil.kongStr + '</b></div>' +
+      '<div class="muted">月建 <b class="gz-hi">' + C.ZHI[pil.monthZhi] + '</b> ｜ 日辰 <b class="gz-hi">' + C.ZHI[pil.dayZhi] + '</b> ｜ 旬空 <b class="kong">' + pil.kongStr + '</b></div>' +
       (pil.outOfTable
         ? '<div class="warn">⚠ 历法精度降级：' + selectedDate.getFullYear() + ' 年超出节气时刻表覆盖范围（1900–2100），月柱与年柱按典型交节日近似（±2 日以内）；日柱、时柱不受影响。古籍卦例回归请注意此项。</div>'
         : '');
@@ -596,6 +596,8 @@
   function renderFailBox(el, model, history, err) {
     const cfg = MODELS.filter(function (x) { return x.id === model; })[0] || {};
     const prompt = buildManualPrompt(history);
+    // err.detail 的截断顺序：先 slice(0,300) 再 esc()，不可颠倒——
+    // 先转义后截断会在 HTML 实体（&amp; / &lt; 等）中间切断，产出半个实体字符串。
     el.innerHTML =
       '<div class="ai-block warn">⚠ ' + esc(err.kind === 'html' ? err.message : '本次未获得断语：' + err.message) +
       (err.detail ? '<div class="muted" style="margin-top:4px;font-size:12px;word-break:break-all">' + esc(String(err.detail).slice(0, 300)) + '</div>' : '') +

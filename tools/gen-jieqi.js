@@ -36,7 +36,6 @@ const absolute = []; // 全部交节时刻：距 1900-01-01 00:00 的分钟数�
 
 for (let y = YEAR0; y <= YEAR1; y++) {
   // 从上一年 12 月中旬起扫，确保拿到本年 1 月的小寒
-  let d = new Date(y, 0, 1);
   const got = []; // {name, y, m, d, h, min, absMin}
   let cursor = new Date(y - 1, 11, 15);
   for (let i = 0; i < 15; i++) {
