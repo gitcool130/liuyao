@@ -13,12 +13,37 @@ export function json(data, status) {
   });
 }
 
+// 口令比较：先 SHA-256 再逐字节异或，长度不参与比较、耗时与口令内容无关
+// （直接字符串 === 比较会因短路提前返回而泄露前缀信息）
+// 放在共享层而非各端点各自实现：records.js 与 interpret.js 必须走同一实现，
+// 否则会出现「一处已改常量时间、另一处仍是明文直比」的口径漂移。
+export async function safeEqual(input, expected) {
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(String(input == null ? '' : input))),
+    crypto.subtle.digest('SHA-256', enc.encode(String(expected == null ? '' : expected)))
+  ]);
+  const va = new Uint8Array(a), vb = new Uint8Array(b);
+  let diff = 0;
+  for (let i = 0; i < va.length; i++) diff |= va[i] ^ vb[i];
+  return diff === 0;
+}
+
 // 模型 id 字符集白名单：模型名会进入前端 DOM（芯片 data-m / 文本）与上游请求体，
 // 只允许字母数字与 . _ - / : ，从源头杜绝引号/尖括号等注入字符
 const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$/;
 
 export function isSafeModelId(id) {
   return typeof id === 'string' && MODEL_ID_RE.test(id);
+}
+
+// 供应商显示名白名单：label 会进入前端 DOM（models.js 渲染、app.js 芯片文本与 pv 属性位）。
+// id 有白名单而 label 此前完全不校验 → 后台把 label 配成含引号的串即可逃逸属性值。
+// 与 MODEL_ID_RE 同思路收敛：允许中英文、数字与常见分隔符，拒绝引号/尖括号/反引号/控制字符。
+const LABEL_RE = /^[A-Za-z0-9\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff ._:·()（）\/-]{0,31}$/;
+
+export function isSafeProviderLabel(label) {
+  return typeof label === 'string' && LABEL_RE.test(label);
 }
 
 // GPT 模型清单：GPT_MODELS（别名 OPENAI_MODELS），逗号分隔 → 去空白数组
@@ -63,7 +88,14 @@ export function customProviders(env) {
     const dropped = p.models.length - p.models.filter(isSafeModelId).length;
     if (dropped > 0) warns.push(p.id + ' 有 ' + dropped + ' 个模型名含非法字符，已忽略');
     if (!models.length) { warns.push(p.id + ' 的模型名全部非法，已忽略'); return; }
-    out.push(Object.assign({}, p, { models: models }));
+    const entry = Object.assign({}, p, { models: models });
+    // label 非法时只删 label（models.js 的 `p.label || p.id` 会自然回退为 id），
+    // 不整条丢弃供应商——否则后台一个引号就会让该供应商从清单里整体消失
+    if (entry.label !== undefined && !isSafeProviderLabel(entry.label)) {
+      warns.push(p.id + ' 的 label 非法（含引号/尖括号或超长），已回退为 id 显示');
+      delete entry.label;
+    }
+    out.push(entry);
   });
   if (warns.length) console.warn('[liuyao] CUSTOM_PROVIDERS 部分条目被忽略：' + warns.join('；'));
   return out;

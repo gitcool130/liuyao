@@ -8,6 +8,12 @@
  * 绑定：Pages 项目 → Settings → Functions → D1 database bindings → 变量名 LIUYAO_DB
  */
 
+import { safeEqual } from './_lib.js';
+
+// 保持既有 import 路径可用（test-functions.mjs 直接从此文件 import safeEqual）；
+// 实现已上移到 _lib.js，与 interpret.js 共用同一份常量时间比较
+export { safeEqual };
+
 function json(data, status) {
   return new Response(JSON.stringify(data), {
     status: status || 200,
@@ -15,19 +21,10 @@ function json(data, status) {
   });
 }
 
-// 口令比较：先 SHA-256 再逐字节异或，长度不参与比较、耗时与口令内容无关
-// （直接字符串 === 比较会因短路提前返回而泄露前缀信息）
-export async function safeEqual(input, expected) {
-  const enc = new TextEncoder();
-  const [a, b] = await Promise.all([
-    crypto.subtle.digest('SHA-256', enc.encode(String(input == null ? '' : input))),
-    crypto.subtle.digest('SHA-256', enc.encode(String(expected == null ? '' : expected)))
-  ]);
-  const va = new Uint8Array(a), vb = new Uint8Array(b);
-  let diff = 0;
-  for (let i = 0; i < va.length; i++) diff |= va[i] ^ vb[i];
-  return diff === 0;
-}
+// 卦例 id 白名单。写路径（客户端可自带 id）与读路径（库里可能存有历史脏 id）都必须过这一关：
+// 早期版本（e8e86e1 ~ f5a0ca4，2026-09-24 ~ 09-26）写入时 `const id = b.id || crypto.randomUUID()`
+// 无任何格式校验，那些行至今可能仍在线上 D1 中，且会被前端拼进 data-id 属性。
+const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 async function checkAccess(request, env) {
   if (!env.ACCESS_CODE) return null;
@@ -135,13 +132,17 @@ export async function onRequestGet(context) {
   const url = new URL(request.url);
   const id = url.searchParams.get('id');
   if (id) {
+    // 非法 id 直接拒绝，不下探数据库（历史脏 id 由列表过滤 + 此处双保险拦下）
+    if (!ID_RE.test(id)) return json({ error: 'BAD_ID', message: '非法 id' }, 400);
     const row = await env.LIUYAO_DB.prepare('SELECT * FROM casts WHERE id = ?').bind(id).first();
     return row ? json({ record: row }) : json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
   }
   const { results } = await env.LIUYAO_DB.prepare(
     'SELECT id, created_at, datetime, question, hex, pillars FROM casts ORDER BY created_at DESC LIMIT 100'
   ).all();
-  return json({ records: results || [] });
+  // 读路径同样不能信库里的数据：历史无校验写入的非法 id 行一律不下发前端
+  // （这些 id 会被拼进 data-id / data-del 属性，是存储型 XSS 的入口）
+  return json({ records: (results || []).filter(function (r) { return ID_RE.test(r.id); }) });
 }
 
 export async function onRequestDelete(context) {
@@ -165,9 +166,8 @@ export async function onRequestPost(context) {
   try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
   if (!b.panText) return json({ error: 'NO_PAN', message: '缺少排盘文本' }, 400);
 
-  // id 策略：客户端可携带 id（复用/更新场景），但必须通过格式校验；
+  // id 策略：客户端可携带 id（复用/更新场景），但必须通过格式校验（ID_RE 见文件头）；
   // 缺失或非法一律服务端生成 UUID，杜绝空主键、超长主键与伪造覆盖
-  const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
   const id = (typeof b.id === 'string' && ID_RE.test(b.id)) ? b.id : crypto.randomUUID();
   await env.LIUYAO_DB.prepare(
     'INSERT INTO casts (id, created_at, datetime, pillars, question, hex, tosses, pan_text, messages) ' +

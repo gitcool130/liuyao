@@ -480,7 +480,7 @@
   function renderModelChips() {
     // 模型 id/label/pv/tip 来自后台环境变量（CUSTOM_PROVIDERS / GPT_MODELS），一律转义后入 DOM
     $('#modelChips').innerHTML = MODELS.map(function (m) {
-      return '<button class="mchip' + (selModels.indexOf(m.id) >= 0 ? ' on' : '') + '" data-m="' + esc(m.id) + '" title="' + esc(m.tip || '') + '">' +
+      return '<button class="mchip' + (selModels.indexOf(m.id) >= 0 ? ' on' : '') + '" data-m="' + escAttr(m.id) + '" title="' + escAttr(m.tip || '') + '">' +
         '<span class="pv">' + esc(m.pv) + '</span>' + esc(m.label) + (m.tip ? '<span class="pv"> · ' + esc(m.tip) + '</span>' : '') + '</button>';
     }).join('');
     Array.prototype.forEach.call(document.querySelectorAll('.mchip'), function (btn) {
@@ -535,10 +535,17 @@
     return res;
   }
 
+  // 文本位转义：基于 textContent → innerHTML，转义 & < >，但**不转义引号**，
+  // 因此只能用于文本节点位置；放进属性值会被引号逃逸（见 escAttr）。
   function esc(s) {
     const d = document.createElement('div');
     d.textContent = String(s);
     return d.innerHTML;
+  }
+  // 属性值专用转义：esc() 之上再补 双引号/单引号，
+  // 否则 data-id="x" onmouseover="..." 这类引号逃逸可注入属性与事件处理器。
+  function escAttr(s) {
+    return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
   function mdLite(s) {
     return esc(s)
@@ -768,9 +775,9 @@
       if (!res.ok) throw new Error(data.message || '读取失败');
       if (!data.records.length) { $('#libList').innerHTML = '<div class="muted">尚无卦例。</div>'; return; }
       $('#libList').innerHTML = data.records.map(function (r) {
-        return '<div class="lib-item" data-id="' + r.id + '"><span>' + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) + '</span>' +
+        return '<div class="lib-item" data-id="' + escAttr(r.id) + '"><span>' + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) + '</span>' +
           '<span class="lib-side"><span class="muted">' + esc((r.created_at || '').slice(0, 10)) + '</span>' +
-          '<button class="lib-del" data-del="' + r.id + '" title="删除此卦例">×</button></span></div>';
+          '<button class="lib-del" data-del="' + escAttr(r.id) + '" title="删除此卦例">×</button></span></div>';
       }).join('');
       Array.prototype.forEach.call(document.querySelectorAll('.lib-item'), function (el) {
         el.onclick = function () { loadCast(el.dataset.id); };
@@ -795,31 +802,46 @@
     }
   };
 
+  // 卦例详情区的失败呈现：写入可见文本并提示。
+  // loadCast 的调用点（el.onclick）是同步调用 async 函数且未接 .catch，
+  // 故异常必须在本函数内部收口，否则 Promise rejection 无处落地。
+  function libDetailError(msg) {
+    const det = $('#libDetail');
+    if (det) det.innerHTML = '<div class="muted">' + esc(msg) + '</div>';
+    alert(msg);
+  }
+
   async function loadCast(id) {
-    const res = await apiFetch('/api/records?id=' + encodeURIComponent(id), {});
-    const data = await res.json();
-    if (!res.ok) { alert('读取失败：' + (data.message || '')); return; }
-    const r = data.record;
-    let msgs = {}; try { msgs = JSON.parse(r.messages || '{}'); } catch (e) {}
-    // 兼容旧格式（单模型数组）
-    if (Array.isArray(msgs)) msgs = msgs.length ? { '（旧版记录）': msgs } : {};
-    let colHTML = Object.keys(msgs).map(function (m) {
-      const cfg = MODELS.filter(function (x) { return x.id === m; })[0] || { label: m, pv: '' };
-      // 兼容两种结构：{模型: [消息...]}（旧）与 {模型: {history: [消息...]}}（现行 aiStates 格式）
-      const arr = Array.isArray(msgs[m]) ? msgs[m] : ((msgs[m] && msgs[m].history) || []);
-      return '<div class="ai-col">' +
-        '<div class="ai-col-head">' + esc(cfg.label || m) + '<span class="pv-tag">' + esc(cfg.pv || '') + '</span></div>' +
-        arr.map(function (msg) {
-          return '<div class="msg ' + (msg.role === 'user' ? 'user' : 'ai') + '"><b>' +
-            (msg.role === 'user' ? '问' : '断') + '：</b>' + mdLite(msg.content) + '</div>';
-        }).join('') + '</div>';
-    }).join('');
-    if (!colHTML) colHTML = '<div class="muted">该卦例无对话记录。</div>';
-    $('#libDetail').innerHTML = '<div class="ai-block"><b>' + esc(r.hex) + '</b>　<span class="muted">' +
-      esc(r.datetime || '') + '　' + esc(r.pillars || '') + '</span>' +
-      '<pre class="pan-text">' + esc(r.pan_text || '') + '</pre>' +
-      '<div class="ai-cols">' + colHTML + '</div></div>';
-    $('#libDetail').scrollIntoView({ behavior: 'smooth' });
+    try {
+      const res = await apiFetch('/api/records?id=' + encodeURIComponent(id), {});
+      const data = await res.json();
+      if (!res.ok) { libDetailError('读取失败：' + (data.message || '')); return; }
+      const r = data.record;
+      if (!r) { libDetailError('读取失败：卦例不存在'); return; }
+      let msgs = {}; try { msgs = JSON.parse(r.messages || '{}'); } catch (e) {}
+      // 兼容旧格式（单模型数组）
+      if (Array.isArray(msgs)) msgs = msgs.length ? { '（旧版记录）': msgs } : {};
+      let colHTML = Object.keys(msgs).map(function (m) {
+        const cfg = MODELS.filter(function (x) { return x.id === m; })[0] || { label: m, pv: '' };
+        // 兼容两种结构：{模型: [消息...]}（旧）与 {模型: {history: [消息...]}}（现行 aiStates 格式）
+        const arr = Array.isArray(msgs[m]) ? msgs[m] : ((msgs[m] && msgs[m].history) || []);
+        return '<div class="ai-col">' +
+          '<div class="ai-col-head">' + esc(cfg.label || m) + '<span class="pv-tag">' + esc(cfg.pv || '') + '</span></div>' +
+          arr.map(function (msg) {
+            return '<div class="msg ' + (msg.role === 'user' ? 'user' : 'ai') + '"><b>' +
+              (msg.role === 'user' ? '问' : '断') + '：</b>' + mdLite(msg.content) + '</div>';
+          }).join('') + '</div>';
+      }).join('');
+      if (!colHTML) colHTML = '<div class="muted">该卦例无对话记录。</div>';
+      $('#libDetail').innerHTML = '<div class="ai-block"><b>' + esc(r.hex) + '</b>　<span class="muted">' +
+        esc(r.datetime || '') + '　' + esc(r.pillars || '') + '</span>' +
+        '<pre class="pan-text">' + esc(r.pan_text || '') + '</pre>' +
+        '<div class="ai-cols">' + colHTML + '</div></div>';
+      $('#libDetail').scrollIntoView({ behavior: 'smooth' });
+    } catch (e) {
+      // 部署传播期 / 网络抖动 / 后端 500 返回 HTML → res.json() 在此抛出
+      libDetailError('读取失败：' + ((e && e.message) || '接口不可用，请稍后重试'));
+    }
   }
 
   // ---------- init ----------

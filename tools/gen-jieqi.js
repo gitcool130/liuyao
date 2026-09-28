@@ -65,7 +65,10 @@ for (let y = YEAR0; y <= YEAR1; y++) {
 // 差分链（相邻交节分钟差）
 const deltas = absolute.map(function (v, i) { return i === 0 ? v : v - absolute[i - 1]; });
 const maxAbs = absolute[absolute.length - 1];
-if (maxAbs >= 4294967296) throw new Error('偏移超 Uint32');
+// 防御性上界检查：JIEQI_DELTAS 是普通数字数组，运行时并无 Uint32 约束
+// （前缀和由 core/calendar.js 以 Number 计算），此处仅在生成期排除异常量级。
+const UINT32_MAX = 4294967296;
+if (maxAbs >= UINT32_MAX) throw new Error('绝对偏移超出 ' + UINT32_MAX + ' 分钟量级，疑似公历转换异常');
 
 // 输出 core/data-jieqi.js
 const lines = [];
@@ -86,7 +89,7 @@ const out = [
   '  root.LY = root.LY || {};',
   '  LY.JIEQI_ANCHOR_JDN = ' + ANCHOR_JDN + ';',
   '  LY.JIEQI_DELTAS = [',
-  ...lines.map(function (l) { return '    ' + l + (lines[lines.length - 1] === l ? '' : ','); }),
+  ...lines.map(function (l, i) { return '    ' + l + (i === lines.length - 1 ? '' : ','); }),
   '  ];',
   '})(typeof window !== \'undefined\' ? window : globalThis);',
   ''

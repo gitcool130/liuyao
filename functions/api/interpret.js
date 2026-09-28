@@ -15,10 +15,32 @@
  *   GPT_MODELS        GPT 可用模型清单（逗号分隔），默认 gpt-6-luna,gpt-6-sol,gpt-6-astra；别名 OPENAI_MODELS
  *   兼容回退：LLM_API_KEY / LLM_BASE_URL（旧单模型配置）
  *   ACCESS_CODE       选填，设置后页面需输入访问口令
+ *   RATE_LIMIT_PER_MIN 选填，按访客 IP 的每分钟请求上限（未设置则不限流）；
+ *                      仅本 isolate 内计数，属「降低」而非「根治」，
+ *                      生产务必同时配置 ACCESS_CODE 并在 CF 后台对 /api/interpret 加 Rate Limiting 规则
  */
 
-// 供应商解析共享层（白名单 / 自定义供应商 / json 响应），与 models.js 同一口径
-import { customProviders, customKeyEnv, modelWhitelist, json } from './_lib.js';
+// 供应商解析共享层（白名单 / 自定义供应商 / json 响应 / 常量时间口令比较），与 models.js 同一口径
+import { customProviders, customKeyEnv, modelWhitelist, json, safeEqual } from './_lib.js';
+
+// 入模规模上限：单请求最多 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符。
+// 旧值 8,000 + 20×4,000 ≈ 88,000，在未设 ACCESS_CODE 时是可直接放大的费用敞口。
+const LIMITS = { panText: 4000, historyTurns: 8, perMessage: 2000 };
+
+// 按 IP 的滑动窗口限流（默认关闭，仅在配置了 RATE_LIMIT_PER_MIN 时生效）。
+// 模块级 Map 在 CF Workers 中随 isolate 存活，跨 isolate 不共享，故只是成本抑制的兜底。
+const RL_HITS = new Map();
+function isRateLimited(request, env) {
+  const limit = parseInt(env.RATE_LIMIT_PER_MIN || '0', 10);
+  if (!limit || limit <= 0) return false;
+  const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
+  const now = Date.now();
+  if (RL_HITS.size > 5000) RL_HITS.clear();          // 粗暴上限，防内存无界增长
+  const hits = (RL_HITS.get(ip) || []).filter(function (t) { return now - t < 60000; });
+  hits.push(now);
+  RL_HITS.set(ip, hits);
+  return hits.length > limit;
+}
 
 const SYSTEM_PROMPT = [
   '你是一位精通京房纳甲六爻的卦师，治学严谨，断卦有据。',
@@ -81,23 +103,32 @@ function inferProvider(model, wl) {
 export async function onRequestPost(context) {
   const { request, env } = context;
 
+  if (isRateLimited(request, env)) {
+    return json({ error: 'RATE_LIMITED', message: '请求过于频繁，请稍后重试' }, 429);
+  }
+
   if (env.ACCESS_CODE) {
     const code = request.headers.get('X-Access-Code') || '';
-    if (code !== env.ACCESS_CODE) return json({ error: 'ACCESS_REQUIRED', message: '需要访问口令' }, 401);
+    // 与 records.js 共用同一常量时间实现（旧版此处是明文 !==，属同类修复未收口）
+    if (!(await safeEqual(code, env.ACCESS_CODE))) return json({ error: 'ACCESS_REQUIRED', message: '需要访问口令' }, 401);
   }
 
   let body;
   try { body = await request.json(); } catch (e) { return json({ error: 'BAD_JSON', message: '请求体解析失败' }, 400); }
 
-  const panText = (body.panText || '').toString().slice(0, 8000);
+  const panText = (body.panText || '').toString().slice(0, LIMITS.panText);
   if (!panText) return json({ error: 'NO_PAN', message: '缺少排盘文本' }, 400);
-  const history = Array.isArray(body.messages) ? body.messages.slice(-20) : [];
+  const history = Array.isArray(body.messages) ? body.messages.slice(-LIMITS.historyTurns) : [];
 
   const model = (body.model || '').toString();
   const wl = modelWhitelist(env);
   let provider = (body.provider || '').toString();
   if (!provider && model) provider = inferProvider(model, wl);
-  if (!wl[provider]) return json({ error: 'BAD_PROVIDER', message: '未知供应商：' + provider }, 400);
+  // 必须用 owns 判定：wl 是普通对象字面量，`wl['constructor']` / `wl['__proto__']` 等
+  // 会命中 Object.prototype 上的继承属性（truthy），使下一行 .indexOf 抛 TypeError → 边缘 500。
+  if (!Object.prototype.hasOwnProperty.call(wl, provider)) {
+    return json({ error: 'BAD_PROVIDER', message: '未知供应商：' + provider }, 400);
+  }
   if (wl[provider].indexOf(model) < 0) {
     return json({ error: 'BAD_MODEL', message: '供应商 ' + provider + ' 不支持模型：' + model + '（可选：' + wl[provider].join(' / ') + '）' }, 400);
   }
@@ -114,7 +145,7 @@ export async function onRequestPost(context) {
   const messages = [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: panText }];
   history.forEach(function (m) {
     if (m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content) {
-      messages.push({ role: m.role, content: m.content.slice(0, 4000) });
+      messages.push({ role: m.role, content: m.content.slice(0, LIMITS.perMessage) });
     }
   });
 

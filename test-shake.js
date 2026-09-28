@@ -23,8 +23,24 @@ function eq(name, got, want) {
   else { fail++; console.log('  ✗ ' + name + ' got=' + JSON.stringify(got) + ' want=' + JSON.stringify(want)); }
 }
 
+// 浏览器通道回退：本地 Windows 直接用系统 Edge（免下载浏览器）；
+// CI（ubuntu-latest）通常无 msedge，则依次尝试 chrome，最后回落到 Playwright 自带 chromium
+// （CI 步骤里已 `npx playwright-core install chromium`）。避免「本地能跑、CI 跑不了」的割裂。
+async function launchBrowser() {
+  const attempts = [
+    { channel: 'msedge', headless: true },
+    { channel: 'chrome', headless: true },
+    { headless: true }
+  ];
+  let lastErr;
+  for (const opt of attempts) {
+    try { return await chromium.launch(opt); } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
 (async () => {
-  const browser = await chromium.launch({ channel: 'msedge', headless: true });
+  const browser = await launchBrowser();
 
   // ---------- A. 摇卦全流程 + 揭晓 ----------
   {

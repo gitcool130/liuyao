@@ -46,3 +46,6 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 # CUSTOM_PROVIDERS = '[{"id":"kimi","label":"Moonshot","base":"https://api.moonshot.cn/v1","models":["kimi-k2"]}]'
 
 # ACCESS_CODE = ""   # 选填：访问口令；设置后页面首次调用会提示输入
+# RATE_LIMIT_PER_MIN = "30"  # 选填：/api/interpret 按访客 IP 的每分钟上限；不设则不限流。
+#                            # 仅当前 isolate 内计数（成本抑制兜底），生产建议同时在
+#                            # CF 后台 Rules → Rate limiting rules 对 /api/interpret 加规则

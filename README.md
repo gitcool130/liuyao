@@ -164,13 +164,32 @@ git status -sb                    # 若显示 ahead，先推送再审计
 
 > 报告「亮点」一节（`diffNightZi` 双流派显式映射、`jsonWithin` 反向对照、`safeEqual` 常量时间、暗动「翻转证明」、10 万+ 字段差分、`public/` 物理隔离）与实际实现一致，无需改动。
 
+### 第五轮台账（安全修复，9 项）
+
+第五轮审计基线为 `e8ad863`（第四轮修复后），台账（20+15+21 项）对 HEAD 全部成立、无重报。本轮 9 项为**新增发现**，均已修复：
+
+| # | 级别 | 报告项 | 处理 |
+|---|---|---|---|
+| 1 | 🔴 P0 | `app.js` 中 `r.id` 未转义（16 处插值中唯一漏 `esc()` 者），且 `esc()` 不转义引号 → 存储型 XSS | 新增 `escAttr()`（`esc` 之上补 `"`→`&quot;`、`'`→`&#39;`），`data-id`/`data-del`/`data-m`/`title` 四处属性位一律改用 |
+| 2 | 🔴 P0 | 同上，服务端读路径信任库内历史脏 id | `ID_RE` 上提至模块级；GET 列表按 `ID_RE` 过滤非法行，GET `?id=` 非法 id 直接 400 |
+| 3 | 🟠 P1 | `interpret.js` 的 `wl[provider]` 走原型链 → `provider='constructor'` 抛未捕获 TypeError → 边缘 500（前端误显示为「新部署传播中」） | 改 `Object.prototype.hasOwnProperty.call(wl, provider)` |
+| 4 | 🟠 P1 | `interpret.js` 口令仍是明文 `!==`，未复用 `safeEqual`（台账 13 条只修了 `records.js`，属同类修复未收口） | `safeEqual` 上移至 `_lib.js` 共用，`records.js` 改为 import 并 re-export（保持既有 import 路径），`interpret.js` 改用它 |
+| 5 | 🟠 P1 | `/api/interpret` 无限流/无来源校验，单请求可达 88,000 字符入模（费用敞口） | 入模上限收敛为 `4,000 + 8×2,000 ≈ 20,000`；新增可选 `RATE_LIMIT_PER_MIN`（按 IP 滑窗，默认关闭）；生产配置要求写入 README |
+| 6 | 🟡 P2 | `loadCast()` 无 `try/catch` → 接口异常时点击「什么都不会发生」 | 全函数包 `try/catch` + `libDetailError()` 写入 `#libDetail` 并提示；补 `data.record` 空值守卫 |
+| 7 | 🟡 P2 | 三合／刑害／世爻 tag 不在 `aggregateTrend` 汇聚表内（永不影响 `trend`）；`ruleSanHe` 有死形参 | 死形参 `target` 已删（定义与调用点同步）；**汇聚表覆盖属口径问题，未擅改**——已登记进「已知口径分歧」并附可直接套用的改动清单 |
+| 8 | 🟡 P2 | `gen-jieqi.js` 去尾逗号用值比较（`lines[末项] === l`）而非下标 | 改 `i === lines.length - 1`；`:68` 的 Uint32 断言文案改为与实际实现一致（`JIEQI_DELTAS` 为普通数字数组） |
+| 9 | 🟡 P2 | `CUSTOM_PROVIDERS.label` 无字符集校验（`id` 有白名单，`label` 直入 DOM 属性位）；GET `?id=` 返回 `messages` 全文未在文档说明 | `_lib.js` 新增 `isSafeProviderLabel()`（非法则删 `label` 降级为 `id` 并告警，不整条丢弃供应商）；README「存储与安全」「已知口径分歧」各补一条 |
+
+> 另：CI 已补 `test:ui` 步骤（`npm run test:all` 原不含 `test-shake.js`，而它覆盖的盲摆状态机／时间锁／追问历史最易回归）。
+
 ### 已知口径分歧（**非** Bug，勿再重报）
 
-以下三项属流派门户之别，不是缺陷。若采纳另一种口径，需同步改 `aggregateTrend` 的 supports/harms 名单或判定门并补断言，并先经维护者确认：
+以下四项属流派门户之别或待定取舍，不是缺陷。若采纳另一种口径，需同步改 `aggregateTrend` 的 supports/harms 名单或判定门并补断言，并先经维护者确认：
 
 - **`ruleDayHe` 动爻逢日合**：本实现动爻一律判「合绊」（依《增删卜易》「动逢合而绊住」），静爻才分旺相「合起」/休囚「合绊」。另有流派主张旺相动爻亦可作「合起」。
 - **`ruleXunKong` 真空条件**：本实现依《卜筮正宗》「旬空逢月破、休囚无救者为真空」（`WEAK` = 休/囚/死）。野鹤另有季节口径——「春土夏金秋是木，三冬逢火是真空」，即仅「死」地成真空。收紧只需把条件改为 `grade === '死'`，但会改变大量存量卦的断语。
 - **`aggregateTrend` 的「失令 vs 日生」权重**：本实现取「月建为提纲」——《增删卜易》「失令者纵得日生亦难成」。故用神休囚（泄气于月／克月建）即使得日辰生扶，`trend` 判「平」（待时）而非「吉」；只有旺相（`STRONG`）得生扶且无伤克才直判「吉」。另有流派以日辰为「主宰」，得日生即论可用。放宽只需把 `aggregateTrend` 末段写回 `trend = '吉'`（但会重新架空 `STRONG` 门）。
+- **`aggregateTrend` 对三合／刑害／世爻关系的覆盖（第五轮审计提出，待拍板）**：`supports`/`harms` 名单目前**不含** `ruleSanHe`（`三合:*`）、`ruleXingHai`（`相刑:*` / `相害:*`）、`ruleShi`（`世爻:*`）三类 tag，故「三合成局」「用神被刑害」「用神克世／世克用神」无论多重都只作为 bullet 陈述，**永不改变 `trend`**。可能是刻意「只陈述事实、不下结论」，也可能是规则补全时漏登记进汇聚表——两者都合理，需维护者定夺。若纳入，改动为：在 `aggregateTrend` 的 `supports` 数组加入 `'世爻:用神生世'`、`'世爻:世生用神'`、`'世爻:比和'`、`'世爻:用神持世'`、`'三合:*'`，在 `harms` 数组加入 `'世爻:用神克世'`、`'世爻:世克用神'`、`'相害:六害'` 及 `相刑:*`；**必须同步复核 `test-rules.js` 的 7 条 trend 硬断言**（部分用例可能带刑害而落 `平`，改后即变）。
 
 ### 多模型 AI 断卦（functions/api/interpret.js）
 
@@ -193,6 +212,8 @@ git status -sb                    # 若显示 ahead，先推送再审计
 - **D1 卦例库**：卦例含各模型独立对话历史（`{modelId: history[]}`），支持进阶探讨时延续上下文
 - **卦例库口令**：`LIB_CODE` 专管卦例库**写入**（装入/更新），与全站闸 `ACCESS_CODE` 解耦——浏览开放、装入登录、断卦不受限；页面「口令登录」按钮经 `POST /api/records?verify=1` 探针验证，自动保存静默跳过未登录状态
 - **密钥不出服务端**：API Key 全部存 CF secret（加密变量，wrangler 部署不覆盖），模型名白名单 + 输入长度截断防注入
+- **读接口开放的影响范围（第五轮审计补充）**：`GET /api/records` 列表与 `?id=` 详情**始终开放**（有意设计），故在只设 `LIB_CODE` 的推荐配置下，任何访客可读到全部卦例的 `question`（占问之事）与 `pillars`；猜中/拿到 id 后 `?id=` 还会返回 **`pan_text` 全文与 `messages`（各模型完整 AI 对话历史）**。问病、问讼、问感情类占问内容属隐私，如需收紧可给 `?id=` 详情挂 `checkAccess`，或仅返回 `messages` 摘要
+- **请求规模与限流**：`/api/interpret` 单请求上限为 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符；可选环境变量 `RATE_LIMIT_PER_MIN` 按访客 IP 限流（默认关闭，仅 isolate 内计数）。**未设置 `ACCESS_CODE` 时该端点完全开放**，生产建议至少二选一：设 `ACCESS_CODE`，或在 CF 后台为该路径配置 Rate Limiting 规则
 - **部署防回归**：已禁用 GitHub 集成的自动生产部署（其 Functions 构建缓存会回滚代码并抢占生产），统一由 wrangler direct upload 部署
 
 ### 生成式琴音（bgm.js）
@@ -311,6 +332,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 
 - `LIB_CODE`：卦例库写入口令（secret）。设置后装入卦例库需先在页面「口令登录」；未设置则写入开放。读取（GET）始终开放。
 - `ACCESS_CODE`：全站访问口令（secret），设置后**所有接口**（含断卦）都需口令。一般只需 LIB_CODE，不要两个都设。
+- `RATE_LIMIT_PER_MIN`：选填，`/api/interpret` 按访客 IP 的每分钟请求上限（文本变量）。**未设置则不限流**；仅当前 isolate 内计数，属成本抑制兜底，生产建议在 CF 后台对该路径另配 Rate Limiting 规则。
 - 文件清单新增 `bgm.js`（琴音引擎）。
 
 > ⚠️ 注意：wrangler CLI 部署时 `wrangler.toml [vars]` 会覆盖后台同名**文本**变量（secret 不受影响）。后台改完变量后用 wrangler 重新部署一次生效。

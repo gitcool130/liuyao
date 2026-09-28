@@ -25,6 +25,17 @@ jobs:
         env:
           TZ: Asia/Shanghai # 节气表以北京时生成，差分须同时区
 
+      - name: 安装 UI 测试浏览器（chromium 兜底，runner 无 msedge 时用）
+        run: npx playwright-core install --with-deps chromium
+
+      - name: UI 冒烟（盲摆状态机 / 时间锁 / 追问历史）
+        # test:all 不含本步，但它覆盖的状态机与历史链路最易回归，故单列一道门禁。
+        # test-shake.js 内部有通道回退：msedge → chrome → 自带 chromium。
+        run: |
+          python3 -m http.server 8931 --directory public &
+          sleep 1
+          node test-shake.js http://127.0.0.1:8931
+
       - name: 静态语法检查（浏览器脚本 + Pages Functions）
         run: |
           node --check public/app.js

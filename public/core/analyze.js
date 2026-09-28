@@ -417,7 +417,8 @@
   // 三合局：卦中动爻地支三支成局；变爻亦参与——
   // 旧版只统计本卦动爻，漏判「两动爻 + 一变爻」型三合（如动爻申、动爻子，另一动爻化辰）。
   // 取源顺序把本卦动爻排在变爻之前，贪心匹配优先用本卦动爻，避免同爻本变双算。
-  function ruleSanHe(pan, target) {
+  // 注：本函数不取用神（三合成局与否与「取哪个用神」无关），故无 target 形参
+  function ruleSanHe(pan) {
     const js = [];
     const src = [];
     pan.lines.forEach(function (l) {
@@ -470,6 +471,13 @@
 
   // ---------- 汇聚：trend 由规则表驱动 ----------
   // supports/harms 为规则标签集合，非数值
+  //
+  // ⚠ 覆盖范围（第五轮审计提出，属待维护者拍板的口径问题，非缺陷）：
+  //   ruleSanHe（三合:*）、ruleXingHai（相刑:* / 相害:*）、ruleShi（世爻:*）
+  //   以及动变的 化泄气/化耗气/化比和 的 tag 均**不在**下方名单内，
+  //   因此这些要件目前只作为 bullet 陈述事实，永不改变 trend。
+  //   若确认应纳入，需把对应 tag 补进 supports / harms 并同步补 test-rules 断言
+  //   （现 test-rules 对 trend 有 7 条硬断言，改口径必然联动）。
   function aggregateTrend(ctx) {
     const supports = [], harms = [];
     const J = ctx.judgments;
@@ -545,7 +553,7 @@
     });
     ruleShi(pan, L, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
     ruleFu(pan, L, pil, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
-    ruleSanHe(pan, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
+    ruleSanHe(pan).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
     ruleXingHai(L, pil, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
 
     // 应期线索（只出线索，不下结论）
