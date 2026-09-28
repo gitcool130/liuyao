@@ -744,7 +744,7 @@
     if (!btn) return;
     const logged = !!localStorage.getItem('ly_access_code');
     btn.textContent = logged ? '已登录 · 退出' : '口令登录';
-    if (tip) tip.textContent = logged ? '已登录，断卦后自动入卦例库' : '卦例浏览开放，装入需口令';
+    if (tip) tip.textContent = logged ? '已登录，断卦后自动入卦例库' : '卦例库需口令，浏览与装入均需登录';
   }
   const _btnLogin = $('#btnLogin');
   if (_btnLogin) _btnLogin.onclick = async function () {

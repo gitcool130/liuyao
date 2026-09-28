@@ -42,8 +42,8 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 # RATE_LIMIT_PER_MIN = "20"
 #
 # 访问口令分两级，均为敏感值、**刻意不写在本文件**（仓库公开），改用 Pages secret 设置：
-#   LIB_CODE      卦例库**写入**口令。生产已设；只管写入，浏览与断卦不受限。
-#   ACCESS_CODE   全站口令（卦例读取 + 断卦）。生产曾于 2026-09-28 启用，同日撤销，**当前未设**。
+#   LIB_CODE      卦例库口令（**读 + 写**：浏览/装入/删除）。生产已设；只管卦例库，断卦不受限。
+#   ACCESS_CODE   全站口令（断卦 + 卦例库读写）。生产曾于 2026-09-28 启用，同日撤销，**当前未设**。
 #   设置：wrangler pages secret put LIB_CODE --project-name=liuyao
 # 页面首次调用收 401 时弹框要求输入口令，存入 localStorage（键名 ly_access_code），
 # 后续请求带 X-Access-Code 头。

@@ -5,10 +5,13 @@
  *   #13 口令比较为常量时间（safeEqual）
  *   #14 CUSTOM_PROVIDERS 解析失败不再静默吞错
  *   #8  模型 id 字符集校验（XSS 上游根因）
+ *   #15 /api/models 去重表不得被原型链污染（第二十轮）
+ *   #16 读路径口令收口（与写同源）+ DELETE 的 ID_RE 校验（第二十轮）
  * 运行：npm run test:fn
  * ============================================================ */
-import { jsonWithin, safeEqual } from './functions/api/records.js';
+import { jsonWithin, safeEqual, onRequestGet, onRequestDelete } from './functions/api/records.js';
 import { customProviders, gptModelList, isSafeModelId } from './functions/api/_lib.js';
+import { onRequestGet as modelsGet } from './functions/api/models.js';
 
 let pass = 0, fail = 0;
 function eq(name, got, want) {
@@ -78,6 +81,59 @@ eq('含注入字符的模型被剔除', cp[0].models, ['kimi-k2']);
 eq('非法供应商 id 被剔除', cp.length, 1);
 eq('GPT_MODELS 过滤注入名', gptModelList({ GPT_MODELS: 'gpt-6-luna,<img src=x>,gpt-6-sol' }), ['gpt-6-luna', 'gpt-6-sol']);
 console.warn = origWarn;
+
+// ---------- #15 /api/models 去重表不得被原型链污染（第二十轮） ----------
+// 旧实现 seen = {}；seen['constructor'] 命中 Object.prototype.constructor（truthy），
+// 模型名恰为原型键时被静默判为「重复」而丢弃（与 interpret.js 白名单同一坑，此前未收口）
+const mres = await modelsGet({ env: { CUSTOM_PROVIDERS: JSON.stringify([
+  { id: 'p1', label: 'P1', base: 'https://x/v1', models: ['constructor', 'toString', 'normal-model'] },
+  { id: 'p2', label: 'P2', base: 'https://x/v1', models: ['normal-model'] }
+]) } });
+const mIds = (await mres.json()).models.map(function (m) { return m.id; });
+eq('原型键模型名 constructor 不被吞', mIds.indexOf('constructor') >= 0, true);
+eq('原型键模型名 toString 不被吞', mIds.indexOf('toString') >= 0, true);
+eq('去重逻辑仍生效（normal-model 只留一个）', mIds.filter(function (id) { return id === 'normal-model'; }).length, 1);
+
+// ---------- #16 records.js：读路径口令收口 + DELETE 的 ID_RE 校验（第二十轮） ----------
+// D1 最小桩：记录被下发的 SQL 与被绑定的参数，用于断言「非法 id 不下探数据库」
+function mkDb() {
+  const state = { sqls: [], bound: [] };
+  return {
+    state: state,
+    prepare: function (sql) {
+      state.sqls.push(sql);
+      return {
+        bind: function (v) {
+          state.bound.push(v);
+          return { run: async function () { return {}; }, first: async function () { return null; } };
+        },
+        all: async function () { return { results: [] }; }
+      };
+    }
+  };
+}
+const db = mkDb();
+const envLib = { LIUYAO_DB: db, LIB_CODE: 'k' };
+const del = function (q, headers) {
+  return onRequestDelete({ request: new Request('https://x/api/records' + q, { method: 'DELETE', headers: headers || {} }), env: envLib });
+};
+const get = function (q, headers, env) {
+  return onRequestGet({ request: new Request('https://x/api/records' + (q || ''), { headers: headers || {} }), env: env || envLib });
+};
+
+eq('DELETE 无口令 → 401', (await del('?id=ok-1')).status, 401);
+eq('DELETE 非法 id → 400', (await del('?id=bad%20id', { 'X-Access-Code': 'k' })).status, 400);
+eq('DELETE 非法 id 不下探数据库', db.state.sqls.length, 0);
+eq('DELETE 合法 id → 200', (await del('?id=ok-1', { 'X-Access-Code': 'k' })).status, 200);
+eq('DELETE 合法 id 恰好下发一条 SQL', db.state.sqls.length, 1);
+
+// A1 收口：读路径（列表 + 详情）与写路径同源，未带口令不得下发任何卦例内容
+eq('未带口令读列表 → 401', (await get()).status, 401);
+eq('未带口令读详情 → 401', (await get('?id=ok-1')).status, 401);
+eq('带口令读列表 → 200', (await get('', { 'X-Access-Code': 'k' })).status, 200);
+eq('未配置任何口令时读列表保持开放（向后兼容）', (await get('', {}, { LIUYAO_DB: mkDb() })).status, 200);
+eq('读路径同样认 ACCESS_CODE（与写路径同源）',
+  (await get('', { 'X-Access-Code': 'a' }, { LIUYAO_DB: mkDb(), ACCESS_CODE: 'a' })).status, 200);
 
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

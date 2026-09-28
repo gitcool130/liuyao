@@ -550,6 +550,49 @@ eq('临日辰路径仍生效', C.ruleDay(Lmu, mkPil({ monthZhi: 2, dayZhi: 2 }),
   eq('仅刑害、无伤克、旺相 → 不因刑而降吉', agg('相', [{ tag: '月建', rule: '月建生扶' }, { tag: '相刑', rule: '寅巳相刑' }]).trend, '吉');
 })();
 
+// ---------- 19. 三刑判定的端到端覆盖（第二十轮补：直测生产者，而非手工喂标签） ----------
+// 第 18 节用 agg() 手工构造 { tag:'相刑' } 喂给 aggregateTrend，测的是「汇聚表如何处理相刑标签」，
+// 从未调用生产者 ruleXingHai。于是 data.js 的 LY.XING 只写单向键时，反向组合
+// （用神申遇日辰巳、用神戌遇日辰丑 等 6 组）永远判不出，而测试依然全绿——断言不空转，但测错了对象。
+// 本节直接驱动 ruleXingHai，锁死「所有相刑关系都能判出」且「非刑不得误判」。
+(function () {
+  const I = {};
+  C.ZHI.forEach(function (z, i) { I[z] = i; });
+  // ruleXingHai 同时比对日辰与月建；把月建固定为「辰」——辰只与辰自刑，
+  // 与子卯寅巳申丑戌未均不成刑，故不干扰被测的那一对
+  const NEUTRAL = I['辰'];
+  const line = function (z) { return mkLine({ zhi: z, zhiIdx: I[z] }); };
+  const isXing = function (a, b) {
+    return C.ruleXingHai(line(a), mkPil({ monthZhi: NEUTRAL, dayZhi: I[b] }), '官鬼')
+      .some(function (j) { return j.tag === '相刑'; });
+  };
+
+  // 全部有序相刑对（含双向）：子卯 2 + 寅巳申 6 + 丑戌未 6 = 14
+  const pairs = [
+    ['子', '卯'], ['卯', '子'],
+    ['寅', '巳'], ['巳', '寅'], ['巳', '申'], ['申', '巳'], ['申', '寅'], ['寅', '申'],
+    ['丑', '戌'], ['戌', '丑'], ['戌', '未'], ['未', '戌'], ['未', '丑'], ['丑', '未']
+  ];
+  // 修复前这 14 对里有 6 对（巳寅/申巳/寅申/戌丑/未戌/丑未）判不出
+  eq('14 个有序相刑对全部判出（用神→日辰）',
+    pairs.filter(function (p) { return !isXing(p[0], p[1]); }).map(function (p) { return p.join(''); }), []);
+  // 第 18 节的原始漏判样例，单独留一条可读断言
+  eq('回归：用神申遇日辰巳 → 判相刑', isXing('申', '巳'), true);
+
+  // 自刑：辰午酉亥，同支相见（4 组，合计 18 个相刑组合）
+  const selfMissed = ['辰', '午', '酉', '亥'].filter(function (z) { return !isXing(z, z); });
+  eq('4 个自刑全部判出', selfMissed, []);
+
+  // 反向自查：非刑关系不得产出「相刑」（防止补表补过头）
+  const nonXing = [['子', '午'], ['寅', '卯'], ['丑', '辰'], ['未', '申'], ['戌', '亥'], ['子', '未']];
+  eq('非相刑关系不误判',
+    nonXing.filter(function (p) { return isXing(p[0], p[1]); }).map(function (p) { return p.join(''); }), []);
+
+  // 表规模自证：12 键（单向版）→ 18 键（双向版）应到 18 键
+  const xingKeys = Object.keys(C.XING).length;
+  eq('XING 表键数（子卯2 + 寅巳申6 + 丑戌未6 + 自刑4）', xingKeys, 18);
+})();
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);
 

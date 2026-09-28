@@ -1,7 +1,7 @@
 /* Cloudflare Pages Function: /api/records
  * 卦例库（D1 数据库 LIUYAO_DB）
- *   GET    /api/records          → 卦例列表（不含正文），开放
- *   GET    /api/records?id=xxx   → 单条卦例详情，开放
+ *   GET    /api/records          → 卦例列表（不含正文，含 question），需口令
+ *   GET    /api/records?id=xxx   → 单条卦例详情，需口令
  *   POST   /api/records          → 新建/更新卦例（需 LIB_CODE 口令）
  *   POST   /api/records?verify=1 → 口令验证探针，不落库
  *   DELETE /api/records?id=xxx   → 删除卦例（需 LIB_CODE 口令）
@@ -26,22 +26,23 @@ function json(data, status) {
 // 无任何格式校验，那些行至今可能仍在线上 D1 中，且会被前端拼进 data-id 属性。
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
-async function checkAccess(request, env) {
-  if (!env.ACCESS_CODE) return null;
-  const code = request.headers.get('X-Access-Code') || '';
-  return (await safeEqual(code, env.ACCESS_CODE)) ? null : json({ error: 'ACCESS_REQUIRED', message: '需要访问口令' }, 401);
-}
-
-// 写入鉴权：优先专用卦例库口令 LIB_CODE，未配置则回退全站 ACCESS_CODE；
-// 两者都未配置时保持开放（向后兼容本地/测试环境）
-async function writeGuard(request, env) {
+// 口令闸门：读、写共用同一实现、同一口令来源（LIB_CODE || ACCESS_CODE），差异只在失败文案。
+// 两者都未配置时保持开放（向后兼容本地/测试环境）。
+//
+// 读路径（列表 + 详情）与写路径同源，是第二十轮的收口：
+// 第十七轮按要求撤销 ACCESS_CODE 后，读路径曾退化为「未设即放行」——列表下发的 question
+// 是起卦时所测之事，?id= 详情还会返回 pan_text 与完整对话历史，对任何访客可见。
+async function requireCode(request, env, message) {
   const code = env.LIB_CODE || env.ACCESS_CODE;
   if (!code) return null;
   const given = request.headers.get('X-Access-Code') || '';
-  return (await safeEqual(given, code))
-    ? null
-    : json({ error: 'ACCESS_REQUIRED', message: '装入卦例库需要口令' }, 401);
+  return (await safeEqual(given, code)) ? null : json({ error: 'ACCESS_REQUIRED', message: message }, 401);
 }
+
+async function checkAccess(request, env) { return requireCode(request, env, '需要访问口令'); }
+
+// 写入鉴权文案与读略有区别，便于前端区分「浏览」与「装入」两种场景
+async function writeGuard(request, env) { return requireCode(request, env, '装入卦例库需要口令'); }
 
 // 按结构收缩字符串值（截断字符串"内容"仍产出合法 JSON，与截断 JSON"文本"有本质区别）
 function shrinkStrings(v, maxLen) {
@@ -151,6 +152,8 @@ export async function onRequestDelete(context) {
   if (!env.LIUYAO_DB) return noDb();
   const id = new URL(request.url).searchParams.get('id');
   if (!id) return json({ error: 'NO_ID', message: '缺少 id' }, 400);
+  // 与 GET ?id= 一致：非法 id 直接拒绝，不下探数据库（文件头的「读写路径都必须过 ID_RE」在此补齐）
+  if (!ID_RE.test(id)) return json({ error: 'BAD_ID', message: '非法 id' }, 400);
   await env.LIUYAO_DB.prepare('DELETE FROM casts WHERE id = ?').bind(id).run();
   return json({ ok: true });
 }

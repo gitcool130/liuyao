@@ -31,10 +31,13 @@ export async function onRequestGet(context) {
   });
 
   // 去重（不同供应商配了同名模型时保留先出现的）
-  const seen = {};
+  // 用 Set 而非对象字面量：seen['constructor'] 会命中 Object.prototype.constructor（truthy），
+  // 使模型名恰为 constructor / toString 等原型键时被静默判为「重复」而丢失
+  // （interpret.js 的 provider 白名单已修过同一坑，此处补收口）
+  const seen = new Set();
   const models = all.filter(function (m) {
-    if (seen[m.id]) return false;
-    seen[m.id] = true;
+    if (seen.has(m.id)) return false;
+    seen.add(m.id);
     return true;
   });
 
