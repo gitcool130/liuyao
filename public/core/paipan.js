@@ -55,6 +55,36 @@
     return map;
   })();
 
+  // ---------- 卦型判定：六冲卦 / 六合卦 / 游魂归魂 ----------
+  // 六爻地支（初→上）：内卦取纳甲表前三位，外卦取后三位（同一卦内外纳甲相同，故表长 6）
+  function lineZhis(bits6) {
+    const lo = trigOfBits(bits6.slice(0, 3)), up = trigOfBits(bits6.slice(3));
+    return TRIG[lo].najia.slice(0, 3).concat(TRIG[up].najia.slice(3))
+      .map(function (c) { return ZHI.indexOf(c); });
+  }
+  const OPPO = [[0, 3], [1, 4], [2, 5]]; // 初-四 / 二-五 / 三-六
+  // 六冲卦：三对地支皆相冲。全 64 卦共 10 个 —— 八纯卦 + 天雷无妄 + 雷天大壮。
+  // 注：与「六冲卦」相对的「卦逢六冲」在断卦层另有含义，本函数只陈述卦画事实。
+  // 注：本纳甲体系下内卦与外卦的纳支对应是刚性的，三对中任一对即等价于三对（实测
+  //     「仅查初四」与「三对皆冲」给出同一集合）；此处仍按定义写全三对，冗余性由
+  //     test-gua-types.js 第九节锁定，以便将来改动纳支表时得到提示。
+  function chongGua(bits6) {
+    const z = lineZhis(bits6);
+    return OPPO.every(function (p) { return chong(z[p[0]], z[p[1]]); });
+  }
+  // 六合卦：三对地支皆六合。全 64 卦共 8 个 —— 地天泰·天地否·地雷复·雷地豫·水泽节·泽水困·山火贲·火山旅。
+  function heGua(bits6) {
+    const z = lineZhis(bits6);
+    return OPPO.every(function (p) { return liuhe(z[p[0]], z[p[1]]); });
+  }
+  // 游魂/归魂：由八宫卦变爻次序定（京房八宫：第七变游魂、第八变归魂），各 8 个。
+  // 取值来自 PALACE.variant（6=游魂 7=归魂），非查卦名表。
+  function soulGua(bits6) {
+    const p = PALACE[bits6.join('')];
+    if (!p) return null;
+    return p.variant === 6 ? '游魂' : p.variant === 7 ? '归魂' : null;
+  }
+
   // ---------- 排盘主函数 ----------
   // tossVals: 自下而上 6 项；1=少阳(单) 0=少阴(拆) 9=老阳(重·动) 6=老阴(交·动)
   function paipan(tossVals, dt) {
@@ -120,6 +150,7 @@
     return {
       tossVals: tossVals, benBits: ben, bianBits: bian, moving: moving, hasBian: hasBian,
       benName: hexName(ben), bianName: hasBian ? hexName(bian) : null,
+      isLiuChong: chongGua(ben), isLiuHe: heGua(ben), soul: soulGua(ben),
       benLower: benLower, benUpper: benUpper,
       bianLower: bianLower, bianUpper: bianUpper,
       palace: benInfo.palace, palaceWx: palaceWx,
@@ -131,5 +162,6 @@
 
   LY.sheng = sheng; LY.ke = ke; LY.chong = chong; LY.liuhe = liuhe;
   LY.liuqin = liuqin; LY.trigOfBits = trigOfBits; LY.hexName = hexName;
+  LY.chongGua = chongGua; LY.heGua = heGua; LY.soulGua = soulGua;
   LY.PALACE = PALACE; LY.paipan = paipan;
 })(typeof window !== 'undefined' ? window : globalThis);

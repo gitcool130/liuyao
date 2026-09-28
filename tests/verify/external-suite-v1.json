@@ -1,0 +1,173 @@
+{
+  "test_suite": "六爻排盘核心逻辑验证集",
+  "version": "1.0",
+  "note": "外部提供的验证集，本文件为逐字节原样落盘，未经修改。对账结果见 tests/verify/README.md 与 《六爻第十三轮-外部验证集三方对账.md》。",
+  "cases": [
+    {
+      "case_id": "TC_001",
+      "description": "八纯卦、全静卦、六冲卦、甲日子起青龙",
+      "input": {
+        "datetime": "2024-02-19 10:30:00",
+        "ganzhi": {
+          "year": "甲辰",
+          "month": "丙寅",
+          "day": "甲子",
+          "hour": "己巳"
+        },
+        "coins": [7, 7, 7, 7, 7, 7]
+      },
+      "expected": {
+        "original_gua": "乾为天",
+        "changed_gua": "乾为天",
+        "palace": "乾金",
+        "shi_line": 6,
+        "ying_line": 3,
+        "is_liu_chong": true,
+        "is_liu_he": false,
+        "xun_kong": ["戌", "亥"],
+        "lines": [
+          {"level": 1, "branch": "子水", "relative": "子孙", "god": "青龙", "moving": false},
+          {"level": 2, "branch": "寅木", "relative": "妻财", "god": "朱雀", "moving": false},
+          {"level": 3, "branch": "辰土", "relative": "父母", "god": "勾陈", "moving": false},
+          {"level": 4, "branch": "午火", "relative": "官鬼", "god": "螣蛇", "moving": false},
+          {"level": 5, "branch": "申金", "relative": "兄弟", "god": "白虎", "moving": false},
+          {"level": 6, "branch": "戌土", "relative": "父母", "god": "玄武", "moving": false}
+        ],
+        "hidden_spirits": []
+      }
+    },
+    {
+      "case_id": "TC_002",
+      "description": "一世卦、单动爻、伏神查验（缺妻财木）、戊日起勾陈",
+      "input": {
+        "datetime": "2024-03-05 14:00:00",
+        "ganzhi": {
+          "year": "甲辰",
+          "month": "丁卯",
+          "day": "戊午",
+          "hour": "己未"
+        },
+        "coins": [6, 7, 7, 7, 7, 7]
+      },
+      "expected": {
+        "original_gua": "天风姤",
+        "changed_gua": "乾为天",
+        "palace": "乾金",
+        "shi_line": 1,
+        "ying_line": 4,
+        "is_liu_chong": false,
+        "xun_kong": ["子", "丑"],
+        "lines": [
+          {
+            "level": 1, 
+            "branch": "丑土", 
+            "relative": "父母", 
+            "god": "勾陈", 
+            "moving": true, 
+            "changed_branch": "子水", 
+            "changed_relative": "子孙"
+          },
+          {"level": 2, "branch": "亥水", "relative": "子孙", "god": "螣蛇", "moving": false},
+          {"level": 3, "branch": "酉金", "relative": "兄弟", "god": "白虎", "moving": false},
+          {"level": 4, "branch": "午火", "relative": "官鬼", "god": "玄武", "moving": false},
+          {"level": 5, "branch": "申金", "relative": "兄弟", "god": "青龙", "moving": false},
+          {"level": 6, "branch": "戌土", "relative": "父母", "god": "朱雀", "moving": false}
+        ],
+        "hidden_spirits": [
+          {"level": 2, "source_gua": "乾为天", "branch": "寅木", "relative": "妻财"}
+        ]
+      }
+    },
+    {
+      "case_id": "TC_003",
+      "description": "游魂卦测试、己日起螣蛇、多动爻",
+      "input": {
+        "datetime": "2024-04-10 09:15:00",
+        "ganzhi": {
+          "year": "甲辰",
+          "month": "戊辰",
+          "day": "己未",
+          "hour": "己巳"
+        },
+        "coins": [8, 8, 8, 9, 8, 9]
+      },
+      "expected": {
+        "original_gua": "火地晋",
+        "changed_gua": "雷天大壮",
+        "palace": "乾金",
+        "category": "游魂卦",
+        "shi_line": 4,
+        "ying_line": 1,
+        "xun_kong": ["子", "丑"],
+        "lines": [
+          {"level": 1, "branch": "未土", "relative": "父母", "god": "螣蛇", "moving": false},
+          {"level": 2, "branch": "巳火", "relative": "官鬼", "god": "白虎", "moving": false},
+          {"level": 3, "branch": "卯木", "relative": "妻财", "god": "玄武", "moving": false},
+          {
+            "level": 4, 
+            "branch": "酉金", 
+            "relative": "兄弟", 
+            "god": "青龙", 
+            "moving": true, 
+            "changed_branch": "午火", 
+            "changed_relative": "官鬼"
+          },
+          {"level": 5, "branch": "未土", "relative": "父母", "god": "朱雀", "moving": false},
+          {
+            "level": 6, 
+            "branch": "巳火", 
+            "relative": "官鬼", 
+            "god": "勾陈", 
+            "moving": true, 
+            "changed_branch": "戌土", 
+            "changed_relative": "父母"
+          }
+        ],
+        "hidden_spirits": [
+          {"level": 1, "source_gua": "乾为天", "branch": "子水", "relative": "子孙"}
+        ]
+      }
+    },
+    {
+      "case_id": "TC_004",
+      "description": "归魂卦、六合卦、变全阴（坤为地）",
+      "input": {
+        "datetime": "2024-05-18 20:00:00",
+        "ganzhi": {
+          "year": "甲辰",
+          "month": "己巳",
+          "day": "丁酉",
+          "hour": "庚戌"
+        },
+        "coins": [8, 8, 9, 8, 8, 8]
+      },
+      "expected": {
+        "original_gua": "水地比",
+        "changed_gua": "坤为地",
+        "palace": "坤土",
+        "category": "归魂卦",
+        "is_liu_he": true,
+        "shi_line": 3,
+        "ying_line": 6,
+        "xun_kong": ["辰", "巳"],
+        "lines": [
+          {"level": 1, "branch": "未土", "relative": "兄弟", "god": "朱雀", "moving": false},
+          {"level": 2, "branch": "巳火", "relative": "父母", "god": "勾陈", "moving": false},
+          {
+            "level": 3, 
+            "branch": "卯木", 
+            "relative": "官鬼", 
+            "god": "螣蛇", 
+            "moving": true, 
+            "changed_branch": "卯木", 
+            "changed_relative": "官鬼"
+          },
+          {"level": 4, "branch": "申金", "relative": "子孙", "god": "白虎", "moving": false},
+          {"level": 5, "branch": "戌土", "relative": "兄弟", "god": "玄武", "moving": false},
+          {"level": 6, "branch": "子水", "relative": "妻财", "god": "青龙", "moving": false}
+        ],
+        "hidden_spirits": []
+      }
+    }
+  ]
+}
