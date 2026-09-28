@@ -15,9 +15,9 @@
  *   GPT_MODELS        GPT 可用模型清单（逗号分隔），默认 gpt-6-luna,gpt-6-sol,gpt-6-astra；别名 OPENAI_MODELS
  *   兼容回退：LLM_API_KEY / LLM_BASE_URL（旧单模型配置）
  *   ACCESS_CODE       选填，设置后页面需输入访问口令（生产曾于 2026-09-28 启用，同日撤销，当前未设置）
- *   RATE_LIMIT_PER_MIN 选填，按访客 IP 的每分钟请求上限（未设置则不限流）；
- *                      仅本 isolate 内计数，属「降低」而非「根治」，
- *                      生产已设 =20；如需更强防护，应在 CF 后台对 /api/interpret 加 Rate Limiting 规则
+ *   RATE_LIMIT_PER_MIN 选填，按访客 IP 的每分钟请求上限（**未设置则不限流**）。
+ *                      仅本 isolate 内计数，属「降低」而非「根治」。
+ *                      **生产当前未设 → 实际不限流**（2026-09-28 曾设 =20，同日按用户要求撤销）。
  */
 
 // 供应商解析共享层（白名单 / 自定义供应商 / json 响应 / 常量时间口令比较），与 models.js 同一口径
@@ -28,6 +28,7 @@ import { customProviders, customKeyEnv, modelWhitelist, json, safeEqual } from '
 const LIMITS = { panText: 4000, historyTurns: 8, perMessage: 2000 };
 
 // 按 IP 的滑动窗口限流（默认关闭，仅在配置了 RATE_LIMIT_PER_MIN 时生效）。
+// 生产当前未设该变量 → 恒不触发；本函数保留为可随时启用的软开关。
 // 模块级 Map 在 CF Workers 中随 isolate 存活，跨 isolate 不共享，故只是成本抑制的兜底。
 const RL_HITS = new Map();
 function isRateLimited(request, env) {

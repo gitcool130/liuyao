@@ -199,7 +199,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | 2 | 🔴 P0 | 同上，服务端读路径信任库内历史脏 id | `ID_RE` 上提至模块级；GET 列表按 `ID_RE` 过滤非法行，GET `?id=` 非法 id 直接 400 |
 | 3 | 🟠 P1 | `interpret.js` 的 `wl[provider]` 走原型链 → `provider='constructor'` 抛未捕获 TypeError → 边缘 500（前端误显示为「新部署传播中」） | 改 `Object.prototype.hasOwnProperty.call(wl, provider)` |
 | 4 | 🟠 P1 | `interpret.js` 口令仍是明文 `!==`，未复用 `safeEqual`（台账 13 条只修了 `records.js`，属同类修复未收口） | `safeEqual` 上移至 `_lib.js` 共用，`records.js` 改为 import 并 re-export（保持既有 import 路径），`interpret.js` 改用它 |
-| 5 | 🟠 P1 | `/api/interpret` 无限流/无来源校验，单请求可达 88,000 字符入模（费用敞口） | 入模上限收敛为 `4,000 + 8×2,000 ≈ 20,000`；新增可选 `RATE_LIMIT_PER_MIN`（按 IP 滑窗）。**2026-09-28 生产已启用 `RATE_LIMIT_PER_MIN=20`**（`wrangler.toml [vars]`）。全站口令 `ACCESS_CODE` 同日启用后**同日撤销**（改为断卦不受限），现由限流单独兜底 |
+| 5 | 🟠 P1 | `/api/interpret` 无限流/无来源校验，单请求可达 88,000 字符入模（费用敞口） | 入模上限收敛为 `4,000 + 8×2,000 ≈ 20,000`；新增可选 `RATE_LIMIT_PER_MIN` 软开关（按 IP 滑窗）。**2026-09-28 曾启用 `=20`，同日按用户要求「不限流」撤销**（`wrangler.toml` 中该行已注释保留）。全站口令 `ACCESS_CODE` 亦于同日启用后撤销。**当前 `/api/interpret` 无口令、无限流**，费用敞口仅由入模上限单独约束 |
 | 6 | 🟡 P2 | `loadCast()` 无 `try/catch` → 接口异常时点击「什么都不会发生」 | 全函数包 `try/catch` + `libDetailError()` 写入 `#libDetail` 并提示；补 `data.record` 空值守卫 |
 | 7 | 🟡 P2 | 三合／刑害／世爻 tag 不在 `aggregateTrend` 汇聚表内（永不影响 `trend`）；`ruleSanHe` 有死形参 | 死形参 `target` 已删（定义与调用点同步）；**汇聚表覆盖属口径问题，未擅改**——已登记进「已知口径分歧」并附可直接套用的改动清单 |
 | 8 | 🟡 P2 | `gen-jieqi.js` 去尾逗号用值比较（`lines[末项] === l`）而非下标 | 改 `i === lines.length - 1`；`:68` 的 Uint32 断言文案改为与实际实现一致（`JIEQI_DELTAS` 为普通数字数组） |
@@ -257,7 +257,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 - **密钥不出服务端**：API Key 全部存 CF secret（加密变量，wrangler 部署不覆盖），模型名白名单 + 输入长度截断防注入
 - **读接口开放的影响范围（第五轮审计补充 → 2026-09-28 已闭合）**：`GET /api/records` 列表与 `?id=` 详情原先**始终开放**，在只设 `LIB_CODE` 的配置下任何访客可读到全部卦例的 `question`（占问之事）与 `pillars`；猜中/拿到 id 后 `?id=` 还会返回 **`pan_text` 全文与 `messages`（各模型完整 AI 对话历史）**。问病、问讼、问感情类占问内容属隐私。
   **2026-09-28 曾随全站 `ACCESS_CODE` 收口**（无口令读列表/详情 → `401 ACCESS_REQUIRED`），**同日撤销 `ACCESS_CODE` 后回归开放**（实测 `GET /api/records` → `200`、`?id=x` → `404`）。当前口径为「卦例**浏览开放、装入需 `LIB_CODE`**」，`/api/models` 与读接口均免口令。
-- **请求规模与限流**：`/api/interpret` 单请求上限为 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符；`RATE_LIMIT_PER_MIN` 按访客 IP 限流（仅 isolate 内计数）。**2026-09-28 生产已设 `RATE_LIMIT_PER_MIN=20`**；全站口令 `ACCESS_CODE` 于同日启用后撤销，`/api/interpret` **回归无口令开放**（实测无口令 → 越过守卫，直接进入参数校验）。费用敞口现由「入模上限 20,000 + 按 IP 限流 20/分」共同约束，二者均属「削减」而非「根治」
+- **请求规模与限流**：`/api/interpret` 单请求上限为 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符；`RATE_LIMIT_PER_MIN` 为可选软开关（按访客 IP 滑窗，仅 isolate 内计数），**生产当前未设 → 不限流**（2026-09-28 曾设 20，同日按用户要求撤销）。全站口令 `ACCESS_CODE` 于同日启用后撤销，`/api/interpret` **回归无口令开放**（实测无口令 → 越过守卫，直接进入参数校验）。费用敞口现**仅由「入模上限 ≈ 20,000 字符」单独约束**
 - **部署防回归**：已禁用 GitHub 集成的自动生产部署（其 Functions 构建缓存会回滚代码并抢占生产），统一由 wrangler direct upload 部署
 
 ### 生成式琴音（bgm.js）
@@ -295,7 +295,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
   Custom   → CUSTOM_PROVIDERS 声明任意多家（Kimi/Qwen/GLM/硅基流动等）
 ```
 
-安全设计：API Key 仅存服务端 secret，模型名服务端白名单校验防注入，可选 ACCESS_CODE 访问口令（当前未启用，生产靠按 IP 限流兜底）。
+安全设计：API Key 仅存服务端 secret，模型名服务端白名单校验防注入，可选 ACCESS_CODE 访问口令与 RATE_LIMIT_PER_MIN 限流（**两者当前均未启用**，费用敞口靠入模上限 20,000 字符约束）。
 
 ## 文件说明
 
@@ -379,8 +379,9 @@ git status -sb                    # 若显示 ahead，先推送再审计
   - 如需重新启用：`wrangler pages secret put ACCESS_CODE --project-name=liuyao`（值走 stdin）。
   - ⚠️ **实测订正**：secret 变更（尤其**删除**）后，**线上 Functions 仍持有旧环境快照**，必须重新部署一次才生效——只删 secret 不部署，`401` 会持续 3 分钟以上。此前文档写「secret 即时生效、无需重新部署」**不准确**，已按实测更正。
   > 与 `LIB_CODE` 的关系：`ACCESS_CODE` 管读与断卦，`LIB_CODE` 专管卦例库写入（`records.js` 中 `LIB_CODE || ACCESS_CODE` 的回退只在 `LIB_CODE` 未设时生效）。撤销 `ACCESS_CODE` 后，写入闸由 `LIB_CODE` 单独承担。
-- `RATE_LIMIT_PER_MIN`：`/api/interpret` 按访客 IP 的每分钟请求上限。**生产已设 `20`**，写在 `wrangler.toml [vars]`（非敏感、随仓库版本管理）。
-  取 20 的理由：正常用法是「一次起卦 + 若干追问」，约 3~6 次/分；20 留 3~5 倍余量，共用出口（同 IP）也不易误伤；对脚本则把天花板压到 ≈2.9 万次/日/IP。仅当前 isolate 内计数，属成本抑制兜底，仍建议在 CF 后台对该路径另配 Rate Limiting 规则叠加。
+- `RATE_LIMIT_PER_MIN`：`/api/interpret` 按访客 IP 的每分钟请求上限，**可选软开关**。写在 `wrangler.toml [vars]`（非敏感、随仓库版本管理）。
+  **当前刻意不设 → 不限流**：2026-09-28 曾设 `20`，同日按用户要求「不限流」撤销（该行已在 `wrangler.toml` 中注释保留，取消注释并重新部署即可恢复）。
+  恢复时取 20 的理由：正常用法是「一次起卦 + 若干追问」，约 3~6 次/分；20 留 3~5 倍余量，共用出口（同 IP）也不易误伤；对脚本则把天花板压到 ≈2.9 万次/日/IP。仅当前 isolate 内计数，属成本抑制兜底。
 - 文件清单新增 `bgm.js`（琴音引擎）。
 
 > ⚠️ 注意：wrangler CLI 部署时 `wrangler.toml [vars]` 会覆盖后台同名**文本**变量（secret 不受影响）。后台改完变量后用 wrangler 重新部署一次生效。

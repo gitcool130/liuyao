@@ -32,12 +32,14 @@ database_id = "42279a23-7032-42bb-b675-bb7a2015fcc0"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
 # ---- 两道费用/访问闸门（2026-09-28 启用）----
-# RATE_LIMIT_PER_MIN：/api/interpret 按访客 IP 的每分钟上限。
-# 取 20 的理由：正常用法是「一次起卦 + 若干追问」，约 3~6 次/分；20 留 3~5 倍余量，
-# 连公司/家庭共用出口（同 IP）也不易误伤；对脚本则把天花板压到 20 次/分 ≈ 2.9 万次/日/IP。
-# 注意：只在单个 isolate 内计数，属「削减」而非「根治」——要根治需在 CF 后台
-# Rules → Rate limiting rules 对 /api/interpret 另加规则（与本变量叠加）。
-RATE_LIMIT_PER_MIN = "20"
+# RATE_LIMIT_PER_MIN：/api/interpret 按访客 IP 的每分钟上限。**当前刻意不设 → 不限流。**
+# 代码侧是软开关：未设置时 `parseInt(env.RATE_LIMIT_PER_MIN || '0', 10)` → 0 → 直接放行。
+# 2026-09-28 曾设为 "20"，同日按用户要求撤销（原话「不限流」）。
+# 如需恢复限流：取消下一行注释并重新 `wrangler pages deploy`。
+# 取 20 的理由（供恢复时参考）：正常用法是「一次起卦 + 若干追问」，约 3~6 次/分；
+# 20 留 3~5 倍余量，连公司/家庭共用出口（同 IP）也不易误伤；对脚本则把天花板压到
+# 20 次/分 ≈ 2.9 万次/日/IP。注意它只在单个 isolate 内计数，属「削减」而非「根治」。
+# RATE_LIMIT_PER_MIN = "20"
 #
 # 访问口令分两级，均为敏感值、**刻意不写在本文件**（仓库公开），改用 Pages secret 设置：
 #   LIB_CODE      卦例库**写入**口令。生产已设；只管写入，浏览与断卦不受限。
@@ -64,8 +66,10 @@ RATE_LIMIT_PER_MIN = "20"
 # 若用 wrangler CLI 部署，需把 CUSTOM_PROVIDERS 同步写到这里（JSON 写成单行字符串）：
 # CUSTOM_PROVIDERS = '[{"id":"kimi","label":"Moonshot","base":"https://api.moonshot.cn/v1","models":["kimi-k2"]}]'
 
-# 上面两道闸门见本节前述说明：口令类走 secret（LIB_CODE 已设、ACCESS_CODE 当前未设），
-# RATE_LIMIT_PER_MIN 走本文件 [vars]。
-#
-# 仍未做（需在 CF 后台手动操作，CLI 不支持）：Rules → Rate limiting rules 对
-# /api/interpret 加规则。本文件里的 RATE_LIMIT_PER_MIN 只在 isolate 内计数，可被绕过。
+# 费用/访问闸门现状（2026-09-28 用户要求「不限流」后）：
+#   LIB_CODE            → secret，生产已设（只管卦例库**写入**）
+#   ACCESS_CODE         → secret，生产未设（曾启用、同日撤销，断卦恢复免口令）
+#   RATE_LIMIT_PER_MIN  → 本文件 [vars]，**当前不设 = 不限流**
+# → 即 /api/interpret 目前**无口令、无限流**，费用敞口仅由「入模上限 ≈ 20,000 字符」约束。
+# 用户明确要求不限流，故**也不在 CF 后台另加 Rate limiting rules**（该操作 CLI 不支持，
+# 且与用户意图相悖）。如需恢复，见上方 RATE_LIMIT_PER_MIN 段落。
