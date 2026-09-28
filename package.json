@@ -9,10 +9,15 @@
   "scripts": {
     "test": "node test-core.js && node test-rules.js",
     "test:fn": "node test-functions.mjs",
-    "test:all": "npm test && npm run test:fn && npm run test:diff",
+    "test:all": "npm test && npm run test:fn && npm run test:diff && npm run test:guji && npm run test:guji:self",
     "test:diff": "node test-diff.mjs",
+    "test:guji": "node tests/guji/run.mjs",
+    "test:guji:self": "node tests/guji/selftest.mjs",
     "test:ui": "node test-shake.js",
-    "gen:jieqi": "node tools/gen-jieqi.js"
+    "gen:jieqi": "node tools/gen-jieqi.js",
+    "gen:guji": "node tools/guji-import.mjs",
+    "gen:guji:bszz": "node tools/guji-import-bszz.mjs",
+    "gen:guji:all": "npm run gen:guji && npm run gen:guji:bszz"
   },
   "devDependencies": {
     "@taoracle/najia": "^0.1.0",

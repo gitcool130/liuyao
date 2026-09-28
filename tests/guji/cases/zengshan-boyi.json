@@ -1,0 +1,205 @@
+{
+ "book": "增删卜易",
+ "kind": "断语断言（规则层）",
+ "source": {
+  "repo": "https://github.com/daizhige-org/daizhigev20",
+  "path": "易藏/术数/增删卜易.md",
+  "license": "公有领域（作者逝世逾百年，1931 年前出版）",
+  "note": "文本为第三方录入的传世定本，个别讹字由 tests/guji/run.mjs 对账后登记于 cases[].errata。"
+ },
+ "howto": "每条的 expect 均可回溯到 case.quote 原文；atLine 为 0–5（初爻→上爻）。新增用例见 tests/guji/README.md。",
+ "cases": [
+  {
+   "id": "zsby-1134-andong",
+   "title": "申月癸卯日占乡试（酉金官星持世旺相，卯日冲之）",
+   "chapter": "进神退神章第二十九",
+   "bookLine": 1134,
+   "quote": "酉金官星持世旺相，当时卯日冲之而暗动，又得九五爻上官进神财助生扶，不独今秋折桂，来春占鳌头，果得联捷。",
+   "note": "旺相之爻被日冲为暗动，本实现与原文同断。",
+   "knownDivergence": false,
+   "monthZhi": "申",
+   "dayGZ": "癸卯",
+   "toss": [
+    0,
+    1,
+    1,
+    1,
+    6,
+    0
+   ],
+   "target": "shi",
+   "expect": [
+    {
+     "tag": "日冲",
+     "rule": "暗动"
+    },
+    {
+     "tag": "月建",
+     "rule": "月建同气"
+    },
+    {
+     "trend": "吉"
+    }
+   ]
+  },
+  {
+   "id": "zsby-1508-ripo",
+   "title": "丑月壬子日占讼（世临午火，子日冲之）",
+   "chapter": "增删黄金策千金赋章第三十四",
+   "bookLine": 1508,
+   "quote": "世临午火，子日冲之，休囚为日破，不为暗动，今日若审，必有责罚，果于本日见官责杖二十。此即卦见二午，岂可谓之一子不冲二午耶。",
+   "note": "原文《黄金策》「静逢冲而暗兴」句下之注，上距「两现章第三十二」约百行，故系于此章。此例本实现与原文同断：休囚为日破，不为暗动。",
+   "knownDivergence": false,
+   "monthZhi": "丑",
+   "dayGZ": "壬子",
+   "toss": [
+    0,
+    0,
+    1,
+    1,
+    1,
+    1
+   ],
+   "target": "shi",
+   "expect": [
+    {
+     "atLine": 1,
+     "monthGrade": "休"
+    },
+    {
+     "tag": "日冲",
+     "rule": "日破"
+    },
+    {
+     "atLine": 3,
+     "dayChong": "ripo"
+    },
+    {
+     "trend": "凶"
+    }
+   ]
+  },
+  {
+   "id": "zsby-1936-andong",
+   "title": "巳月甲戌日占雨（戌日冲辰父）",
+   "chapter": "天时章第三十五",
+   "bookLine": 1936,
+   "quote": "应辰时者，戌日冲辰父而暗动，雷雨大作者，戌化巳火鬼也。",
+   "note": "辰土在巳月属「相」（令生），旺相故为暗动；上爻戌土动化巳火为化回头生。",
+   "knownDivergence": false,
+   "monthZhi": "巳",
+   "dayGZ": "甲戌",
+   "toss": [
+    0,
+    0,
+    1,
+    1,
+    0,
+    6
+   ],
+   "target": "shi",
+   "expect": [
+    {
+     "atLine": 0,
+     "monthGrade": "相"
+    },
+    {
+     "atLine": 0,
+     "dayChong": "andong"
+    },
+    {
+     "atLine": 5,
+     "dongBian": "回生"
+    }
+   ]
+  },
+  {
+   "id": "zsby-0553-yuepo",
+   "title": "酉月辛亥日占求财（用神卯木财，空而月破）",
+   "chapter": "元神忌神衰旺章第十",
+   "bookLine": 553,
+   "quote": "卯木妻财爻空而月破，又被金克。余曰：神兆机于动……待甲寅日出空而相见。寅木之财以生官，官来生世，果于寅日早见木日得财。",
+   "note": "用神妻财卯木：月破（酉冲卯）、旬空（亥日属甲寅旬，空子丑？——原文作空，本实现按日柱算得空亡），又受月建酉金之克。",
+   "knownDivergence": false,
+   "monthZhi": "酉",
+   "dayGZ": "辛亥",
+   "toss": [
+    9,
+    1,
+    0,
+    1,
+    9,
+    0
+   ],
+   "target": "妻财",
+   "expect": [
+    {
+     "tag": "月破"
+    },
+    {
+     "tag": "旬空"
+    },
+    {
+     "tag": "月建",
+     "rule": "月建克伤"
+    }
+   ]
+  },
+  {
+   "id": "zsby-0553-chongsan",
+   "title": "同上卦：初爻巳火官鬼发动，亥日冲之",
+   "chapter": "元神忌神衰旺章第十",
+   "bookLine": 553,
+   "quote": "初爻巳火官虽生世，亥日冲散又化旬空何以为吉。余曰：神兆机于动，余从来不言散……",
+   "note": "原文自述「余从来不言散」——保留「冲散」为事实陈述而不据以改 trend，与本实现口径相同。",
+   "knownDivergence": false,
+   "monthZhi": "酉",
+   "dayGZ": "辛亥",
+   "toss": [
+    9,
+    1,
+    0,
+    1,
+    9,
+    0
+   ],
+   "target": "官鬼",
+   "expect": [
+    {
+     "tag": "日冲",
+     "rule": "冲散"
+    }
+   ]
+  },
+  {
+   "id": "zsby-0542-fenqi",
+   "title": "辰月戊申日占父近病（申日冲寅木）",
+   "chapter": "用神元神、忌神、仇神章第九",
+   "bookLine": 542,
+   "quote": "目下病重者，乃因申日冲寅木而暗动，木动以克辰土。",
+   "note": "【已登记分歧】原文作「暗动」；本实现按「旺相休囚死」口径判寅木在辰月为「囚」，故作「日破」。同书〈增删黄金策千金赋〉「休囚为日破，不为暗动」与本实现一致，故此处保留实现口径，仅登记分歧，不改实现。",
+   "knownDivergence": true,
+   "monthZhi": "辰",
+   "dayGZ": "戊申",
+   "toss": [
+    1,
+    1,
+    1,
+    9,
+    1,
+    1
+   ],
+   "target": "妻财",
+   "expect": [
+    {
+     "atLine": 1,
+     "monthGrade": "囚"
+    },
+    {
+     "tag": "日冲",
+     "rule": "日破"
+    }
+   ]
+  }
+ ]
+}
