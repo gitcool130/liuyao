@@ -14,10 +14,10 @@
  *   GPT_BASE_URL      OpenAI 兼容接口地址，默认 https://api.openai.com/v1（中转接口改这里）；别名 OPENAI_BASE_URL
  *   GPT_MODELS        GPT 可用模型清单（逗号分隔），默认 gpt-6-luna,gpt-6-sol,gpt-6-astra；别名 OPENAI_MODELS
  *   兼容回退：LLM_API_KEY / LLM_BASE_URL（旧单模型配置）
- *   ACCESS_CODE       选填，设置后页面需输入访问口令
+ *   ACCESS_CODE       选填，设置后页面需输入访问口令（生产曾于 2026-09-28 启用，同日撤销，当前未设置）
  *   RATE_LIMIT_PER_MIN 选填，按访客 IP 的每分钟请求上限（未设置则不限流）；
  *                      仅本 isolate 内计数，属「降低」而非「根治」，
- *                      生产务必同时配置 ACCESS_CODE 并在 CF 后台对 /api/interpret 加 Rate Limiting 规则
+ *                      生产已设 =20；如需更强防护，应在 CF 后台对 /api/interpret 加 Rate Limiting 规则
  */
 
 // 供应商解析共享层（白名单 / 自定义供应商 / json 响应 / 常量时间口令比较），与 models.js 同一口径

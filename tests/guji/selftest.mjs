@@ -165,6 +165,35 @@ if (fs.existsSync(CASES)) {
     ['改月建令用神由静转旺（辰→亥，「真空」应不成立）', function (d) {
       const c = d.cases.find(function (x) { return x.id === 'zsby-1547-zhenkong'; });
       c.monthZhi = '亥'; // 用神子水由「死」（辰土克水）转「旺」（亥为同气）→ 真空不成立
+    }],
+    /* ---- 以下针对〈八宫图第三〉乾为天说例（月建/日辰族）与〈动变生克冲合章〉卦例 ---- */
+    ['改月建令「泄气于月」转「克月建」（申→亥，戌土由生令转克令）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-0448-shi-xieqiyue'; });
+      c.monthZhi = '亥';
+    }],
+    ['改日辰令「日辰比和」消失（辛未→壬申，土→金）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-0450-shi-richibihe'; });
+      c.dayGZOnly = '壬申';
+    }],
+    ['改日辰令「泄气于日」消失（壬申→辛未）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-0450-shi-rixieqi'; });
+      c.dayGZOnly = '辛未';
+    }],
+    ['改日辰令「耗于日辰」消失（乙亥→辛未）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-0450-shi-rihaoqi'; });
+      c.dayGZOnly = '辛未';
+    }],
+    ['改卦画令上爻由动转静（「化回头克」消失）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-0633-dongbian-fanwei'; });
+      c.toss[5] = 0; // 上爻酉金：6 老阴动 → 0 少阴静
+    }],
+    ['改卦画令四爻由动转静（「变爻生用」消失）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-0633-bianyao-shengyong'; });
+      c.toss[3] = 0; // 四爻丑土：6 老阴动 → 0 少阴静，其变爻酉金随之不存在
+    }],
+    ['改卦画令四爻由动转静（「变爻克用」消失）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-0633-bianyao-keyong'; });
+      c.toss[3] = 0;
     }]
   ];
 
@@ -182,6 +211,47 @@ if (fs.existsSync(CASES)) {
   console.log('注入 ' + cmut.length + ' 类已知错误：');
   rowsC.forEach(function (r) { console.log(r); });
   console.log('\n断语层捕获率 ' + caughtC + ' / ' + totalC);
+}
+
+/* ---------- 断语断言层（《卜筮正宗》飞伏定例）的变异验证 ---------- */
+let caughtF = 0, totalF = 0;
+
+const FCASES = path.join(__dirname, 'cases', 'bushi-zhengzong.json');
+if (fs.existsSync(FCASES)) {
+  const fdoc = JSON.parse(fs.readFileSync(FCASES, 'utf8'));
+  const baseF = checkCases(fdoc);
+  console.log('\n-- 断语断言层（《卜筮正宗》飞伏定例）--');
+  console.log('基线：' + baseF.checks + ' 断言　' + baseF.cases + ' 条用例　失败 ' + baseF.fails);
+
+  const fmut = [
+    ['改卦画令伏神不复存在（火山旅→乾为天，卦中六亲俱全）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'bszz-0798-lv-fukefei'; });
+      c.toss = [1, 1, 1, 1, 1, 1];
+    }],
+    ['改卦画令伏神不复存在（火水未济→乾为天）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'bszz-0818-weiji-fukefei'; });
+      c.toss = [1, 1, 1, 1, 1, 1];
+    }],
+    ['改 target 令用神不落伏神（父母→兄弟）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'bszz-0817-ding-fukefei'; });
+      c.target = '兄弟';
+    }]
+  ];
+
+  const rowsF = [];
+  fmut.forEach(function (m) {
+    const d = clone(fdoc);
+    m[1](d);
+    const R = checkCases(d);
+    totalF++;
+    const ok = R.fails > baseF.fails || R.noDomain.length > baseF.noDomain.length;
+    if (ok) caughtF++;
+    rowsF.push('  ' + (ok ? '✓ 捕获' : '✗ 漏报') + '　' + m[0] +
+      '　（不符 ' + R.fails + ' / 无解 ' + R.noDomain.length + '）');
+  });
+  console.log('注入 ' + fmut.length + ' 类已知错误：');
+  rowsF.forEach(function (r) { console.log(r); });
+  console.log('\n飞伏断语层捕获率 ' + caughtF + ' / ' + totalF);
 }
 
 /* ---------- 表格式语料（六神 / 伏神）的变异验证 ---------- */
@@ -271,7 +341,7 @@ if (fs.existsSync(BSC) && fs.existsSync(KNOWN_FILE)) {
   console.log('\n表格式层捕获率 ' + caughtB + ' / ' + totalB);
 }
 
-const totalCaught = caught + caughtC + caughtB, totalMut = MUTATIONS.length + totalC + totalB;
+const totalCaught = caught + caughtC + caughtF + caughtB, totalMut = MUTATIONS.length + totalC + totalF + totalB;
 console.log('\n合计捕获率 ' + totalCaught + ' / ' + totalMut);
 console.log('');
 if (totalCaught === totalMut) {

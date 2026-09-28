@@ -23,7 +23,7 @@
 - **断卦符号化（无评分制）**：废弃旧版 +2.5/-2 算术评分，改为规则判定链——每条规则独立函数、可单测，输出 `judgments[]`（tag/rule/text/basis 典据）+ `trend`（吉/凶/平/待审，规则汇聚表驱动）+ `yingqiClues`（应期线索，只出线索不下结论）
 - **暗动闭环**：静爻被日冲，先查月令旺衰（旺相=暗动，休囚=日破）——修复旧版「文字说了一套、代码没做」
 - **规则覆盖**：月建档（旺相休囚死）、真假月破、日辰生克拱扶、冲散/暗动/日破、合起合绊、静空/动空/真空（**真空以「安静」为前提，动爻永不真空**）、回头生克冲合、进神退神、三合局、相刑相害、飞伏生克、用神两现取舍、伏神引拔、伏神伏世下（不误报用神持世）
-- **质量保障**：`test-core.js` 66 项基础自检 + `test-rules.js` 160 项规则链单测 + `test-gua-types.js` 卦型判定回归（64 卦全枚举 + 京房八宫卦次整表 + 10 类变异自检） + `test-functions.mjs` 28 项 Functions 层 + `test-shake.js` 49 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（10 万+字段）+ `tests/guji` 古籍卦例回归（《增删卜易》《卜筮正宗》404 条卦例 + 21 条断语用例 / 12075 断言，断卦规则覆盖 23/51，另附 31 类变异自检）+ `tests/verify` 外部验证集三方对账与零依赖金标准回归；CI 另有「部署隔离断言」守住 `public/` 边界
+- **质量保障**：`test-core.js` 66 项基础自检 + `test-rules.js` 160 项规则链单测 + `test-gua-types.js` 卦型判定回归（64 卦全枚举 + 京房八宫卦次整表 + 10 类变异自检） + `test-functions.mjs` 28 项 Functions 层 + `test-shake.js` 49 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（10 万+字段）+ `tests/guji` 古籍卦例回归（《增删卜易》《卜筮正宗》404 条卦例 + 40 条断语用例 / 12102 断言，断卦规则覆盖 37/51，另附 41 类变异自检）+ `tests/verify` 外部验证集三方对账与零依赖金标准回归；CI 另有「部署隔离断言」守住 `public/` 边界
 
 ### 三库交叉差分（test-diff.mjs，devDependencies 不进生产）
 
@@ -37,20 +37,20 @@
 
 ### 古籍卦例回归（tests/guji，M13）
 
-以两部传世定本（皆公有领域）的实占卦例做 golden test，合计 **404 条卦例 + 21 条断语用例、12075 项断言**；断卦规则覆盖 **23 / 51 = 45.1%**（`npm run guji:coverage`）：
+以两部传世定本（皆公有领域）的实占卦例做 golden test，合计 **404 条卦例 + 40 条断语用例、12102 项断言**；断卦规则覆盖 **37 / 51 = 72.5%**（`npm run guji:coverage`）：
 
 - **《增删卜易》**（清·野鹤老人传，李文辉增删，康熙三十年刊本）207 条六行卦体 → 对账纳甲地支 / 六亲 / 世应 / 变卦；
 - **《卜筮正宗》**（清·王洪绪）197 条表格卦例 → 对账纳甲地支 / 六亲 / **六神** / **伏神**（六神依日干起、伏神取本宫首卦同位，正是表格版式独有的两个维度）。
 
 书里对每一卦印有两组互相独立的信息——**卦画**（六爻阴阳与动爻）与**装卦**（六爻六亲、纳甲地支、世应、变卦、六神、伏神）——本回归以前者作引擎输入、后者作断言期望，故不存在「拿引擎输出当期望」的自证问题（本仓库历史上出现过恒真空断言，此处刻意规避，并有变异自检兜底）。
 
-> 语料转换缺陷（td 错位/串栏/讹字）不作静默跳过，而是逐条回溯定本原文定性后登记于 `tests/guji/known-text-issues.json`（当前 31 处），`run.mjs` 单独列出条数。结论：12075 项断言全部通过，31 处差异均属第三方转换文本缺陷，**引擎侧零分歧**；另有 1 处**口径分歧**锁定在案（见 `tests/guji/README.md` §七）。
+> 语料转换缺陷（td 错位/串栏/讹字）不作静默跳过，而是逐条回溯定本原文定性后登记于 `tests/guji/known-text-issues.json`（当前 31 处），`run.mjs` 单独列出条数。结论：12102 项断言全部通过，31 处差异均属第三方转换文本缺陷，**引擎侧零分歧**；另有 5 处**口径分歧**锁定在案（见 `tests/guji/README.md` §七）。
 
 > **断语断言**取自《增删卜易》明文断语（如「飞来生伏」「鬼化退神」「世临月建之官」），逐条回溯到 `cases[].quote`。它把「实现口径 vs 原书口径」的差异变成可见、可追踪的条目——上一轮由用例暴露出一处 `ruleXunKong` 的判定优先级缺陷，**本轮已依《卜筮正宗·旬空论第十》原文修正**（详见 `tests/guji/README.md` §七）。
 
 > **不必把节气表前推到康熙年间**：古籍只记「月建 + 日辰干支」，不记公历年份；而 `analyze.js` 的规则链零引用年柱与时柱（仅用 `monthZhi` / `dayZhi` / `dayGan` / `kong`，可用 grep 复核），
 > 故可由 `tests/guji/lib/ganzhi.mjs` 在 1900–2100 内搜索等价日期驱动引擎。等价性论证与「前提被破坏时该怎么办」见 `tests/guji/README.md` §二。
-> 附带产物是**变异自检**（`npm run test:guji:self`）：向期望值逐类注入 31 类已知错误，验证 31/31 均能变红——用于证明「全绿」不是空转；它已抓出数处真实设计边界，记录在该 README §十。
+> 附带产物是**变异自检**（`npm run test:guji:self`）：向期望值逐类注入 41 类已知错误，验证 41/41 均能变红——用于证明「全绿」不是空转；它已抓出数处真实设计边界，记录在该 README §十一。
 > 已登记分歧 1 条：辰月戊申日占父近病「申日冲寅木而暗动」，原书作**暗动**，本实现按旺相休囚死口径（寅木在辰月属「囚」）判**日破**；而同书〈增删黄金策千金赋〉「休囚为日破，不为暗动」反与本实现一致——同一书内两处口径不一。处理方式为**保留实现口径、登记分歧、锁定现状**，见 `tests/guji/README.md` §七。
 > 原第 2 条分歧（子月癸酉日自占婚「戌土虽值旬空，**动不为空**」，本实现旧版误判「真空」）已于本轮**修正引擎**：依《卜筮正宗·旬空论第十》原文，真空两分支（「休囚**安静**」「**静**逢月破」）皆以安静为前提，故 `moving` 是真空的**前置守卫**。该用例已由「登记分歧」转为正常断言，并补 9 条单测 + 2 类变异（动↔静两个方向）锁定，另补一条正面对偶用例 `zsby-1547-zhenkong`（原书断「财伏而空，全无影响」）保住「真空」的正当覆盖。
 
@@ -80,7 +80,7 @@
 | M8 随机源 | 生产代码无 `Math.random` 用于爻值生成 | `app.js` secureCoin/cryptoToss |
 | M9 三库差分 | 4096 爻组合 + 历法时点 + 夜子时双流派 + 节气全量，三方比对零 BUG、零未裁决流派分歧 | `test-diff.mjs`（10 万+字段） |
 | M12 CI 门禁 | push/PR 触发：单测 + 差分 + 语法检查 + 脚本加载顺序，只验证不部署 | `.github/workflows/ci.yml`、`npm run test:all` |
-| M13 卦例回归 | 古籍 golden test：《增删卜易》207 条六行卦体（纳甲/六亲/世应/变卦）+《卜筮正宗》197 条表格卦例（另覆盖**六神/伏神**）+ 21 条**断语用例**（覆盖 23/51 条断卦规则），合计断言 12075 项；期望取自定本印刷内容（卦画作输入、装卦作期望），另有 31 类变异自检保证非空转；31 处文本缺陷逐条回溯原文登记（非静默跳过），1 处口径分歧锁定在案；**并已由用例反向修正引擎 1 处**（`ruleXunKong` 真空守卫） | `tests/guji/`（run.mjs / selftest.mjs / coverage.mjs / README.md / known-text-issues.json）、`tools/guji-import.mjs`、`tools/guji-import-bszz.mjs` |
+| M13 卦例回归 | 古籍 golden test：《增删卜易》207 条六行卦体（纳甲/六亲/世应/变卦）+《卜筮正宗》197 条表格卦例（另覆盖**六神/伏神**）+ 40 条**断语用例**（覆盖 37/51 条断卦规则），合计断言 12102 项；期望取自定本印刷内容（卦画作输入、装卦作期望），另有 41 类变异自检保证非空转；31 处文本缺陷逐条回溯原文登记（非静默跳过），5 处口径分歧锁定在案；**并已由用例反向修正引擎 1 处**（`ruleXunKong` 真空守卫） | `tests/guji/`（run.mjs / selftest.mjs / coverage.mjs / README.md / known-text-issues.json）、`tools/guji-import.mjs`、`tools/guji-import-bszz.mjs` |
 | M14 卦型判定与外部验证集对账 | ① 三项卦型判定落地引擎（六冲卦 10 / 六合卦 8 / 游魂归魂各 8），期望取自**京房八宫卦次整表**（64 卦全枚举）而非实现自身输出，另附 10 类变异自检，断言 88 项；② 外部验证集三方对账：引擎侧被裁判库判负 **0 项**，52 项分歧逐条归责于用例（三病因全解释）；③ 裁决基线由**零依赖**回归（173 断言）在日常守护，不需要裁判库在场 | `public/core/paipan.js`、`test-gua-types.js`、`tests/verify/`（run.mjs 判责 / regress.mjs 断言 / README.md / 原始件 v1 / 裁决件 v1.1） |
 
 > 暗动闭环（M3 核心）的验收方式是「翻转证明」：同一静爻、同一日辰，仅改月令旺衰即令结论在暗动/日破之间翻转——见 `test-rules.js` 第 2 组。
@@ -199,7 +199,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | 2 | 🔴 P0 | 同上，服务端读路径信任库内历史脏 id | `ID_RE` 上提至模块级；GET 列表按 `ID_RE` 过滤非法行，GET `?id=` 非法 id 直接 400 |
 | 3 | 🟠 P1 | `interpret.js` 的 `wl[provider]` 走原型链 → `provider='constructor'` 抛未捕获 TypeError → 边缘 500（前端误显示为「新部署传播中」） | 改 `Object.prototype.hasOwnProperty.call(wl, provider)` |
 | 4 | 🟠 P1 | `interpret.js` 口令仍是明文 `!==`，未复用 `safeEqual`（台账 13 条只修了 `records.js`，属同类修复未收口） | `safeEqual` 上移至 `_lib.js` 共用，`records.js` 改为 import 并 re-export（保持既有 import 路径），`interpret.js` 改用它 |
-| 5 | 🟠 P1 | `/api/interpret` 无限流/无来源校验，单请求可达 88,000 字符入模（费用敞口） | 入模上限收敛为 `4,000 + 8×2,000 ≈ 20,000`；新增可选 `RATE_LIMIT_PER_MIN`（按 IP 滑窗）。**2026-09-28 已在生产启用**：`ACCESS_CODE`（secret）+ `RATE_LIMIT_PER_MIN=20`（`wrangler.toml [vars]`），实测无口令 → `401` |
+| 5 | 🟠 P1 | `/api/interpret` 无限流/无来源校验，单请求可达 88,000 字符入模（费用敞口） | 入模上限收敛为 `4,000 + 8×2,000 ≈ 20,000`；新增可选 `RATE_LIMIT_PER_MIN`（按 IP 滑窗）。**2026-09-28 生产已启用 `RATE_LIMIT_PER_MIN=20`**（`wrangler.toml [vars]`）。全站口令 `ACCESS_CODE` 同日启用后**同日撤销**（改为断卦不受限），现由限流单独兜底 |
 | 6 | 🟡 P2 | `loadCast()` 无 `try/catch` → 接口异常时点击「什么都不会发生」 | 全函数包 `try/catch` + `libDetailError()` 写入 `#libDetail` 并提示；补 `data.record` 空值守卫 |
 | 7 | 🟡 P2 | 三合／刑害／世爻 tag 不在 `aggregateTrend` 汇聚表内（永不影响 `trend`）；`ruleSanHe` 有死形参 | 死形参 `target` 已删（定义与调用点同步）；**汇聚表覆盖属口径问题，未擅改**——已登记进「已知口径分歧」并附可直接套用的改动清单 |
 | 8 | 🟡 P2 | `gen-jieqi.js` 去尾逗号用值比较（`lines[末项] === l`）而非下标 | 改 `i === lines.length - 1`；`:68` 的 Uint32 断言文案改为与实际实现一致（`JIEQI_DELTAS` 为普通数字数组） |
@@ -256,8 +256,8 @@ git status -sb                    # 若显示 ahead，先推送再审计
 - **卦例库口令**：`LIB_CODE` 专管卦例库**写入**（装入/更新），与全站闸 `ACCESS_CODE` 解耦——浏览开放、装入登录、断卦不受限；页面「口令登录」按钮经 `POST /api/records?verify=1` 探针验证，自动保存静默跳过未登录状态
 - **密钥不出服务端**：API Key 全部存 CF secret（加密变量，wrangler 部署不覆盖），模型名白名单 + 输入长度截断防注入
 - **读接口开放的影响范围（第五轮审计补充 → 2026-09-28 已闭合）**：`GET /api/records` 列表与 `?id=` 详情原先**始终开放**，在只设 `LIB_CODE` 的配置下任何访客可读到全部卦例的 `question`（占问之事）与 `pillars`；猜中/拿到 id 后 `?id=` 还会返回 **`pan_text` 全文与 `messages`（各模型完整 AI 对话历史）**。问病、问讼、问感情类占问内容属隐私。
-  **现已随全站 `ACCESS_CODE` 启用而收口**：实测无口令读列表/详情均返回 `401 ACCESS_REQUIRED`（`records.js` 的 `checkAccess` 以 `ACCESS_CODE` 为闸），仅 `/api/models` 保持免口令（模型芯片需在登录前加载）。
-- **请求规模与限流**：`/api/interpret` 单请求上限为 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符；`RATE_LIMIT_PER_MIN` 按访客 IP 限流（仅 isolate 内计数）。**两端已于 2026-09-28 收口**：生产已设 `ACCESS_CODE`（全站口令）与 `RATE_LIMIT_PER_MIN=20`，`/api/interpret` 不再是开放端点（无口令 → `401 ACCESS_REQUIRED`）。仍建议在 CF 后台对 `/api/interpret` 追加 Rate Limiting 规则，以补 isolate 内计数可被绕过的缺口
+  **2026-09-28 曾随全站 `ACCESS_CODE` 收口**（无口令读列表/详情 → `401 ACCESS_REQUIRED`），**同日撤销 `ACCESS_CODE` 后回归开放**（实测 `GET /api/records` → `200`、`?id=x` → `404`）。当前口径为「卦例**浏览开放、装入需 `LIB_CODE`**」，`/api/models` 与读接口均免口令。
+- **请求规模与限流**：`/api/interpret` 单请求上限为 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符；`RATE_LIMIT_PER_MIN` 按访客 IP 限流（仅 isolate 内计数）。**2026-09-28 生产已设 `RATE_LIMIT_PER_MIN=20`**；全站口令 `ACCESS_CODE` 于同日启用后撤销，`/api/interpret` **回归无口令开放**（实测无口令 → 越过守卫，直接进入参数校验）。费用敞口现由「入模上限 20,000 + 按 IP 限流 20/分」共同约束，二者均属「削减」而非「根治」
 - **部署防回归**：已禁用 GitHub 集成的自动生产部署（其 Functions 构建缓存会回滚代码并抢占生产），统一由 wrangler direct upload 部署
 
 ### 生成式琴音（bgm.js）
@@ -295,7 +295,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
   Custom   → CUSTOM_PROVIDERS 声明任意多家（Kimi/Qwen/GLM/硅基流动等）
 ```
 
-安全设计：API Key 仅存服务端 secret，模型名服务端白名单校验防注入，可选 ACCESS_CODE 访问口令。
+安全设计：API Key 仅存服务端 secret，模型名服务端白名单校验防注入，可选 ACCESS_CODE 访问口令（当前未启用，生产靠按 IP 限流兜底）。
 
 ## 文件说明
 
@@ -374,10 +374,11 @@ git status -sb                    # 若显示 ahead，先推送再审计
 
 **其他**
 
-- `LIB_CODE`：卦例库写入口令（secret）。设置后装入卦例库需先在页面「口令登录」；未设置则写入开放。**只管写入**，读取沿由下面的 `ACCESS_CODE` 管控。**生产已设**。
-- `ACCESS_CODE`：全站访问口令（secret），设置后**所有接口**（含断卦）都需口令。**生产已于 2026-09-28 启用**（口令值只存 CF secret，不落仓库与文档）。页面首次调用收 401 → 前端弹框输入 → 存入 `localStorage['ly_access_code']`，此后请求带 `X-Access-Code` 头。
-  换口令只需 `wrangler pages secret put ACCESS_CODE --project-name=liuyao`，**无需重新部署**（secret 即时生效）。
-  > 与 `LIB_CODE` 的关系：设了 `ACCESS_CODE` 后**读取与断卦也需口令**，比只设 `LIB_CODE` 更严。两者可共存——`ACCESS_CODE` 管读与断卦，`LIB_CODE` 专管卦例库写入（`records.js` 中 `LIB_CODE || ACCESS_CODE` 的回退只在 `LIB_CODE` 未设时生效）。
+- `LIB_CODE`：卦例库写入口令（secret）。设置后装入卦例库需先在页面「口令登录」；未设置则写入开放。**只管写入**，浏览与断卦均不受其约束。**生产已设**（值只存 CF secret，不落仓库与文档）。
+- `ACCESS_CODE`：全站访问口令（secret），设置后**所有接口**（含断卦与卦例读取）都需口令。**2026-09-28 曾在生产启用，同日按需求撤销**——撤销后断卦恢复免口令开放。**当前未设置**。
+  - 如需重新启用：`wrangler pages secret put ACCESS_CODE --project-name=liuyao`（值走 stdin）。
+  - ⚠️ **实测订正**：secret 变更（尤其**删除**）后，**线上 Functions 仍持有旧环境快照**，必须重新部署一次才生效——只删 secret 不部署，`401` 会持续 3 分钟以上。此前文档写「secret 即时生效、无需重新部署」**不准确**，已按实测更正。
+  > 与 `LIB_CODE` 的关系：`ACCESS_CODE` 管读与断卦，`LIB_CODE` 专管卦例库写入（`records.js` 中 `LIB_CODE || ACCESS_CODE` 的回退只在 `LIB_CODE` 未设时生效）。撤销 `ACCESS_CODE` 后，写入闸由 `LIB_CODE` 单独承担。
 - `RATE_LIMIT_PER_MIN`：`/api/interpret` 按访客 IP 的每分钟请求上限。**生产已设 `20`**，写在 `wrangler.toml [vars]`（非敏感、随仓库版本管理）。
   取 20 的理由：正常用法是「一次起卦 + 若干追问」，约 3~6 次/分；20 留 3~5 倍余量，共用出口（同 IP）也不易误伤；对脚本则把天花板压到 ≈2.9 万次/日/IP。仅当前 isolate 内计数，属成本抑制兜底，仍建议在 CF 后台对该路径另配 Rate Limiting 规则叠加。
 - 文件清单新增 `bgm.js`（琴音引擎）。
