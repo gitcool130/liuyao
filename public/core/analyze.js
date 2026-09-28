@@ -417,8 +417,17 @@
   // 三合局：卦中动爻地支三支成局；变爻亦参与——
   // 旧版只统计本卦动爻，漏判「两动爻 + 一变爻」型三合（如动爻申、动爻子，另一动爻化辰）。
   // 取源顺序把本卦动爻排在变爻之前，贪心匹配优先用本卦动爻，避免同爻本变双算。
-  // 注：本函数不取用神（三合成局与否与「取哪个用神」无关），故无 target 形参
-  function ruleSanHe(pan) {
+  // target 只参与「吉凶映射」，不参与成局筛选——成局与否与取哪个用神无关，
+  // 但成局之吉凶与用神有关，故本函数仍需用神（第五轮曾把 target 误判为死形参而删除，
+  // 现依经典恢复启用）。
+  // 依据《增删卜易·六合章第十九》：「三合其局者，用神旺则无不为吉」，其吉凶由
+  // 「局五行 对 用神五行」的生克定——原文以「如占功名，合成官局谓之官旺；合成财局，
+  // 财旺生官；倘合成子孙局者，乃伤用之神也」为例，而「合成子孙局」正是「局泄用神」
+  // 一类的五行表述，故本质即局与用神的同气／生／克。据此：
+  //   局与用神同气（比和）｜局生用神  → 助，入 supports
+  //   局克用神                        → 伤，入 harms
+  //   泄（用神生局）｜耗（用神克局）  → 不入汇聚表，与既定的「泄气于月不入 harms」同口径
+  function ruleSanHe(pan, target) {
     const js = [];
     const src = [];
     pan.lines.forEach(function (l) {
@@ -430,6 +439,16 @@
       src.push({ zhiIdx: l.bian.zhiIdx, from: '变爻' + l.bian.lq + l.bian.zhi, owner: 'b' + l.pos });
     });
     if (src.length < 3) return js;
+    // 用神：仅供吉凶映射。取不到（或调用方未传 target）则只陈述成局事实，不下助伤之断。
+    const pickS = target ? pickYongshen(pan, target) : null;
+    const Y = pickS && pickS.primary ? pickS.primary : null;
+    const REL_SANHE = {
+      '比和': { relation: '同气', verdict: '局与用神同气，帮身而势成。' },
+      '得生': { relation: '生用', verdict: '局生用神，得局之助。' },
+      '受克': { relation: '克用', verdict: '局反克用神，成局而受伤。' },
+      '泄': { relation: '泄用', verdict: '用神泄气于局，成而力耗。' },
+      '耗': { relation: '耗用', verdict: '用神克局，成之亦费力。' }
+    };
     LY.SANHE.forEach(function (sh) {
       const used = [], detail = [];
       const hit = sh.zhis.every(function (z) {
@@ -441,16 +460,23 @@
       });
       if (!hit) return;
       const byBian = detail.some(function (d) { return d.indexOf('（变爻') >= 0; });
+      const rel = Y ? (REL_SANHE[relation5(Y.wx, sh.wx)] || { relation: '', verdict: '' }) : { relation: '', verdict: '' };
       js.push({
         tag: '三合', rule: sh.zhis.map(function (z) { return ZHI[z]; }).join('') + '三合' + sh.wx + '局',
-        text: detail.join('、') + '成三合' + sh.wx + '局，党同气而势成。' + (byBian ? '（含动爻化出之支）' : ''),
-        basis: '三合成局，其力专；动爻与其化出之爻同参成局'
+        relation: rel.relation,
+        text: detail.join('、') + '成三合' + sh.wx + '局，党同气而势成。' + (byBian ? '（含动爻化出之支）' : '') + rel.verdict,
+        basis: '三合成局，其力专；动爻与其化出之爻同参成局' +
+          (Y ? '。局之吉凶依《增删卜易·六合章》「用神旺则无不为吉」，局生用神为助、局克用神为伤' : '')
       });
     });
     return js;
   }
 
   // 刑害：用神与日辰、月建之间
+  // 不参与 trend 汇聚（见 aggregateTrend 注释与 README「已知口径分歧」）：
+  // 《增删卜易·三刑章第二十一》野鹤老人自述「只以三刑为证而应验，这数十年，我只得到
+  // 这一卦」，且谓子卯、丑未之刑「多是附和为凶」——刑非凶之主因，其「附和」语义
+  // 恰由「WEAK + 有伤克 → 凶」分支天然表达，故此处只陈述、不改 trend。
   function ruleXingHai(L, pil, target) {
     const js = [];
     const nm = nameOf(L, target);
@@ -460,10 +486,10 @@
     ].forEach(function (o) {
       const xingKey = L.zhi + o.zhi;
       if (LY.XING[xingKey]) {
-        js.push({ tag: '相刑', rule: LY.XING[xingKey], text: nm + '与' + o.from + o.zhi + '相刑（' + LY.XING[xingKey] + '），刑则有伤。', basis: '刑主伤残' });
+        js.push({ tag: '相刑', rule: LY.XING[xingKey], text: nm + '与' + o.from + o.zhi + '相刑（' + LY.XING[xingKey] + '），刑则有伤。', basis: '刑主伤残；然《增删卜易·三刑章》谓刑多「附和为凶」，非凶之主因，须用神本衰方验' });
       }
       if (LY.HAI[L.zhiIdx + '_' + o.zhiIdx]) {
-        js.push({ tag: '相害', rule: '六害', text: nm + '与' + o.from + o.zhi + '相害，害则相损。', basis: '害主妨害' });
+        js.push({ tag: '相害', rule: '六害', text: nm + '与' + o.from + o.zhi + '相害，害则相损。', basis: '害主妨害，其力逊于冲克，列入汇聚会失之过重' });
       }
     });
     return js;
@@ -472,16 +498,35 @@
   // ---------- 汇聚：trend 由规则表驱动 ----------
   // supports/harms 为规则标签集合，非数值
   //
-  // ⚠ 覆盖范围（第五轮审计提出，属待维护者拍板的口径问题，非缺陷）：
-  //   ruleSanHe（三合:*）、ruleXingHai（相刑:* / 相害:*）、ruleShi（世爻:*）
-  //   以及动变的 化泄气/化耗气/化比和 的 tag 均**不在**下方名单内，
-  //   因此这些要件目前只作为 bullet 陈述事实，永不改变 trend。
-  //   若确认应纳入，需把对应 tag 补进 supports / harms 并同步补 test-rules 断言
-  //   （现 test-rules 对 trend 有 7 条硬断言，改口径必然联动）。
+  // 纳入准则（第五轮提出，第六轮依经典定论）：
+  //   trend 的语义是「用神旺衰粗判」（见 TREND_TEXT 与 verdict 文案），故纳入与否取决于
+  //   「该要件是否直接、单向地作用于用神自身的力量」，且「其吉凶方向不依赖占类」。
+  //
+  //   ① 三合局 → 纳入。依《增删卜易·六合章第十九》「三合其局者，用神旺则无不为吉」，
+  //      吉凶由局与用神的生克定，直接作用于用神力量。由 ruleSanHe 产出 relation
+  //      （同气／生用 → supports；克用 → harms；泄用／耗用不入表）。
+  //   ② 刑害（相刑:*/相害:*）→ 不纳入。依《增删卜易·三刑章第二十一》，野鹤老人自述
+  //      「只以三刑为证而应验，这数十年，我只得到这一卦」，且「子卯、辰、戌、丑未亦有
+  //      应验，但多是附和为凶」——刑非凶之主因，只在用神本已虚弱时「附和」——此语义
+  //      恰由下方 `harms.length > 0 && !supports.length && WEAK` 分支天然实现（虚弱＋有伤
+  //      → 凶），无需再入表；若强行入 harms，反而会让「旺相用神遇单刑」由吉降平，
+  //      与「旺者不畏刑」相悖。
+  //   ③ 世爻关系（世爻:*）→ 不纳入。依《黄金策》《增删卜易》「用克世勿作凶看……如占求财，
+  //      财爻克世者必得；占行人，用神克世者即归；占医药，子孙克世者即愈。外此数占，俱不宜
+  //      用神而克世也。若占功名，官鬼克世，非祸即灾」——同一「用神克世」的吉凶随占类翻转，
+  //      无法映射为单一方向；且其作用对象是世爻（事与己），非用神旺衰。故只作 bullet 陈述。
   function aggregateTrend(ctx) {
     const supports = [], harms = [];
     const J = ctx.judgments;
     J.forEach(function (j) {
+      // 三合局：tag 固定「三合」，rule 为具体局名（申子辰三合水局…），吉凶须看 j.relation
+      // （见 ruleSanHe）。relation 缺省（未传用神）时不入表，只陈述成局事实。
+      if (j.tag === '三合') {
+        const e = '三合:' + j.rule + '（' + j.relation + '）';
+        if (j.relation === '同气' || j.relation === '生用') supports.push(e);
+        else if (j.relation === '克用') harms.push(e);
+        return;
+      }
       const t = j.tag + ':' + j.rule;
       if (['月建:临月建', '月建:月建同气', '月建:月建生扶', '日辰:临日辰', '日辰:日辰生扶', '日辰:日辰比和',
         '动变:化回头生', '动变:化进神', '日冲:暗动', '日合:合起', '伏神:飞来生伏', '伏神:飞伏同气', '伏神:日冲飞神',
@@ -553,7 +598,7 @@
     });
     ruleShi(pan, L, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
     ruleFu(pan, L, pil, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
-    ruleSanHe(pan).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
+    ruleSanHe(pan, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
     ruleXingHai(L, pil, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
 
     // 应期线索（只出线索，不下结论）

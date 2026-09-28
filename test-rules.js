@@ -460,6 +460,78 @@ eq('临日辰路径仍生效', C.ruleDay(Lmu, mkPil({ monthZhi: 2, dayZhi: 2 }),
   eq('伏克飞单列', C.ruleFu(panKe, fuL2, mkPil({}), '父母').some(function (j) { return j.rule === '伏克飞神'; }), true);
 })();
 
+// ---------- 17. 第六轮：三合局纳入汇聚表（依《增删卜易·六合章第十九》） ----------
+// 原文：「三合其局者，用神旺则无不为吉……如占功名，合成官局谓之官旺；合成财局，财旺生官；
+//        倘合成子孙局者，乃伤用之神也」——「合成子孙局」即「局泄用神」的五行表述，
+//        故三合吉凶由「局五行 对 用神五行」的生克定，ruleSanHe 因而需用神（target 恢复启用）。
+(function () {
+  const L = function (o) { return Object.assign({ pos: 0, zhi: '巳', zhiIdx: 5, wx: '火', lq: '官鬼', moving: false, bian: null, isFu: false }, o); };
+  // 三动爻申子辰成水局；用神取四爻妻财，其五行可变，以遍历「局对用神」五态
+  const mkPan = function (yWx) {
+    return { lines: [
+      L({ pos: 0, zhi: '申', zhiIdx: 8, wx: '金', lq: '兄弟', moving: true }),
+      L({ pos: 1, zhi: '子', zhiIdx: 0, wx: '水', lq: '父母', moving: true }),
+      L({ pos: 2, zhi: '辰', zhiIdx: 4, wx: '土', lq: '官鬼', moving: true }),
+      L({ pos: 3, zhi: '卯', zhiIdx: 3, wx: yWx, lq: '妻财' }),
+      L({ pos: 4, zhi: '巳', zhiIdx: 5, wx: '火', lq: '兄弟' }),
+      L({ pos: 5, zhi: '未', zhiIdx: 7, wx: '土', lq: '父母' })
+    ] };
+  };
+  const rel = function (yWx) { return C.ruleSanHe(mkPan(yWx), '妻财')[0].relation; };
+  eq('水局 × 用神水 → 同气', rel('水'), '同气');
+  eq('水局 × 用神木 → 生用（水生木）', rel('木'), '生用');
+  eq('水局 × 用神火 → 克用（水克火）', rel('火'), '克用');
+  eq('水局 × 用神金 → 泄用（用神生局）', rel('金'), '泄用');
+  eq('水局 × 用神土 → 耗用（用神克局）', rel('土'), '耗用');
+  eq('不传 target 时不判助伤（兼容旧调用，只陈述成局）', C.ruleSanHe(mkPan('木'))[0].relation, '');
+  eq('成局事实不受 target 影响（局名与来源仍照出）', C.ruleSanHe(mkPan('木'))[0].text.indexOf('三合水局') >= 0, true);
+
+  const agg = function (relation) {
+    return C.aggregateTrend({
+      hasYongshen: true, grade: '旺', daySupports: true, zhenKong: false, zhenYuePo: false,
+      judgments: [{ tag: '三合', rule: '申子辰三合水局', relation: relation }]
+    });
+  };
+  eq('三合生用 → 入 supports', agg('生用').supports.length, 1);
+  eq('三合同气 → 入 supports', agg('同气').supports.length, 1);
+  eq('三合同气（旺相）→ trend 吉', agg('同气').trend, '吉');
+  eq('三合克用 → 入 harms', agg('克用').harms.length, 1);
+  eq('三合克用（旺相、无他生扶）→ 不判吉', agg('克用').trend, '平');
+  eq('三合泄用 → 不入 supports', agg('泄用').supports.length, 0);
+  eq('三合泄用 → 不入 harms（与「泄气于月不入 harms」同口径）', agg('泄用').harms.length, 0);
+  eq('三合耗用 → 不入 harms', agg('耗用').harms.length, 0);
+  eq('supports 条目带局名与关系', agg('生用').supports[0], '三合:申子辰三合水局（生用）');
+  eq('relation 缺省时不入表（只陈述）', agg('').supports.length + agg('').harms.length, 0);
+  // 端到端：真实排盘（乾为天六爻全动）应同时体现「火局同气」与「水局克用」两条三合判词
+  const resSH = C.analyze(C.paipan([9, 9, 9, 9, 9, 9], new Date(2026, 5, 15, 10, 0)), '官鬼');
+  eq('真实卦：三合入 supports', resSH.supports.some(function (s) { return s.indexOf('三合:') === 0; }), true);
+  eq('真实卦：三合入 harms', resSH.harms.some(function (h) { return h.indexOf('三合:') === 0; }), true);
+})();
+
+// ---------- 18. 第六轮：刑害与世爻关系「不」入汇聚表（依经典定论） ----------
+// 《增删卜易·三刑章第二十一》野鹤自述「只以三刑为证而应验，这数十年，我只得到这一卦」，
+//   并谓子卯、丑未之刑「多是附和为凶」——刑非凶之主因，只在用神本已虚弱时附和；
+//   该语义由「WEAK + harms>0 + 无 supports → 凶」分支天然实现，无需入表。
+//   反之若入 harms，会让「旺相用神遇单刑」由吉降平，与「旺者不畏刑」相悖。
+// 《黄金策》《增删卜易》「用克世勿作凶看……如占求财，财爻克世者必得；占行人，用神克世者即归；
+//   占医药，子孙克世者即愈……若占功名，官鬼克世，非祸即灾」——吉凶随占类翻转，
+//   无法映射为单一方向；且其作用对象是世爻（事与己），非用神旺衰，故只作 bullet 陈述。
+(function () {
+  const agg = function (grade, js) {
+    return C.aggregateTrend({ hasYongshen: true, grade: grade, daySupports: true, zhenKong: false, zhenYuePo: false, judgments: js });
+  };
+  const xh = [
+    { tag: '月建', rule: '临月建' }, { tag: '相刑', rule: '寅巳相刑' },
+    { tag: '相害', rule: '六害' }, { tag: '世爻', rule: '用神克世' }, { tag: '世爻', rule: '世克用神' }
+  ];
+  eq('刑害/世爻不入 supports', agg('旺', xh).supports, ['月建:临月建']);
+  eq('刑害/世爻不入 harms', agg('旺', xh).harms.length, 0);
+  eq('旺相 + 刑害/世爻 → 仍判吉（旺者不畏刑）', agg('旺', xh).trend, '吉');
+  // 附和为凶：用神本已虚弱且另有伤克时，凶由伤克定（刑只是附和）
+  eq('虚弱 + 伤克（另有刑）→ 凶', agg('死', [{ tag: '月破', rule: '真月破' }, { tag: '相刑', rule: '寅巳相刑' }]).trend, '凶');
+  eq('仅刑害、无伤克、旺相 → 不因刑而降吉', agg('相', [{ tag: '月建', rule: '月建生扶' }, { tag: '相刑', rule: '寅巳相刑' }]).trend, '吉');
+})();
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);
 
