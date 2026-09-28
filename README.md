@@ -187,7 +187,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | 2 | 🔴 P0 | 同上，服务端读路径信任库内历史脏 id | `ID_RE` 上提至模块级；GET 列表按 `ID_RE` 过滤非法行，GET `?id=` 非法 id 直接 400 |
 | 3 | 🟠 P1 | `interpret.js` 的 `wl[provider]` 走原型链 → `provider='constructor'` 抛未捕获 TypeError → 边缘 500（前端误显示为「新部署传播中」） | 改 `Object.prototype.hasOwnProperty.call(wl, provider)` |
 | 4 | 🟠 P1 | `interpret.js` 口令仍是明文 `!==`，未复用 `safeEqual`（台账 13 条只修了 `records.js`，属同类修复未收口） | `safeEqual` 上移至 `_lib.js` 共用，`records.js` 改为 import 并 re-export（保持既有 import 路径），`interpret.js` 改用它 |
-| 5 | 🟠 P1 | `/api/interpret` 无限流/无来源校验，单请求可达 88,000 字符入模（费用敞口） | 入模上限收敛为 `4,000 + 8×2,000 ≈ 20,000`；新增可选 `RATE_LIMIT_PER_MIN`（按 IP 滑窗，默认关闭）；生产配置要求写入 README |
+| 5 | 🟠 P1 | `/api/interpret` 无限流/无来源校验，单请求可达 88,000 字符入模（费用敞口） | 入模上限收敛为 `4,000 + 8×2,000 ≈ 20,000`；新增可选 `RATE_LIMIT_PER_MIN`（按 IP 滑窗）。**2026-09-28 已在生产启用**：`ACCESS_CODE`（secret）+ `RATE_LIMIT_PER_MIN=20`（`wrangler.toml [vars]`），实测无口令 → `401` |
 | 6 | 🟡 P2 | `loadCast()` 无 `try/catch` → 接口异常时点击「什么都不会发生」 | 全函数包 `try/catch` + `libDetailError()` 写入 `#libDetail` 并提示；补 `data.record` 空值守卫 |
 | 7 | 🟡 P2 | 三合／刑害／世爻 tag 不在 `aggregateTrend` 汇聚表内（永不影响 `trend`）；`ruleSanHe` 有死形参 | 死形参 `target` 已删（定义与调用点同步）；**汇聚表覆盖属口径问题，未擅改**——已登记进「已知口径分歧」并附可直接套用的改动清单 |
 | 8 | 🟡 P2 | `gen-jieqi.js` 去尾逗号用值比较（`lines[末项] === l`）而非下标 | 改 `i === lines.length - 1`；`:68` 的 Uint32 断言文案改为与实际实现一致（`JIEQI_DELTAS` 为普通数字数组） |
@@ -243,7 +243,8 @@ git status -sb                    # 若显示 ahead，先推送再审计
 - **D1 卦例库**：卦例含各模型独立对话历史（`{modelId: history[]}`），支持进阶探讨时延续上下文
 - **卦例库口令**：`LIB_CODE` 专管卦例库**写入**（装入/更新），与全站闸 `ACCESS_CODE` 解耦——浏览开放、装入登录、断卦不受限；页面「口令登录」按钮经 `POST /api/records?verify=1` 探针验证，自动保存静默跳过未登录状态
 - **密钥不出服务端**：API Key 全部存 CF secret（加密变量，wrangler 部署不覆盖），模型名白名单 + 输入长度截断防注入
-- **读接口开放的影响范围（第五轮审计补充）**：`GET /api/records` 列表与 `?id=` 详情**始终开放**（有意设计），故在只设 `LIB_CODE` 的推荐配置下，任何访客可读到全部卦例的 `question`（占问之事）与 `pillars`；猜中/拿到 id 后 `?id=` 还会返回 **`pan_text` 全文与 `messages`（各模型完整 AI 对话历史）**。问病、问讼、问感情类占问内容属隐私，如需收紧可给 `?id=` 详情挂 `checkAccess`，或仅返回 `messages` 摘要
+- **读接口开放的影响范围（第五轮审计补充 → 2026-09-28 已闭合）**：`GET /api/records` 列表与 `?id=` 详情原先**始终开放**，在只设 `LIB_CODE` 的配置下任何访客可读到全部卦例的 `question`（占问之事）与 `pillars`；猜中/拿到 id 后 `?id=` 还会返回 **`pan_text` 全文与 `messages`（各模型完整 AI 对话历史）**。问病、问讼、问感情类占问内容属隐私。
+  **现已随全站 `ACCESS_CODE` 启用而收口**：实测无口令读列表/详情均返回 `401 ACCESS_REQUIRED`（`records.js` 的 `checkAccess` 以 `ACCESS_CODE` 为闸），仅 `/api/models` 保持免口令（模型芯片需在登录前加载）。
 - **请求规模与限流**：`/api/interpret` 单请求上限为 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符；`RATE_LIMIT_PER_MIN` 按访客 IP 限流（仅 isolate 内计数）。**两端已于 2026-09-28 收口**：生产已设 `ACCESS_CODE`（全站口令）与 `RATE_LIMIT_PER_MIN=20`，`/api/interpret` 不再是开放端点（无口令 → `401 ACCESS_REQUIRED`）。仍建议在 CF 后台对 `/api/interpret` 追加 Rate Limiting 规则，以补 isolate 内计数可被绕过的缺口
 - **部署防回归**：已禁用 GitHub 集成的自动生产部署（其 Functions 构建缓存会回滚代码并抢占生产），统一由 wrangler direct upload 部署
 
@@ -361,7 +362,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 
 **其他**
 
-- `LIB_CODE`：卦例库写入口令（secret）。设置后装入卦例库需先在页面「口令登录」；未设置则写入开放。读取（GET）始终开放。**生产已设**。
+- `LIB_CODE`：卦例库写入口令（secret）。设置后装入卦例库需先在页面「口令登录」；未设置则写入开放。**只管写入**，读取沿由下面的 `ACCESS_CODE` 管控。**生产已设**。
 - `ACCESS_CODE`：全站访问口令（secret），设置后**所有接口**（含断卦）都需口令。**生产已于 2026-09-28 启用**（口令值只存 CF secret，不落仓库与文档）。页面首次调用收 401 → 前端弹框输入 → 存入 `localStorage['ly_access_code']`，此后请求带 `X-Access-Code` 头。
   换口令只需 `wrangler pages secret put ACCESS_CODE --project-name=liuyao`，**无需重新部署**（secret 即时生效）。
   > 与 `LIB_CODE` 的关系：设了 `ACCESS_CODE` 后**读取与断卦也需口令**，比只设 `LIB_CODE` 更严。两者可共存——`ACCESS_CODE` 管读与断卦，`LIB_CODE` 专管卦例库写入（`records.js` 中 `LIB_CODE || ACCESS_CODE` 的回退只在 `LIB_CODE` 未设时生效）。
