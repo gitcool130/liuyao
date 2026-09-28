@@ -643,23 +643,28 @@
     if (!pan) return;
     const btn = $('#btnAI');
     btn.disabled = true; btn.textContent = '卦师推敲中…';
-    aiStates = {};
-    renderCols();
-    selModels.forEach(function (m) {
-      colBody(m).innerHTML = '<div class="loading">推卦中…</div>';
-    });
-    await Promise.all(selModels.map(async function (m) {
-      try {
-        const reply = await callInterpret(m, []);
-        aiStates[m] = { history: [{ role: 'assistant', content: reply }] };
-        colBody(m).innerHTML = '<div class="ai-block">' + mdLite(reply) + '</div>';
-      } catch (e) {
-        renderFailBox(colBody(m), m, [], e);
-      }
-    }));
-    $('#chatBox').hidden = !Object.keys(aiStates).length;
-    btn.disabled = false; btn.textContent = '重新断卦';
-    autoSaveCast();
+    // 整体 try/finally：renderCols()/colBody()/Promise.all() 任一在 try 之外抛错，
+    // 按钮恢复那两行就不会执行，按钮将永久停在「卦师推敲中…」禁用态。
+    try {
+      aiStates = {};
+      renderCols();
+      selModels.forEach(function (m) {
+        colBody(m).innerHTML = '<div class="loading">推卦中…</div>';
+      });
+      await Promise.all(selModels.map(async function (m) {
+        try {
+          const reply = await callInterpret(m, []);
+          aiStates[m] = { history: [{ role: 'assistant', content: reply }] };
+          colBody(m).innerHTML = '<div class="ai-block">' + mdLite(reply) + '</div>';
+        } catch (e) {
+          renderFailBox(colBody(m), m, [], e);
+        }
+      }));
+      $('#chatBox').hidden = !Object.keys(aiStates).length;
+      autoSaveCast();
+    } finally {
+      btn.disabled = false; btn.textContent = '重新断卦';
+    }
   };
 
   let chatBusy = false;
@@ -669,32 +674,37 @@
     if (!q || chatBusy || !Object.keys(aiStates).length) return;
     chatBusy = true;
     input.value = '';
-    const active = Object.keys(aiStates);
-    active.forEach(function (m) {
-      aiStates[m].history.push({ role: 'user', content: q });
-      colBody(m).insertAdjacentHTML('beforeend',
-        '<div class="msg user"><b>问：</b>' + mdLite(q) + '</div><div class="msg ai" id="chatload-' + midSafe(m) + '"><span class="loading">推敲中…</span></div>');
-    });
-    await Promise.all(active.map(async function (m) {
-      const loadEl = document.getElementById('chatload-' + midSafe(m));
-      // 本次追问已入栈，须整段送出：旧版 slice(0,-1) 把刚入栈的问题切掉，大模型收不到追问
-      const historySnapshot = aiStates[m].history.slice();
-      try {
-        const reply = await callInterpret(m, historySnapshot);
-        aiStates[m].history.push({ role: 'assistant', content: reply });
-        if (loadEl) loadEl.innerHTML = mdLite(reply);
-      } catch (e) {
-        if (loadEl) {
-          const box = document.createElement('div');
-          loadEl.innerHTML = '';
-          loadEl.appendChild(box);
-          // 失败降级：手动提示词须含本次追问（同样用整段历史）
-          renderFailBox(box, m, historySnapshot, e);
+    // 整体 try/finally：Promise.all 之外若抛错（如 colBody 返回 null 使 insertAdjacentHTML 失败），
+    // 末行 chatBusy=false 不会执行，此后所有追问都会被 chatBusy 永久静默拦截。
+    try {
+      const active = Object.keys(aiStates);
+      active.forEach(function (m) {
+        aiStates[m].history.push({ role: 'user', content: q });
+        colBody(m).insertAdjacentHTML('beforeend',
+          '<div class="msg user"><b>问：</b>' + mdLite(q) + '</div><div class="msg ai" id="chatload-' + midSafe(m) + '"><span class="loading">推敲中…</span></div>');
+      });
+      await Promise.all(active.map(async function (m) {
+        const loadEl = document.getElementById('chatload-' + midSafe(m));
+        // 本次追问已入栈，须整段送出：旧版 slice(0,-1) 把刚入栈的问题切掉，大模型收不到追问
+        const historySnapshot = aiStates[m].history.slice();
+        try {
+          const reply = await callInterpret(m, historySnapshot);
+          aiStates[m].history.push({ role: 'assistant', content: reply });
+          if (loadEl) loadEl.innerHTML = mdLite(reply);
+        } catch (e) {
+          if (loadEl) {
+            const box = document.createElement('div');
+            loadEl.innerHTML = '';
+            loadEl.appendChild(box);
+            // 失败降级：手动提示词须含本次追问（同样用整段历史）
+            renderFailBox(box, m, historySnapshot, e);
+          }
         }
-      }
-    }));
-    chatBusy = false;
-    autoSaveCast();
+      }));
+      autoSaveCast();
+    } finally {
+      chatBusy = false;
+    }
   }
   $('#btnChat').onclick = sendChat;
   $('#chatInput').onkeydown = function (e) { if (e.key === 'Enter') sendChat(); };

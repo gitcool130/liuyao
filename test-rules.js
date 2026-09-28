@@ -593,6 +593,67 @@ eq('临日辰路径仍生效', C.ruleDay(Lmu, mkPil({ monthZhi: 2, dayZhi: 2 }),
   eq('XING 表键数（子卯2 + 寅巳申6 + 丑戌未6 + 自刑4）', xingKeys, 18);
 })();
 
+// ---------- 20. 日辰月建同支的刑害去重（第二十一轮 N1）＋ 回头冲/合的依据补全（C3） ----------
+(function () {
+  const I = {};
+  C.ZHI.forEach(function (z, i) { I[z] = i; });
+  const line = function (z) { return mkLine({ zhi: z, zhiIdx: I[z] }); };
+  const xh = function (lz, mz, dz) { return C.ruleXingHai(line(lz), mkPil({ monthZhi: I[mz], dayZhi: I[dz] }), '官鬼'); };
+
+  // N1：辰月辰日遇用神辰。旧版对日辰、月建各判一次，输出两条 rule 完全相同的「自刑」
+  const both = xh('辰', '辰', '辰').filter(function (j) { return j.tag === '相刑'; });
+  eq('日辰月建同支 → 相刑只陈述一条', both.length, 1);
+  eq('同支时同时点出日辰与月建', both[0].text.indexOf('日辰月建') >= 0, true);
+  eq('同支时仍判为自刑', both[0].rule, '自刑');
+  eq('同支时文本不自相重复（不出现「日日」）', /日辰月建（同支辰）/.test(both[0].text), true);
+
+  // 六害同样去重
+  eq('日辰月建同支 → 相害只陈述一条',
+    xh('子', '未', '未').filter(function (j) { return j.tag === '相害'; }).length, 1);
+
+  // 非同支路径必须逐字沿用旧文本（去重改动不得波及既有判词）
+  const oldText = xh('子', '辰', '卯').filter(function (j) { return j.tag === '相刑'; })[0].text;
+  eq('非同支：沿用旧格式「与日辰卯相刑（…）」',
+    /与日辰卯相刑（子卯相刑（无礼之刑）），刑则有伤。$/.test(oldText), true);
+  eq('非同支：文本不出现合并措辞', oldText.indexOf('日辰月建') < 0, true);
+  // 用神寅：与月建申成寅申刑、与日辰巳成寅巳刑，日支≠月支 → 两条各自成立
+  eq('非同支：日辰月建各判一次（两条）',
+    xh('寅', '申', '巳').filter(function (j) { return j.tag === '相刑'; }).length, 2);
+
+  // C3：回头冲／回头合的经典依据必须落到 basis 上（旧版两处 basis 为空）
+  // 卯化酉：卯酉相冲 ∧ 酉金克卯木 —— 正是《增删卜易·反伏章》实例「比之井」的世爻动变
+  const dong = C.ruleDongBian(mkLine({
+    zhi: '卯', zhiIdx: I['卯'], wx: '木', moving: true,
+    bian: { gan: '辛', zhi: '酉', wx: '金', lq: '官鬼' }
+  }), '官鬼');
+  const chongJud = dong.judgments.filter(function (j) { return j.rule === '化回头冲'; });
+  eq('化回头冲 判出', chongJud.length, 1);
+  eq('化回头冲 依据引《反伏章》', chongJud[0].basis.indexOf('反伏章') >= 0, true);
+  eq('卯化酉 同时判出化回头克（对应原文「冲克」并见）',
+    dong.judgments.filter(function (j) { return j.rule === '化回头克'; }).length, 1);
+  const aggX = C.aggregateTrend({ hasYongshen: true, grade: '旺', daySupports: true, zhenKong: false, zhenYuePo: false, judgments: dong.judgments });
+  eq('化回头冲 不入 harms（其克向量由化回头克承担）', aggX.harms.indexOf('动变:化回头冲'), -1);
+  eq('卯化酉 的 harms 只来自化回头克', aggX.harms, ['动变:化回头克']);
+
+  // 寅化亥：寅亥六合 ∧ 亥水生寅木 —— 原文称此为「化扶」（得他扶助之意），非「羁绊」
+  const heJud = C.ruleDongBian(mkLine({
+    zhi: '寅', zhiIdx: I['寅'], wx: '木', moving: true,
+    bian: { gan: '乙', zhi: '亥', wx: '水', lq: '父母' }
+  }), '官鬼').judgments.filter(function (j) { return j.rule === '化回头合'; });
+  eq('化回头合 判出', heJud.length, 1);
+  eq('化回头合 依据引《六合章》', heJud[0].basis.indexOf('六合章') >= 0, true);
+  eq('化回头合 用原文术语「化扶」', heJud[0].text.indexOf('化扶') >= 0, true);
+  eq('化回头合 不再误作「羁绊」（合绊是与日月动爻合，非化出之爻回头合）', heJud[0].text.indexOf('羁绊') < 0, true);
+  // 口径：不入汇聚表（吉凶随用神旺衰翻转，原文「用若失陷無益」，非单向）
+  const aggH = C.aggregateTrend({ hasYongshen: true, grade: '旺', daySupports: true, zhenKong: false, zhenYuePo: false, judgments: [{ tag: '动变', rule: '化回头合' }] });
+  eq('化回头合 不入 supports', aggH.supports.length, 0);
+  eq('化回头合 不入 harms', aggH.harms.length, 0);
+  // 反向自查：空 basis 的「纯陈述」项不应被误当作有依据——发动/化比和仍为有意留空
+  const plain = C.ruleDongBian(mkLine({ zhi: '子', zhiIdx: I['子'], wx: '水', moving: true, bian: { gan: '甲', zhi: '子', wx: '水', lq: '兄弟' } }), '官鬼')
+    .judgments.filter(function (j) { return j.rule === '发动' || j.rule === '化比和'; });
+  eq('发动/化比和 仍为无方向的纯陈述（basis 空）', plain.every(function (j) { return j.basis === ''; }), true);
+})();
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);
 

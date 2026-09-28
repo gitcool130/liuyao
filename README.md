@@ -23,7 +23,7 @@
 - **断卦符号化（无评分制）**：废弃旧版 +2.5/-2 算术评分，改为规则判定链——每条规则独立函数、可单测，输出 `judgments[]`（tag/rule/text/basis 典据）+ `trend`（吉/凶/平/待审，规则汇聚表驱动）+ `yingqiClues`（应期线索，只出线索不下结论）
 - **暗动闭环**：静爻被日冲，先查月令旺衰（旺相=暗动，休囚=日破）——修复旧版「文字说了一套、代码没做」
 - **规则覆盖**：月建档（旺相休囚死）、真假月破、日辰生克拱扶、冲散/暗动/日破、合起合绊、静空/动空/真空（**真空以「安静」为前提，动爻永不真空**）、回头生克冲合、进神退神、三合局、相刑相害、飞伏生克、用神两现取舍、伏神引拔、伏神伏世下（不误报用神持世）
-- **质量保障**：`test-core.js` 66 项基础自检 + `test-rules.js` 165 项规则链单测 + `test-gua-types.js` 卦型判定回归（64 卦全枚举 + 京房八宫卦次整表 + 10 类变异自检） + `test-functions.mjs` 41 项 Functions 层 + `test-shake.js` 49 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（10 万+字段）+ `tests/guji` 古籍卦例回归（《增删卜易》《卜筮正宗》404 条卦例 + 40 条断语用例 / 12102 断言，断卦规则覆盖 37/51，另附 41 类变异自检）+ `tests/verify` 外部验证集三方对账与零依赖金标准回归；CI 另有「部署隔离断言」守住 `public/` 边界
+- **质量保障**：`test-core.js` 89 项基础自检（含入参校验、非法日期文案、`bian` 语义契约锁定） + `test-rules.js` 185 项规则链单测（含直测 `ruleXingHai` 的三刑全覆盖） + `test-gua-types.js` 卦型判定回归（64 卦全枚举 + 京房八宫卦次整表 + 10 类变异自检） + `test-functions.mjs` 57 项 Functions 层（含上游超时、流式缓冲守卫、限流窗口有界） + `test-shake.js` 49 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（10 万+字段）+ `tests/guji` 古籍卦例回归（《增删卜易》《卜筮正宗》404 条卦例 + 40 条断语用例 / 12102 断言，断卦规则覆盖 37/51，另附 41 类变异自检）+ `tests/verify` 外部验证集三方对账与零依赖金标准回归；CI 另有「部署隔离断言」守住 `public/` 边界
 
 ### 三库交叉差分（test-diff.mjs，devDependencies 不进生产）
 
@@ -105,6 +105,8 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | `d858b63` | README 与测试同步 |
 | `3f33dab` | README 补「审计基线与已修项台账」 |
 | `08bcc21` | 第三轮 **15 项**（测试有效性 / 恒真断言 / 死代码 / 计数漂移）修复；**第四轮审计的输入**版本 |
+| `779b4526` | 第二十轮：B1（三刑单向漏判 33.3%）/ B2（原型链污染）/ B3（DELETE 缺 `ID_RE`）修复 + A1 读路径口令收口（`requireCode` 认 `LIB_CODE \|\| ACCESS_CODE`） |
+| `779b4526` 之后 | 第二十一轮：B4/B5/C1/C4/C5/C6/C7/N1 收口，C2/C3 定性订正（详见下方台账） |
 
 > ⚠️ **历史教训**：第二轮 20 项报告在修复后仍被反复重报，原因是外部审计取的源码是 GitHub main（`f5a0ca4`），而修复提交全部停留在本地未推送。**提交推送之前不要发起外部审计**，否则拿到的必然是旧版的结论。
 >
@@ -219,6 +221,25 @@ git status -sb                    # 若显示 ahead，先推送再审计
 
 实现：`ruleSanHe(pan, target)` 恢复 `target` 形参（第五轮误判为死形参而删除——`test-rules.js` 一直在传 `'官鬼'`，可见它是「预留未实现」而非死代码），产出 `relation` 字段（同气／生用／克用／泄用／耗用），`aggregateTrend` 据此归类。`test-rules.js` 新增 24 条断言（`127 → 151`）。
 
+### 第二十一轮台账（健壮性与一致性收口，9 项 + 2 项定性订正）
+
+第十九轮全量代码审计报出的剩余项，本轮全清。⚠️ **其中 2 项的定性被本轮撤销**（C2 报为「数据冗余」实为刻意契约；C3 报为「无经典依据」实为两条都有明文），1 项依原文定下口径。
+
+| # | 报告项 | 结论 | 落点 |
+|---|---|---|---|
+| B4 | `readSSE` 的 `buf`/`full` 无上限 | ✅ 已修：双守卫（单行 1 MB / 正文 200 KB），撞限即 `reader.cancel()`，截断时仍返回已收部分并带 `truncated` | `functions/api/interpret.js`；`test-functions.mjs` #17 |
+| B5 | 上游 `fetch` 无超时控制 | ✅ 已修：`AbortController` + `setTimeout` 覆盖「建连 + 读流」全程，默认 90 s（`LLM_TIMEOUT_MS`），超时 `504 LLM_TIMEOUT` | 同上 |
+| C1 | `paipan` 对 `tossVals` 无入参校验 → **静默错排** | ✅ 已修：长度非 6、非 `number`、不在 `{0,1,6,9}` 一律抛错（旧版 7/8 被静默当阴爻，排出错卦却不报错） | `public/core/paipan.js`；`test-core.js` #18 |
+| C2 | 非动爻也计算 `bian`（报为「数据冗余、语义误导」） | ❌ **判断撤销**：`bian` 是「变卦**同位爻**的纳甲」，古籍回归依赖它对静爻位逐位比对；**行为不改**，就地补注释 + 补契约锁定断言 | `public/core/paipan.js`；`test-core.js` #20 |
+| C3 | `化回头冲`/`化回头合` 有判定、无依据、不入表 | ⚖️ **依原文定口径**：两条都有明文，补 `basis`；`化回头合` 判词「羁绊之象」→「化扶」（原文与「合绊」是两回事）；维持不入表，理由入「已知口径分歧」 | `public/core/analyze.js`；`test-rules.js` #20 |
+| C4 | 非法日期抛误导性错误（指向「节气表损坏」） | ✅ 已修：`fourPillars` 入口判 `isNaN(getTime())`，给准确文案；`termMoment` 的边界断言保持原样（它防的是差分链损坏） | `public/core/calendar.js`；`test-core.js` #19 |
+| C5 | 限流 `hits` 数组无界 + `clear()` 误放行 | ✅ 已修：达限即拒且不再入队（长度硬封顶在 `limit`）+ 只淘汰窗口内已无有效计数的 IP | `functions/api/interpret.js`；`test-functions.mjs` #18 |
+| C6 | `app.js` 两处缺 `try/catch` → 状态锁死 | ✅ 已修：`#btnAI.onclick` 与 `sendChat` 补 `try/finally`（异常时按钮不再停在「卦师推敲中…」、`chatBusy` 不再永久为真） | `public/app.js` |
+| C7 | 无 CSP | ✅ 已修：新增 `public/_headers`（CSP + nosniff + Referrer-Policy + X-Frame-Options + Permissions-Policy） | `public/_headers` |
+| N1 | 辰月辰日遇用神辰 → 输出两条相同「自刑」（本轮实测新发现） | ✅ 已修：日支与月支**同支**时合并为一条；非同支路径判词**逐字不变** | `public/core/analyze.js`；`test-rules.js` #20 |
+
+**验证方式**：10 项变异逐项回退重跑，**全部转红且每条 FAIL 精准指向被回退的行为**（例：C5 回退 →「单 IP 计数封顶」`got=20 want=3`；C4 回退 →「不再误指节气表」`got=true want=false`；B5 回退 → `got=502 want=504`）。`npm run test:all` EXIT=0（core 89 / rules 185 / functions 57 / gua-types 88 / guji 12102 断言 / selftest 41 / diff 零 BUG / verify 裁决件 162）。
+
 ### 已知口径分歧（**非** Bug，勿再重报）
 
 以下各项均**非**缺陷，口径均已定，后续审计请勿重报。前两项属**流派门户之别**，本实现已选定其一；涉三合／刑害／世爻覆盖者曾为待定项，已于第六轮依经典定论。改动其一，须同步改 `aggregateTrend` 的 supports/harms 名单或判定门并补断言。列表中的删除线项为**已修项**，保留记录备查（旧版行为与修法一并留档，便于回溯）：
@@ -233,12 +254,20 @@ git status -sb                    # 若显示 ahead，先推送再审计
     > 第五轮曾把 `ruleSanHe` 的 `target` 当死形参删除，实为误判：`test-rules.js` 一直在传 `'官鬼'`，它是「预留未实现」而非死代码，第六轮已恢复启用。
   - **刑害（`相刑:*`／`相害:*`）→ 不纳入，但其「附和为凶」的语义已由现有分支实现**：依《增删卜易·三刑章第二十一》，野鹤老人自述「只以三刑为证而应验，这数十年，**我只得到这一卦**」，并谓子卯、丑未之刑「多是**附和为凶**」——刑非凶之主因，只在用神本已虚弱时跟着损伤。该语义恰由 `harms.length > 0 && supports.length === 0 && WEAK` 分支天然实现。若强行列入 `harms`，反使「旺相用神遇单刑」由吉降平，与「旺者不畏刑」相悖。
   - **世爻关系（`世爻:*`）→ 不纳入**：依《黄金策》《增删卜易》「**用克世勿作凶看**……如占求财，财爻克世者**必得**；占行人，用神克世者**即归**；占医药，子孙克世者**即愈**……**若占功名，官鬼克世，非祸即灾**」——同一「用神克世」的吉凶随占类翻转，**无法映射为单一方向**；且其作用对象是世爻（事与己），不属用神旺衰。故只作 bullet 陈述。
+- **`化回头冲` / `化回头合` 不入汇聚表，且判词已依原文订正（第二十一轮：两句都找到了原文，口径就此定下）**：二者原先 `basis` 为空、被判为「有判定无依据」。回溯定本后确认**两条都有明文**，故补依据、定口径、并订正一处判词错误：
+  - **`化回头冲`** ← 《增删卜易·**反伏章第二十八**》：「以上用神旺相，不变冲克者，虽则反伏，事亦必成，**只恐用神化回头之冲克者，即如卦变，大凶之象**」；实例「比之井」世爻乙卯动化辛酉，卯酉**既冲且克**。原文所论是「冲**克**」，其**克**向量已由 `动变:化回头克` 计入 `harms`；**只冲不克**者（丑未、辰戌同为土）原文未论。故本项自身不入表——否则会对已计入的伤害**重复计权**。
+  - **`化回头合`** ← 《增删卜易·**六合章第十九**》：「爻之合者，靜而逢合，謂之**合起**；動而逢合，合謂之**合絆**。爻與爻合謂之合好，**爻動化合謂之化扶**」，同章又明言「**爻動化出之爻回頭相合者，謂之化扶，得他扶助之意**」。六合须分四种，本实现的 `动变:化回头合` 判的正是最后一种（变爻回头合本爻），故**判词应为「化扶」**——旧版写作「羁绊之象」是把「化扶」与「合絆」混为一谈，第二十一轮已订正（`合絆` 对应的是本仓 `ruleDayHe` 的 `日合:合绊`，即与**日月动爻**合）。
+    不入表理由：同章谓「凡得諸合，諸占皆以為吉，**然必用神有氣相宜，用若失陷無益**」——吉凶随用神旺衰翻转，不满足 `aggregateTrend` 的纳入准则（须**直接、单向**作用于用神力量，且吉凶不依赖占类/旺衰），与「相刑相害」「世爻关系」同一处理。
+  - **影响面**：`aggregateTrend` 的 supports/harms 名单**未改动**，`trend` 判定与旧版完全一致；本轮只改 `basis`（空 → 引原文）与 `text`（「羁绊之象」→「化扶，得他扶助之意」）。
+- **`paipan().lines[i].bian` 的语义＝「变卦同位爻的纳甲」——勿改为「静爻无 bian」（第十九轮曾误判，第二十一轮复核后撤销）**：只要本卦有动爻（`hasBian`），**六爻全部**带 `bian`，且取的是变卦**同位爻**的纳甲，**不是**「该爻发动后的值」。此为刻意设计——古籍排盘表的右半（变卦）对**静爻位同样印出纳甲**，`tests/guji/lib/check.mjs` 要逐位比对，`tests/verify/regress.mjs` 更明确写着「**不能用『静爻应无 bian』来断言**，只能断言『有无变卦』这一层」。改为 `null` 会直接废掉古籍回归的比对能力。现已在 `paipan.js` 就地注释，并由 `test-core.js` 第 20 节锁定（含「静爻位的 bian 取姤二爻辛亥」这类实义断言，非恒真）。
 
 ### 多模型 AI 断卦（functions/api/interpret.js）
 
 - **供应商路由 + 模型白名单**：按模型名自动推断供应商，服务端白名单校验防任意模型名注入
 - **Google 协议自适应**：base 指向 Google 原生路径时走 `generateContent + x-goog-api-key`，并强制 `thinkingBudget: 0`（gemini-3.x 思考路径高峰期 503 的根因规避）；其余一律 OpenAI 兼容协议
 - **流式 SSE 服务端拼接**：所有 OpenAI 兼容通道统一 `stream: true`，服务端逐 chunk 拼接后返回完整 JSON——突破部分中转站 60 秒整响应硬超时，同时前端无需处理流
+- **流式缓冲双守卫**：上游属信任边界外（用户自配中转），故两条无界路径均设硬上限——① 持续发送**不含换行**的数据会使行缓冲永不切分；② 发送**无限多条** `data:` 行会使拼接正文无限增长（CF Workers isolate 内存上限 128 MB）。阈值 `SSE_MAX_LINE` 1 MB / `SSE_MAX_REPLY` 200 KB（约 6 万汉字），撞限即 `reader.cancel()` 断开；被截断时仍返回已收到的部分答复并带 `truncated` 字段
+- **上游硬超时**：`fetch` 默认无超时，上游挂起（不返回也不断开）会让请求一直悬置；流式只绕过了「整响应超时」，并不自带超时保护。现用 `AbortController` + `setTimeout` 覆盖「建连 + 读完整流」全程，默认 90 s（`LLM_TIMEOUT_MS` 可调），超时返回 `504 LLM_TIMEOUT`
 - **gpt-5/o 系参数适配**：自动识别思考型模型，剥离其不支持的 `temperature`，改用 `reasoning_effort`（默认 low，环境变量 `GPT_EFFORT` 可调）
 - **动态模型清单**：`/api/models` 由环境变量实时驱动（`GPT_MODELS` + `CUSTOM_PROVIDERS`），前端启动时拉取渲染芯片，后台增删模型/供应商零代码改动
 - **失败降级**：断卦失败时不输出报错，而是展示可复制的完整 prompt，可粘贴到任意对话窗口手动断卦
@@ -257,6 +286,8 @@ git status -sb                    # 若显示 ahead，先推送再审计
 - **密钥不出服务端**：API Key 全部存 CF secret（加密变量，wrangler 部署不覆盖），模型名白名单 + 输入长度截断防注入
 - **读接口开放的影响范围（第五轮提出 → 第二十轮彻底闭合）**：`GET /api/records` 列表与 `?id=` 详情原先**始终开放**，在只设 `LIB_CODE` 的配置下任何访客可读到全部卦例的 `question`（占问之事）与 `pillars`；猜中/拿到 id 后 `?id=` 还会返回 **`pan_text` 全文与 `messages`（各模型完整 AI 对话历史）**。问病、问讼、问感情类占问内容属隐私。
   2026-09-28 曾随全站 `ACCESS_CODE` 收口，同日按需求撤销 `ACCESS_CODE` 时**未单独评估这条连带影响**，读路径遂退化为「未设即放行」（实测 `GET /api/records` → `200`）。**第二十轮把读路径与写路径收口到同一口令闸**（`records.js` 的 `requireCode`，认 `LIB_CODE || ACCESS_CODE`）：无口令读列表/详情 → `401 ACCESS_REQUIRED`。当前口径为「卦例库**读与写均需口令**，`/api/models` 免口令」。
+- **静态资源安全响应头（第二十一轮 C7）**：新增 `public/_headers`，对静态资源下发 CSP + `X-Content-Type-Options: nosniff` + `Referrer-Policy` + `X-Frame-Options: DENY` + `Permissions-Policy`。CSP 的价值在于兜住**外联与回传**（`script-src 'self'` 挡外部脚本、`connect-src 'self'` 挡把卦例/提示词 exfil 到外域）；`'unsafe-inline'` 为必需项——页面含内联 `<style>`，且 **Cloudflare 会向 HTML 注入内联的 `__CF$cv$params`**（Bot Management），不带它会被本页自己的 CSP 拦掉。前端已逐处 `esc()`/`escAttr()`/`mdLite()` 转义，CSP 在此是**第二道防线**而非唯一防线。注意 `_headers` **不作用于 Pages Functions 响应**，`/api/*` 的头由函数自身控制。
+- **限流窗口的单 IP 计数有界（第二十一轮 C5）**：旧版每次请求都 `hits.push()`，单个 IP 的数组随请求数**无界增长**，且 `RL_HITS.size` 超限时 `clear()` 会**把正在被限流的访客一并放行**。现改为「达限即拒且不再入队」（数组长度硬封顶在 `limit`）＋「只淘汰窗口内已无有效计数的 IP」。IP 取用顺序为 `CF-Connecting-IP`（边缘写入、客户端伪造值被剥离）→ `X-Forwarded-For`（非 CF 部署的回退，该环境下可伪造，故此时限流只算降级可用）。
 - **请求规模与限流**：`/api/interpret` 单请求上限为 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符；`RATE_LIMIT_PER_MIN` 为可选软开关（按访客 IP 滑窗，仅 isolate 内计数），**生产当前未设 → 不限流**（2026-09-28 曾设 20，同日按用户要求撤销）。全站口令 `ACCESS_CODE` 于同日启用后撤销，`/api/interpret` **回归无口令开放**（实测无口令 → 越过守卫，直接进入参数校验）。费用敞口现**仅由「入模上限 ≈ 20,000 字符」单独约束**
 - **部署防回归**：已禁用 GitHub 集成的自动生产部署（其 Functions 构建缓存会回滚代码并抢占生产），统一由 wrangler direct upload 部署
 
@@ -295,7 +326,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
   Custom   → CUSTOM_PROVIDERS 声明任意多家（Kimi/Qwen/GLM/硅基流动等）
 ```
 
-安全设计：API Key 仅存服务端 secret，模型名服务端白名单校验防注入；**卦例库（读 + 写）由 `LIB_CODE` 口令闸保护**，`ACCESS_CODE` 与 `RATE_LIMIT_PER_MIN` **当前均未启用**，断卦费用敞口靠入模上限 20,000 字符约束。
+安全设计：API Key 仅存服务端 secret，模型名服务端白名单校验防注入；**卦例库（读 + 写）由 `LIB_CODE` 口令闸保护**，`ACCESS_CODE` 与 `RATE_LIMIT_PER_MIN` **当前均未启用**，断卦费用敞口靠入模上限 20,000 字符约束。静态资源另有 `_headers` 下发 CSP（`connect-src 'self'` 阻断外域回传、`script-src 'self'` 阻断外部脚本），上游调用的**超时**与**流式缓冲上限**见「多模型 AI 断卦」。
 
 ## 文件说明
 
@@ -311,13 +342,14 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | `public/core/calendar.js` | 历法底座（JDN 四柱、五虎遁/五鼠遁、旬空、节气查表、夜子时开关） |
 | `public/core/paipan.js` | 排盘事实引擎（纳甲/六亲/世应/六神/伏神，纯函数） |
 | `public/core/analyze.js` | 断卦符号层（规则判定链，judgments/trend/yingqiClues） |
+| `public/_headers` | 静态资源安全响应头（CSP / nosniff / Referrer-Policy / X-Frame-Options / Permissions-Policy）。**不作用于 `/api/*`**（Functions 响应头由函数自身控制），也不会被当作资源下发 |
 
 ### 仓库内（**不**进入部署目录，物理隔离于公网之外）
 
 | 文件 | 说明 |
 |------|------|
 | `core.js` | Node 聚合入口（浏览器请按序加载 `public/core/` 五文件，见 `public/index.html`） |
-| `test-core.js` | 排盘引擎 66 项基础自检（历法锚点、节气边界、表外降级不中断、夜子时、纳甲六亲、卦序、六神起法） |
+| `test-core.js` | 排盘引擎 89 项基础自检（历法锚点、节气边界、表外降级不中断、夜子时、纳甲六亲、卦序、六神起法；另含 `paipan` 入参校验、非法日期文案、`bian` 语义契约锁定） |
 | `test-rules.js` | 断卦规则链 127 项单测（暗动闭环、进退神、三合、夜子时正法、伏神伏世下、两现取舍、交节边界等） |
 | `test-diff.mjs` | 三库交叉差分（4096 组合 + 历法时点 + 夜子时双流派 + 节气全量，10 万+字段） |
 | `tools/gen-jieqi.js` | 节气表离线生成器（lunar-javascript → 差分压缩表） |
@@ -361,6 +393,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | `GPT_BASE_URL` | 接口地址，默认官方（中转站改这里） |
 | `GPT_MODELS` | 逗号分隔模型清单，如 `gpt-5.2` |
 | `GPT_EFFORT` | 选填，gpt-5/o 系推理强度（minimal/low/medium/high），默认 low |
+| `LLM_TIMEOUT_MS` | 选填，上游大模型请求硬超时（毫秒），默认 `90000`。覆盖「建连 + 读完整流」，防上游挂起时请求悬置；超时返回 `504 LLM_TIMEOUT` |
 
 **自定义供应商（任意 OpenAI 兼容接口，无需改代码）**
 

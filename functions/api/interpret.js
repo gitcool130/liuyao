@@ -18,6 +18,8 @@
  *   RATE_LIMIT_PER_MIN 选填，按访客 IP 的每分钟请求上限（**未设置则不限流**）。
  *                      仅本 isolate 内计数，属「降低」而非「根治」。
  *                      **生产当前未设 → 实际不限流**（2026-09-28 曾设 =20，同日按用户要求撤销）。
+ *   LLM_TIMEOUT_MS    选填，上游大模型请求的硬超时（毫秒），默认 90000。
+ *                      覆盖「建立连接 + 读完整个流」，防止上游挂起（不返回也不断开）时请求悬置。
  */
 
 // 供应商解析共享层（白名单 / 自定义供应商 / json 响应 / 常量时间口令比较），与 models.js 同一口径
@@ -27,20 +29,47 @@ import { customProviders, customKeyEnv, modelWhitelist, json, safeEqual } from '
 // 旧值 8,000 + 20×4,000 ≈ 88,000，在未设 ACCESS_CODE 时是可直接放大的费用敞口。
 const LIMITS = { panText: 4000, historyTurns: 8, perMessage: 2000 };
 
+// 上游流式响应的双重守卫。上游（用户自配的 OpenAI 兼容中转）属「信任边界外」，
+// 恶意或异常时可打爆 isolate 内存（CF Workers 上限 128 MB）：
+//   ① 持续发送不含 '\n' 的数据 → 行缓冲 buf 永不切分，无限增长；
+//   ② 发送无限多条 data: 行   → 拼接正文 full 无限增长。
+// 两者正常都不会发生：SSE 单行远小于 1 MB，正常断卦答复远小于 200 KB（约 6 万汉字）。
+const SSE_MAX_LINE = 1000000;
+const SSE_MAX_REPLY = 200000;
+
 // 按 IP 的滑动窗口限流（默认关闭，仅在配置了 RATE_LIMIT_PER_MIN 时生效）。
 // 生产当前未设该变量 → 恒不触发；本函数保留为可随时启用的软开关。
 // 模块级 Map 在 CF Workers 中随 isolate 存活，跨 isolate 不共享，故只是成本抑制的兜底。
 const RL_HITS = new Map();
-function isRateLimited(request, env) {
+const RL_MAX_IPS = 5000;      // 单 isolate 内最多跟踪的 IP 数
+const RL_WINDOW_MS = 60000;   // 窗口长度：1 分钟
+// 导出供 test-functions.mjs 直接驱动（与 records.js 导出 jsonWithin/safeEqual 同一先例：
+// Pages Functions 只把 onRequest* 视作路由处理函数，其余导出不影响路由）。
+export function isRateLimited(request, env) {
   const limit = parseInt(env.RATE_LIMIT_PER_MIN || '0', 10);
   if (!limit || limit <= 0) return false;
-  const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
   const now = Date.now();
-  if (RL_HITS.size > 5000) RL_HITS.clear();          // 粗暴上限，防内存无界增长
-  const hits = (RL_HITS.get(ip) || []).filter(function (t) { return now - t < 60000; });
+  // IP 取用顺序：CF-Connecting-IP 由 Cloudflare 边缘写入，客户端伪造值会被边缘剥离，可信；
+  // X-Forwarded-For 仅作非 CF 部署（本地 wrangler dev 等）的回退——该环境下它可被客户端伪造，
+  // 故此时的限流只能算「降级可用」，不可作为安全边界。
+  const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
+  if (RL_HITS.size > RL_MAX_IPS) {
+    // 只淘汰「窗口内已无有效计数」的 IP。旧版直接 clear() 会把正在被限流的访客一并放行。
+    RL_HITS.forEach(function (arr, k) {
+      if (!arr.length || now - arr[arr.length - 1] >= RL_WINDOW_MS) RL_HITS.delete(k);
+    });
+  }
+  let hits = RL_HITS.get(ip);
+  if (!hits) { hits = []; RL_HITS.set(ip, hits); }
+  // 原地滑窗：把过期时间戳去掉（不新建数组，避免每次请求都分配）
+  let keep = 0;
+  for (let i = 0; i < hits.length; i++) { if (now - hits[i] < RL_WINDOW_MS) hits[keep++] = hits[i]; }
+  hits.length = keep;
+  // 达限即拒、且不再入队，使单个 IP 的数组长度被硬封顶在 limit。
+  // 旧版无脑 push 后判 `length > limit`——判定结果与本写法等价，但数组会随请求数无界增长。
+  if (hits.length >= limit) return true;
   hits.push(now);
-  RL_HITS.set(ip, hits);
-  return hits.length > limit;
+  return false;
 }
 
 const SYSTEM_PROMPT = [
@@ -176,15 +205,19 @@ export async function onRequestPost(context) {
     }
   }
 
-  // 流式 SSE 读取：拼接 delta.content（跳过 reasoning 思考链片段），突破网关整响应超时
+  // 流式 SSE 读取：拼接 delta.content（跳过 reasoning 思考链片段），突破网关整响应超时。
+  // 返回 { text, cut }：cut 为 null 表示正常读完，否则是触发守卫的原因（见 SSE_MAX_*）。
+  // 注意 buf.slice(0, idx) 只是「消费已处理部分」，不是长度上限——上限判断见两处守卫注释。
   async function readSSE(resp) {
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
-    let buf = '', full = '';
+    let buf = '', full = '', cut = null;
     while (true) {
       const r = await reader.read();
       if (r.done) break;
       buf += dec.decode(r.value, { stream: true });
+      // 守卫①：上游持续发送不含换行的数据，行缓冲永不切分。撞上即判定为异常流并断开。
+      if (buf.length > SSE_MAX_LINE) { cut = 'LINE_OVERFLOW'; break; }
       let idx;
       while ((idx = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, idx).trim();
@@ -200,25 +233,39 @@ export async function onRequestPost(context) {
           else if (c && c.message && c.message.content) full += c.message.content; // 部分中转站流里回完整段
         } catch (e) { /* 忽略无法解析的分片 */ }
       }
+      // 守卫②：上游发送无限多条 data: 行，拼接正文无限增长。保留已收到的部分答复后断开。
+      if (full.length > SSE_MAX_REPLY) { cut = 'REPLY_OVERFLOW'; break; }
     }
-    return full;
+    if (cut) { try { await reader.cancel(); } catch (e) { /* 上游已断开则忽略 */ } }
+    return { text: full.slice(0, SSE_MAX_REPLY), cut: cut };
   }
+
+  // 上游硬超时。fetch 默认无超时，上游挂起（不返回也不断开）会让该请求一直悬置，
+  // 流式只绕过了「整响应超时」，并不自带超时保护。计时覆盖「建连 + 读完整流」全程；
+  // 正常断卦约 10–60 s，默认 90 s 留余量（可用 LLM_TIMEOUT_MS 调）。
+  const timeoutMs = Math.max(1000, parseInt(env.LLM_TIMEOUT_MS || '90000', 10) || 90000);
+  const ctrl = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(function () { timedOut = true; ctrl.abort(); }, timeoutMs);
 
   try {
     const resp = await fetch(url, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: ctrl.signal
     });
     if (!resp.ok) {
       const t = await resp.text();
       return json({ error: 'LLM_ERROR', message: '大模型接口返回 ' + resp.status, detail: t.slice(0, 500) }, 502);
     }
     const ct = (resp.headers.get('content-type') || '').toLowerCase();
-    let reply = '';
+    let reply = '', cut = null;
     if (!isGoogle && payload.stream && ct.indexOf('text/event-stream') !== -1) {
       // 流式 SSE：拼接完整文本（个别中转站忽略 stream 参数回 JSON 时走下方兜底）
-      reply = await readSSE(resp);
+      const sse = await readSSE(resp);
+      reply = sse.text;
+      cut = sse.cut;
     } else {
       const data = await resp.json();
       if (isGoogle) {
@@ -231,8 +278,22 @@ export async function onRequestPost(context) {
       }
     }
     if (!reply) return json({ error: 'EMPTY', message: '大模型返回为空' }, 502);
-    return json({ reply: reply, provider: provider, model: model });
+    // 被守卫截断时仍返回已收到的部分答复，并带上原因（truncated 缺省时不出现在 JSON 里）
+    return json({ reply: reply, provider: provider, model: model, truncated: cut || undefined });
   } catch (e) {
+    if (timedOut) {
+      return json({ error: 'LLM_TIMEOUT', message: '大模型 ' + Math.round(timeoutMs / 1000) + ' 秒内未返回完整响应，请重试或改用更快的模型' }, 504);
+    }
     return json({ error: 'NET_ERROR', message: '无法连接大模型服务：' + e.message }, 502);
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+// 仅供测试的只读探针：暴露限流内部计数长度（不导出 RL_HITS 本体，避免测试耦合实现细节）。
+// 用于断言「单 IP 的 hits 数组被封顶在 limit」——旧版无脑 push 时会随请求数无界增长。
+export function __rlState() {
+  const out = [];
+  RL_HITS.forEach(function (arr, ip) { out.push({ ip: ip, len: arr.length }); });
+  return out;
 }

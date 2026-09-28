@@ -311,11 +311,33 @@
         basis: '用神克变爻为耗气，力有所损；非「四大凶」（月克/日克/动爻克/化回头克），故与化泄同等不计入 harms'
       });
     }
+    // 回头冲／回头合：与上方五行分支**并行**的另一维度（地支关系），故不写在 if/else 链内。
+    // ——口径已定（据原文定夺）——
+    // 《增删卜易·反伏章第二十八》：「以上用神旺相，不变冲克者，虽则反伏，事亦必成，只恐
+    //   用神化回头之冲克者，即如卦变，大凶之象」，实例「比之井」世爻乙卯动化辛酉，
+    //   卯酉**既冲且克**——其「克」向量已由上方「化回头克」计入 harms；只冲不克者
+    //   （丑未、辰戌同为土）原文未论。
+    // 《增删卜易·六合章第十九》：「爻動化出之爻回頭相合者，謂之**化扶**，得他扶助之意」；
+    //   同章又谓「凡得諸合，諸占皆以為吉，然必用神有氣相宜，用若失陷無益」。
+    //   ⚠️ 注意同章把「動而逢合」区分为两种：与**日月动爻**合者才是「合絆」（＝上方
+    //   ruleDayHe 的「日合:合绊」）；**化出之爻回头**合者称「化扶」。故此处文本用「化扶」，
+    //   不用「羁绊」。
+    // 两条均**不入汇聚表**：aggregateTrend 的纳入准则是「直接、单向地作用于用神力量且
+    //   吉凶不依赖占类」。「合」的吉凶随用神旺衰翻转（「用若失陷無益」），「冲」的克向量
+    //   已由化回头克承担——均非单向，故只陈述、不改 trend（与相刑/相害、世爻关系同处理）。
     if (chong(L.zhiIdx, ZHI.indexOf(b.zhi))) {
-      js.push({ tag: '动变', rule: '化回头冲', text: '　变爻' + b.zhi + '回头冲本爻' + L.zhi + '，反复之象。', basis: '' });
+      js.push({
+        tag: '动变', rule: '化回头冲',
+        text: '　变爻' + b.zhi + '回头冲本爻' + L.zhi + '，反复之象。',
+        basis: '《增删卜易·反伏章第二十八》「只恐用神化回头之冲克者，即如卦变，大凶之象」（原文为冲克并见，其克已由「化回头克」单独计入 harms）'
+      });
     }
     if (liuhe(L.zhiIdx, ZHI.indexOf(b.zhi))) {
-      js.push({ tag: '动变', rule: '化回头合', text: '　变爻' + b.zhi + '回头合本爻' + L.zhi + '，羁绊之象。', basis: '' });
+      js.push({
+        tag: '动变', rule: '化回头合',
+        text: '　变爻' + b.zhi + '回头合本爻' + L.zhi + '，谓之化扶，得他扶助之意。',
+        basis: '《增删卜易·六合章第十九》「爻動化出之爻回頭相合者，謂之化扶，得他扶助之意」'
+      });
     }
     return { judgments: js, kind: kind };
   }
@@ -503,16 +525,24 @@
   function ruleXingHai(L, pil, target) {
     const js = [];
     const nm = nameOf(L, target);
-    [
-      { zhiIdx: pil.dayZhi, zhi: ZHI[pil.dayZhi], from: '日辰' },
-      { zhiIdx: pil.monthZhi, zhi: ZHI[pil.monthZhi], from: '月建' }
-    ].forEach(function (o) {
+    // 日支与月支同支时合并为一条：否则同一刑害关系会被陈述两遍
+    // （如辰月辰日遇用神辰 → 旧版输出两条「自刑」，rule 完全相同）。
+    // desc 是完整的「来源＋地支」表述；非同支路径下 desc === 旧版的 from + zhi，
+    // 故那些文本逐字不变，只有同支这一种新场景的措辞不同。
+    const sameZhi = pil.dayZhi === pil.monthZhi;
+    const srcs = sameZhi
+      ? [{ zhiIdx: pil.dayZhi, zhi: ZHI[pil.dayZhi], desc: '日辰月建（同支' + ZHI[pil.dayZhi] + '）' }]
+      : [
+        { zhiIdx: pil.dayZhi, zhi: ZHI[pil.dayZhi], desc: '日辰' + ZHI[pil.dayZhi] },
+        { zhiIdx: pil.monthZhi, zhi: ZHI[pil.monthZhi], desc: '月建' + ZHI[pil.monthZhi] }
+      ];
+    srcs.forEach(function (o) {
       const xingKey = L.zhi + o.zhi;
       if (LY.XING[xingKey]) {
-        js.push({ tag: '相刑', rule: LY.XING[xingKey], text: nm + '与' + o.from + o.zhi + '相刑（' + LY.XING[xingKey] + '），刑则有伤。', basis: '刑主伤残；然《增删卜易·三刑章》谓刑多「附和为凶」，非凶之主因，须用神本衰方验' });
+        js.push({ tag: '相刑', rule: LY.XING[xingKey], text: nm + '与' + o.desc + '相刑（' + LY.XING[xingKey] + '），刑则有伤。', basis: '刑主伤残；然《增删卜易·三刑章》谓刑多「附和为凶」，非凶之主因，须用神本衰方验' });
       }
       if (LY.HAI[L.zhiIdx + '_' + o.zhiIdx]) {
-        js.push({ tag: '相害', rule: '六害', text: nm + '与' + o.from + o.zhi + '相害，害则相损。', basis: '害主妨害，其力逊于冲克，列入汇聚会失之过重' });
+        js.push({ tag: '相害', rule: '六害', text: nm + '与' + o.desc + '相害，害则相损。', basis: '害主妨害，其力逊于冲克，列入汇聚会失之过重' });
       }
     });
     return js;

@@ -1,0 +1,24 @@
+# Cloudflare Pages 响应头
+# 放在构建产物根目录（wrangler.toml: pages_build_output_dir = "public"），Pages 会自动识别。
+# ⚠️ 本文件只作用于**静态资源**（HTML / JS / CSS 等）；/api/* 的响应头由 Functions 自身控制，不经过此处。
+
+# ── 静态资源 ──
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; media-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=()
+
+# ── CSP 设计取舍（改动前请先读）──
+# ① 本页零外部依赖：无 CDN、无 <link> 标签、无外链字体/图片；bgm.js 是纯 Web Audio 合成，
+#    不加载任何音频文件。故 script-src / style-src / connect-src 都只需 'self'。
+# ② 仍保留 'unsafe-inline' 是**必要的**，两处依赖：
+#      · 页面含内联 <style> 块；
+#      · Cloudflare 会向 HTML 注入内联的 window.__CF$cv$params（Bot Management），
+#        若不带 'unsafe-inline' 会被本页自己的 CSP 拦掉。
+#    代价：无法阻断「内联脚本注入」这一路 XSS——但前端已逐处 esc()/escAttr()/mdLite() 转义，
+#    CSP 在此是**第二道防线**而非唯一防线。
+# ③ 真正兜住的是**外联与回传**：connect-src 'self' 阻断把卦例/提示词 exfil 到外域，
+#    script-src 'self' 阻断加载外部脚本。这两条是本项目最需要的。
+# ④ media-src / worker-src / object-src 均为 'none'：本项目确实不用。

@@ -12,6 +12,7 @@
 import { jsonWithin, safeEqual, onRequestGet, onRequestDelete } from './functions/api/records.js';
 import { customProviders, gptModelList, isSafeModelId } from './functions/api/_lib.js';
 import { onRequestGet as modelsGet } from './functions/api/models.js';
+import { onRequestPost as interpretPost, isRateLimited, __rlState } from './functions/api/interpret.js';
 
 let pass = 0, fail = 0;
 function eq(name, got, want) {
@@ -134,6 +135,108 @@ eq('带口令读列表 → 200', (await get('', { 'X-Access-Code': 'k' })).statu
 eq('未配置任何口令时读列表保持开放（向后兼容）', (await get('', {}, { LIUYAO_DB: mkDb() })).status, 200);
 eq('读路径同样认 ACCESS_CODE（与写路径同源）',
   (await get('', { 'X-Access-Code': 'a' }, { LIUYAO_DB: mkDb(), ACCESS_CODE: 'a' })).status, 200);
+
+// ---------- #17 上游超时与流式缓冲双守卫（第二十一轮 B4/B5） ----------
+// 上游是「用户自配的 OpenAI 兼容中转」，属信任边界外的输入：可能挂起不返回、也可能
+// 持续发送不含换行的数据或无限多条 data: 行。三处都必须有硬性收口。
+let fetchChunks = [];
+let fetchMode = 'bad';
+const origFetch = globalThis.fetch;
+globalThis.fetch = function (url, opts) {
+  if (fetchMode === 'hang') {
+    // 模拟上游挂起：不主动返回。带 signal 时于 abort 抛出（fetch 的真实行为）；
+    // 无 signal 时 3s 后兜底返回 500 —— 使「缺超时保护」表现为 502 而非无限挂起，
+    // 这样「有超时(504) / 无超时(502)」可判别，断言才不是空转。
+    return new Promise(function (resolve, reject) {
+      let done = false;
+      const fb = setTimeout(function () {
+        if (done) return; done = true;
+        resolve(new Response('late', { status: 500 }));
+      }, 3000);
+      const sig = opts && opts.signal;
+      if (sig) sig.addEventListener('abort', function () {
+        if (done) return; done = true; clearTimeout(fb);
+        const e = new Error('The operation was aborted'); e.name = 'AbortError'; reject(e);
+      });
+    });
+  }
+  if (fetchMode === 'bad') return Promise.resolve(new Response('upstream down', { status: 500 }));
+  const enc = new TextEncoder();
+  const body = new ReadableStream({
+    start: function (c) { fetchChunks.forEach(function (s) { c.enqueue(enc.encode(s)); }); c.close(); }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+
+const ENV_GPT = { GPT_API_KEY: 'k', GPT_MODELS: 'gpt-6-luna' };
+const post = function (env, headers) {
+  return interpretPost({
+    request: new Request('https://x/api/interpret', {
+      method: 'POST',
+      headers: Object.assign({ 'content-type': 'application/json' }, headers || {}),
+      body: JSON.stringify({ panText: '占测试', provider: 'gpt', model: 'gpt-6-luna' })
+    }),
+    env: env
+  });
+};
+const sseLine = function (txt) {
+  return 'data: ' + JSON.stringify({ choices: [{ delta: { content: txt } }] }) + '\n';
+};
+
+// B5：上游挂起 → AbortController 硬超时（旧版无 signal，请求会一直悬置）
+fetchMode = 'hang';
+const rTimeout = await post(Object.assign({ LLM_TIMEOUT_MS: '400' }, ENV_GPT));
+const jTimeout = await rTimeout.json();
+eq('上游挂起 → 504', rTimeout.status, 504);
+eq('上游挂起 → 错误码 LLM_TIMEOUT', jTimeout.error, 'LLM_TIMEOUT');
+eq('超时文案含秒数、不暴露堆栈', /秒内未返回完整响应/.test(jTimeout.message), true);
+
+// B4 守卫①：上游持续发送不含 \n 的数据 → 行缓冲永不切分，撞上限即断开。
+// 构造要点：把一段 data: 行「掐掉换行」后接 1.2 MB 无换行垃圾，再接一条正常 data: 行。
+//   有守卫 → 在 1.2 MB 处断开，一条正文都没积出 → EMPTY
+//   无守卫 → 垃圾与首行被并成一行而丢弃，但它会继续处理到后面那条正常行 → reply='乙'
+// 两种结果不同，断言才有判别力（若只用「纯垃圾流」，有无守卫都会得到 EMPTY，等于没测）。
+fetchMode = 'sse';
+fetchChunks = [sseLine('佳').replace(/\n$/, '') + 'x'.repeat(1200000) + '\n' + sseLine('乙') + 'data: [DONE]\n'];
+const rLine = await post(ENV_GPT);
+eq('无换行的超长流被守卫断开（未积出正文 → EMPTY）', rLine.status, 502);
+eq('无换行的超长流 → 错误码 EMPTY', (await rLine.json()).error, 'EMPTY');
+
+// B4 守卫②：上游发送超量 data: 行 → 累计正文封顶后断开，保留已收部分
+fetchChunks = [sseLine('甲'.repeat(3000)).repeat(100)];  // 正文 30 万字符 > SSE_MAX_REPLY(20 万)
+const rFlood = await post(ENV_GPT);
+const jFlood = await rFlood.json();
+eq('超量流式正文 → 仍 200（保留已收部分，不整条丢弃）', rFlood.status, 200);
+eq('超量流式正文 → 标记 REPLY_OVERFLOW', jFlood.truncated, 'REPLY_OVERFLOW');
+eq('正文长度被封顶在 200000', jFlood.reply.length, 200000);
+
+// 反向：正常长度的流不受守卫影响，且不引入 truncated 字段（不污染正常响应）
+fetchChunks = [sseLine('吉'), sseLine('凶'), 'data: [DONE]\n'];
+const rOk = await post(ENV_GPT);
+const jOk = await rOk.json();
+eq('正常流式仍原样拼接', jOk.reply, '吉凶');
+eq('正常流不带 truncated 字段', 'truncated' in jOk, false);
+eq('正常流带 provider/model', [jOk.provider, jOk.model], ['gpt', 'gpt-6-luna']);
+
+// ---------- #18 限流滑动窗口：单 IP 计数必须有界（第二十一轮 C5） ----------
+// 旧版每次请求都 hits.push()，数组随请求数无界增长；且 RL_HITS.size 超限时 clear()
+// 会把正在被限流的访客一并放行。生产当前未设 RATE_LIMIT_PER_MIN，此为启用后的隐患。
+fetchMode = 'bad';   // 上游返回 500 → 解释层给 502；用于区分「放行」与「429 被限流」
+const envRL = Object.assign({ RATE_LIMIT_PER_MIN: '3' }, ENV_GPT);
+const RL_IP = { 'CF-Connecting-IP': '203.0.113.7' };
+const codes = [];
+for (let i = 0; i < 20; i++) codes.push((await post(envRL, RL_IP)).status);
+eq('窗口内前 3 次放行', codes.slice(0, 3), [502, 502, 502]);   // 502 = 走到上游（被 mock 成 500）
+eq('第 4 次起一律 429', codes.slice(3), new Array(17).fill(429));
+eq('单 IP 计数数组封顶在 limit（旧版会涨到 20）',
+  __rlState().filter(function (x) { return x.ip === '203.0.113.7'; })[0].len, 3);
+eq('不同 IP 独立计数（不受上者限流影响）',
+  (await post(envRL, { 'CF-Connecting-IP': '203.0.113.8' })).status, 502);
+// 未配置 RATE_LIMIT_PER_MIN 时恒不限流（＝当前生产状态，第十七轮撤销后）
+eq('未设 RATE_LIMIT_PER_MIN → 不限流',
+  isRateLimited(new Request('https://x/', { headers: RL_IP }), {}), false);
+
+globalThis.fetch = origFetch;
 
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

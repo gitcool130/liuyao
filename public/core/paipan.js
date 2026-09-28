@@ -87,7 +87,27 @@
 
   // ---------- 排盘主函数 ----------
   // tossVals: 自下而上 6 项；1=少阳(单) 0=少阴(拆) 9=老阳(重·动) 6=老阴(交·动)
+  // 入参校验：本函数挂在 window.LY 上是公开 API，而内部换算 (v === 1 || v === 9) ? 1 : 0
+  // 对非法值**静默错排**——传统铜钱记法 7/8 不在 {0,1,6,9} 内会被一律当作阴爻，排出一个
+  // 毫不相干的卦却不报错；长度不足则抛 `Cannot read properties of undefined`。静默错排比
+  // 报错危险得多（第十七轮就曾以 [6,7,7,7,7,7] 想排天风姤、实得坤为地），故此处显式拒绝。
+  const TOSS_VALUES = [0, 1, 6, 9];
   function paipan(tossVals, dt) {
+    if (!Array.isArray(tossVals) || tossVals.length !== 6) {
+      throw new Error('paipan: tossVals 须为长度 6 的数组（自下而上），实得 ' +
+        (Array.isArray(tossVals) ? '长度 ' + tossVals.length : Object.prototype.toString.call(tossVals)));
+    }
+    for (let i = 0; i < 6; i++) {
+      const v = tossVals[i];
+      if (typeof v !== 'number' || TOSS_VALUES.indexOf(v) < 0) {
+        throw new Error('paipan: tossVals[' + i + '] = ' + JSON.stringify(v) +
+          ' 非法，须为 1(少阳/单)、0(少阴/拆)、9(老阳/重·动)、6(老阴/交·动) 之一');
+      }
+    }
+    // duck-typing 而非 instanceof：兼容跨 realm（vm / iframe）传入的 Date
+    if (!dt || typeof dt.getTime !== 'function' || isNaN(dt.getTime())) {
+      throw new Error('paipan: dt 须为有效 Date，实得 ' + Object.prototype.toString.call(dt));
+    }
     const pil = LY.fourPillars(dt);
     const ben = tossVals.map(function (v) { return (v === 1 || v === 9) ? 1 : 0; });
     const moving = tossVals.map(function (v) { return (v === 9 || v === 6); });
@@ -137,6 +157,11 @@
         beast: BEASTS[(beastBase + i) % 6],
         shi: benInfo.shi === i, ying: benInfo.ying === i,
         fu: fu,
+        // `bian` 是「变卦**同位爻**的纳甲」，只要本卦有动爻（hasBian）六爻全有值——
+        // **不是**「该爻发动后的值」。此为刻意设计：古籍排盘表的右半（变卦）对静爻位
+        // 同样印出纳甲，回归比对必须能逐位取到；故**不可**改成「静爻 bian = null」。
+        // 消费侧须自行判 L.moving（本仓 ruleDongBian / ruleMovingOthers / ruleSanHe 均已先判）。
+        // 见 tests/verify/regress.mjs 的「API 语义陷阱」注与 tests/guji/lib/check.mjs。
         bian: hasBian ? (function () {
           const xTrig = i < 3 ? bianLower : bianUpper;
           const xPos = (i < 3 ? 0 : 3) + (i % 3);

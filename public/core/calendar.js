@@ -130,6 +130,12 @@
   // ---------- 完整四柱 ----------
   // 月干依五虎遁，时干依五鼠遁；hour/minute 参与节气与子时边界判断
   function fourPillars(dt) {
+    // 入口校验：Invalid Date 会让 getFullYear() 等返回 NaN，一路传到 termMoment 的边界断言，
+    // 报出「JIEQI_DELTAS 损坏：term #NaN 绝对分钟=undefined」——**指向了错误的对象**。
+    // 真正的病因是日期非法，故在此提前给出准确文案（termMoment 的断言保持原样，它防的是差分链损坏）。
+    if (!dt || typeof dt.getTime !== 'function' || isNaN(dt.getTime())) {
+      throw new Error('fourPillars: dt 须为有效 Date，实得 ' + Object.prototype.toString.call(dt));
+    }
     let y = dt.getFullYear(), m = dt.getMonth() + 1, d = dt.getDate();
     const h = dt.getHours(), min = dt.getMinutes();
 
