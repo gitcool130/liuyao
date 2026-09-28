@@ -85,4 +85,29 @@ export function dateForDayGan(ganChar) {
   return null;
 }
 
+/**
+ * 「只知日干支」的等价日期搜索 —— 等价驱动的第三级弱化。
+ *
+ * 少数卦例只记日辰干支而不记月建（如《增删卜易》「旧存占验丙申日占文书」）。
+ * 若所测属性只依赖日支与日干、与月建无关（日辰生克／日冲／日合／旬空／六神／伏神），
+ * 则无需月建即可驱动。本函数在 1900 起 60 日内取一个日干支相符的日期。
+ *
+ * ⚠ 该日期只保证「日干支」正确；**月建为任意值**。因此由它驱动的对账仅对
+ *   「与月支无关」的字段有效。凡依赖月建的判定（旺相休囚死、月破、月建生克、
+ *   真空之「休囚无扶」分支、三合日月支）**一律不得**据此断言。
+ * @returns {Date|null}
+ */
+export function dateForDayGZ(dayGZ) {
+  const want = gzIndex(dayGZ);
+  if (want < 0) return null;
+  const j0 = LY.jdn(YEAR0, 1, 1);
+  for (let j = j0; j < j0 + 60; j++) {
+    const dt = LY.jdnToDate(j);
+    if (LY.dayGanZhiIndex(dt.y, dt.m, dt.d) === want) {
+      return new Date(dt.y, dt.m - 1, dt.d, 12, 0, 0, 0);
+    }
+  }
+  return null;
+}
+
 export const RANGE = { from: YEAR0, to: YEAR1 };

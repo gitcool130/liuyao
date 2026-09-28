@@ -132,6 +132,35 @@ if (fs.existsSync(CASES)) {
     ['改日辰（壬子→壬午，日冲消失）', function (d) {
       const c = d.cases.find(function (x) { return x.id === 'zsby-1508-ripo'; });
       c.dayGZ = '壬午';
+    }],
+    /* ---- 以下针对「伏神 / 动变 / 世爻 / 日辰 / 月建 / 旬空」诸族的用例 ---- */
+    ['改卦画令伏神不复存在（天山遁→乾为天）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-1059-feikefu'; });
+      c.toss = [1, 1, 1, 1, 1, 1];
+    }],
+    ['改日干支令「日冲飞神」消失（丙申→丙寅）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-1537-chongfeishen'; });
+      c.dayGZOnly = '丙寅';
+    }],
+    ['改 target 令「用神持世」不成立（妻财→兄弟）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-1142-caichishi'; });
+      c.target = '兄弟';
+    }],
+    ['改期望规则（化进神→化退神）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-1134-huajinshen'; });
+      c.expect.find(function (e) { return e.rule === '化进神'; }).rule = '化退神';
+    }],
+    ['改日辰令「日辰生扶」转为「日辰克伤」（戊辰→戊午）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-0692-richenshengfu'; });
+      c.dayGZ = '戊午';
+    }],
+    ['改月建令「临月建」不成立（酉月→卯月）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-0654-linyuejian'; });
+      c.monthZhi = '卯';
+    }],
+    ['改期望规则（真空→动不为空，锁定已登记分歧）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-3190-dongbuweikong'; });
+      c.expect.find(function (e) { return e.rule === '真空'; }).rule = '动不为空';
     }]
   ];
 

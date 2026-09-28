@@ -28,7 +28,7 @@ if (fs.existsSync(KNOWN_FILE)) {
   catch (e) { console.error('known-text-issues.json 解析失败：' + e.message); }
 }
 
-const total = { checks: 0, fails: 0, failLog: [], noDomain: [], byChapter: new Map(), cases: 0, excluded: 0, noGan: 0 };
+const total = { checks: 0, fails: 0, failLog: [], noDomain: [], byChapter: new Map(), cases: 0, excluded: 0, noGan: 0, divergences: 0, divergenceIds: [] };
 const metas = [];
 
 function merge(name, R) {
@@ -37,6 +37,8 @@ function merge(name, R) {
   total.cases += R.cases;
   total.excluded += (R.excluded || 0);
   total.noGan += (R.noGan || 0);
+  total.divergences += (R.divergences || 0);
+  total.divergenceIds = total.divergenceIds.concat(R.divergenceIds || []);
   total.failLog = total.failLog.concat(R.failLog);
   total.noDomain = total.noDomain.concat(R.noDomain);
   R.byChapter.forEach(function (v, k) {
@@ -44,7 +46,7 @@ function merge(name, R) {
     b.n += v.n; b.bad += v.bad;
     total.byChapter.set(k, b);
   });
-  metas.push({ name: name, cases: R.cases, fails: R.fails, excluded: R.excluded || 0, noGan: R.noGan || 0 });
+  metas.push({ name: name, cases: R.cases, fails: R.fails, excluded: R.excluded || 0, noGan: R.noGan || 0, divergences: R.divergences || 0 });
 }
 
 if (fs.existsSync(CORPUS_DIR)) {
@@ -72,12 +74,19 @@ metas.forEach(function (m) {
   console.log('  ' + m.name + '：' + m.cases + ' 条' +
     (m.excluded ? '　※登记文本缺陷 ' + m.excluded + ' 处' : '') +
     (m.noGan ? '　（其中 ' + m.noGan + ' 条未印日干，六神项略）' : '') +
+    (m.divergences ? '　※登记口径分歧 ' + m.divergences + ' 处' : '') +
     (m.fails ? '　✗ ' + m.fails + ' 处不符' : ''));
 });
 
 console.log('\n断言总数 ' + total.checks + '　通过 ' + (total.checks - total.fails) + '　失败 ' + total.fails +
   (total.excluded ? '　（含已登记文本缺陷 ' + total.excluded + ' 处）' : '') +
   (total.noDomain.length ? '　无等价日期 ' + total.noDomain.length : ''));
+
+if (total.divergences) {
+  console.log('\n※ 已登记口径分歧 ' + total.divergences + ' 处（' + total.divergenceIds.join('、') + '）');
+  console.log('  原文口径与本实现不同：保留实现口径 → 登记分歧 → 锁定现状（expect 写实测值）。');
+  console.log('  这类用例仍参与断言；若将来改了口径，测试会转红并提示更新分歧表。');
+}
 
 if (total.excluded) {
   console.log('\n※ 已登记文本缺陷 ' + total.excluded + ' 处 —— 逐条回溯定本原文，定性为第三方转换文本的排版缺陷');

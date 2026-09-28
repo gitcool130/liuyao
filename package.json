@@ -13,6 +13,7 @@
     "test:diff": "node test-diff.mjs",
     "test:guji": "node tests/guji/run.mjs",
     "test:guji:self": "node tests/guji/selftest.mjs",
+    "guji:coverage": "node tests/guji/coverage.mjs",
     "test:ui": "node test-shake.js",
     "gen:jieqi": "node tools/gen-jieqi.js",
     "gen:guji": "node tools/guji-import.mjs",

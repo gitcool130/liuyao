@@ -7,7 +7,7 @@
  * 期望值全部取自古籍印刷内容，引擎只负责「由卦画推装卦」，无自证。
  * ============================================================ */
 import LY from '../../../core.js';
-import { dateForGZ, dateForDayGan } from './ganzhi.mjs';
+import { dateForGZ, dateForDayGan, dateForDayGZ } from './ganzhi.mjs';
 
 const ZHI = LY.ZHI;
 
@@ -175,9 +175,19 @@ export function checkTabCorpus(corpus, known) {
  *   { "atLine": 0, "dayChong": "andong" } 单爻视角：日冲判定 kind
  *   { "atLine": 5, "dongBian": "回生" }  单爻视角：动变判定 kind
  * atLine 为 0–5（初爻→上爻）。
+ *
+ * 驱动日期三级（等价驱动，见 README「等价性论证」）：
+ *   c.date        —— 直接给定（用于原书未系月日者，等价驱动的最弱形式，note 须注明）
+ *   c.dayGZOnly   —— 只按「日干支」搜索（用于原书只记日辰者；不断言任何依赖月建的项）
+ *   c.monthZhi + c.dayGZ —— 按「月支 + 日干支」搜索（常规）
+ *
+ * knownDivergence: true 的用例：原文口径与本实现不同，**保留实现口径 → 登记分歧 → 锁定现状**
+ * （expect 写实测值）。这类用例仍参与断言，将来若有人改了口径测试会红，提示更新分歧表。
  */
 export function checkCases(doc) {
   const R = mk();
+  R.divergences = 0;
+  R.divergenceIds = [];
 
   function bump(key) {
     R.checks++;
@@ -197,8 +207,10 @@ export function checkCases(doc) {
   }
 
   (doc.cases || []).forEach(function (c) {
-    const dt = c.date ? new Date(c.date) : dateForGZ(c.monthZhi, c.dayGZ);
-    if (!dt) { R.noDomain.push({ id: c.id, head: c.title || '', monthZhi: c.monthZhi, dayGZ: c.dayGZ }); return; }
+    const dt = c.date ? new Date(c.date)
+      : (c.dayGZOnly ? dateForDayGZ(c.dayGZOnly) : dateForGZ(c.monthZhi, c.dayGZ));
+    if (!dt) { R.noDomain.push({ id: c.id, head: c.title || '', monthZhi: c.monthZhi, dayGZ: c.dayGZ || c.dayGZOnly }); return; }
+    if (c.knownDivergence) { R.divergences++; R.divergenceIds.push(c.id); }
 
     const pan = LY.paipan(c.toss, dt);
     const pil = pan.pillars;
