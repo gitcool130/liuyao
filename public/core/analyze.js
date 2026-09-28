@@ -242,27 +242,32 @@
   }
 
   // ---------- 规则 7：旬空（静空/动空/真空） ----------
-  // 真空口径（本项目取宽口径，README「已知口径分歧」已登记）：
-  //   (a) 旬空 + 月破（zhenYuePo）→ 真空；
-  //   (b) 休囚（休/囚/死）且无日辰生扶 → 真空。
-  // 野鹤老人季节口径更窄（「春土夏金秋是木，三冬逢火是真空」），只承认「死」为真空；
-  // 本实现按 WEAK 全集判，属流派选择而非缺陷——外部审计勿再按野鹤口径重报。
+  // 真空口径依《卜筮正宗·旬空论第十》两侧清单：
+  //   「到底有用」：旺相旬空、**休囚发动**、日辰生扶、动爻生扶、动爻变空、伏而旺相
+  //   「真空到底空」：**休囚安静**、日辰克动、爻克伏而被克、**静逢月破**值此旬空者
+  // → 真空的两个分支皆以「安静」为前提，故 moving 是真空的**前置守卫**，而非优先级问题。
+  //   《增删卜易·旬空章第二十六》同调：「旺不为空，动不为空，有日建动爻生扶者不为空……」。
+  //   旧版缺此守卫：动爻遇旬空且休囚即被误判真空（实例 zsby-3190，原文作「动不为空」）。
+  // 另：《增删卜易》与《卜筮正宗·用神空亡诀》的真空另取季节口径（「春土夏金秋树木，三冬逢火
+  //   是真空」，即仅「死」地为真空），比本实现的「休/囚/死」窄 —— 该宽窄属流派选择，
+  //   README「已知口径分歧」已登记，外部审计勿按季节口径重报。
   // 注意 daySupports 对「用神克日辰（耗于日辰）」置 false，故用神克日不会误当拱扶。
   function ruleXunKong(L, pil, zhenYuePo, daySupports, grade, target) {
     const js = [];
     if (pil.kong.indexOf(L.zhiIdx) < 0) return { isKong: false, zhen: false, judgments: js };
     const nm = nameOf(L, target);
-    const zhen = zhenYuePo || (WEAK.indexOf(grade) >= 0 && !daySupports); // 旬空+月破=真空；休囚无生扶亦真空
+    const jing = !L.moving; // 真空以安静为前提（旬空论第十：休囚安静 / 静逢月破）
+    const zhen = jing && (zhenYuePo || (WEAK.indexOf(grade) >= 0 && !daySupports)); // 静∧（空+月破 ∨ 休囚无扶）
     if (zhen) {
       js.push({
         tag: '旬空', rule: '真空',
-        text: nm + '值旬空（' + pil.kongStr + '空），' + (zhenYuePo ? '又逢月破，空破交加，' : '休囚又无日辰生扶，空而无扶，') + '真空之象，难以有成。',
-        basis: '《卜筮正宗》：旬空逢月破、休囚无救者为真空，真空则无用'
+        text: nm + '安静而值旬空（' + pil.kongStr + '空），' + (zhenYuePo ? '又逢月破，空破交加，' : '休囚又无日辰生扶，空而无扶，') + '真空之象，难以有成。',
+        basis: '《卜筮正宗·旬空论第十》：休囚安静、静逢月破值此旬空者，谓之真空到底空'
       });
       return { isKong: true, zhen: true, judgments: js };
     }
     if (L.moving) {
-      js.push({ tag: '旬空', rule: '动不为空', text: nm + '发动而值旬空（' + pil.kongStr + '空），动不为空，出空之日即有用。', basis: '发动之爻不为空，出空则用' });
+      js.push({ tag: '旬空', rule: '动不为空', text: nm + '发动而值旬空（' + pil.kongStr + '空），动不为空，出空之日即有用。', basis: '《卜筮正宗·旬空论第十》「休囚发动……到底有用」；《增删卜易·旬空章第二十六》「旺不为空，动不为空」' });
     } else {
       js.push({ tag: '旬空', rule: '旬空待时', text: nm + '安静而值旬空（' + pil.kongStr + '空），旺不惧空、衰不竞空，出空之日或冲空之日可应。', basis: '旬空者待时也，出空冲空则应' });
     }

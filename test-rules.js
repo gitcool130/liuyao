@@ -70,6 +70,24 @@ eq('动不为空', dk.judgments[0].rule, '动不为空');
 const bk = C.ruleXunKong(mkLine({ zhi: '午', zhiIdx: 6, wx: '火' }), mkPil({ kong: [] }), false, false, '旺', '官鬼');
 eq('不空无判定', bk.isKong, false);
 
+// 真空以「安静」为前提（《卜筮正宗·旬空论第十》：动爻永不真空）——两条真空分支逐条覆盖
+// (a) 休囚无日扶 + 旬空：静者真空，动者「动不为空」
+const kWeakStatic = C.ruleXunKong(mkLine({ zhi: '午', zhiIdx: 6, wx: '火' }), mkPil({ kong: [6, 7], kongStr: '午未' }), false, false, '囚', '官鬼');
+eq('休囚无扶+空+静 = 真空', kWeakStatic.zhen, true);
+const kWeakMoving = C.ruleXunKong(mkLine({ zhi: '午', zhiIdx: 6, wx: '火', moving: true }), mkPil({ kong: [6, 7], kongStr: '午未' }), false, false, '囚', '官鬼');
+eq('休囚无扶+空+动 ≠ 真空', kWeakMoving.zhen, false);
+eq('休囚无扶+空+动 → 动不为空', kWeakMoving.judgments[0].rule, '动不为空');
+// (b) 旬空 + 月破：静者真空，动者亦不为真空（「静逢月破值此旬空者」）
+const kPoStatic = C.ruleXunKong(mkLine({ zhi: '午', zhiIdx: 6, wx: '火' }), mkPil({ kong: [6, 7], kongStr: '午未' }), true, true, '旺', '官鬼');
+eq('空+月破+静 = 真空', kPoStatic.zhen, true);
+const kPoMoving = C.ruleXunKong(mkLine({ zhi: '午', zhiIdx: 6, wx: '火', moving: true }), mkPil({ kong: [6, 7], kongStr: '午未' }), true, false, '囚', '官鬼');
+eq('空+月破+动 ≠ 真空', kPoMoving.zhen, false);
+eq('空+月破+动 → 动不为空', kPoMoving.judgments[0].rule, '动不为空');
+// 文案自洽：真空必称「安静」，动不为空必称「发动」（防改判定时漏改文案）
+eq('真空文案称「安静」', kWeakStatic.judgments[0].text.indexOf('安静') >= 0, true);
+eq('动不为空文案称「发动」', kWeakMoving.judgments[0].text.indexOf('发动') >= 0, true);
+eq('动不为空仍计入旬空', kWeakMoving.isKong, true);
+
 // ---------- 5. 进神退神 ----------
 const jin = C.ruleDongBian(mkLine({ zhi: '寅', zhiIdx: 2, wx: '木', moving: true, bian: { zhi: '卯', wx: '木', lq: '兄弟' } }), '兄弟');
 eq('寅化卯=进神', jin.judgments.some(function (j) { return j.rule === '化进神'; }), true);

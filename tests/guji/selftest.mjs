@@ -158,9 +158,13 @@ if (fs.existsSync(CASES)) {
       const c = d.cases.find(function (x) { return x.id === 'zsby-0654-linyuejian'; });
       c.monthZhi = '卯';
     }],
-    ['改期望规则（真空→动不为空，锁定已登记分歧）', function (d) {
+    ['改卦画令用神由动转静（老阴→少阴，「动不为空」应转「真空」）', function (d) {
       const c = d.cases.find(function (x) { return x.id === 'zsby-3190-dongbuweikong'; });
-      c.expect.find(function (e) { return e.rule === '真空'; }).rule = '动不为空';
+      c.toss[5] = 0; // 上爻戌土：6 老阴动 → 0 少阴静
+    }],
+    ['改月建令用神由静转旺（辰→亥，「真空」应不成立）', function (d) {
+      const c = d.cases.find(function (x) { return x.id === 'zsby-1547-zhenkong'; });
+      c.monthZhi = '亥'; // 用神子水由「死」（辰土克水）转「旺」（亥为同气）→ 真空不成立
     }]
   ];
 
