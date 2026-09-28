@@ -244,7 +244,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 - **卦例库口令**：`LIB_CODE` 专管卦例库**写入**（装入/更新），与全站闸 `ACCESS_CODE` 解耦——浏览开放、装入登录、断卦不受限；页面「口令登录」按钮经 `POST /api/records?verify=1` 探针验证，自动保存静默跳过未登录状态
 - **密钥不出服务端**：API Key 全部存 CF secret（加密变量，wrangler 部署不覆盖），模型名白名单 + 输入长度截断防注入
 - **读接口开放的影响范围（第五轮审计补充）**：`GET /api/records` 列表与 `?id=` 详情**始终开放**（有意设计），故在只设 `LIB_CODE` 的推荐配置下，任何访客可读到全部卦例的 `question`（占问之事）与 `pillars`；猜中/拿到 id 后 `?id=` 还会返回 **`pan_text` 全文与 `messages`（各模型完整 AI 对话历史）**。问病、问讼、问感情类占问内容属隐私，如需收紧可给 `?id=` 详情挂 `checkAccess`，或仅返回 `messages` 摘要
-- **请求规模与限流**：`/api/interpret` 单请求上限为 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符；可选环境变量 `RATE_LIMIT_PER_MIN` 按访客 IP 限流（默认关闭，仅 isolate 内计数）。**未设置 `ACCESS_CODE` 时该端点完全开放**，生产建议至少二选一：设 `ACCESS_CODE`，或在 CF 后台为该路径配置 Rate Limiting 规则
+- **请求规模与限流**：`/api/interpret` 单请求上限为 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符；`RATE_LIMIT_PER_MIN` 按访客 IP 限流（仅 isolate 内计数）。**两端已于 2026-09-28 收口**：生产已设 `ACCESS_CODE`（全站口令）与 `RATE_LIMIT_PER_MIN=20`，`/api/interpret` 不再是开放端点（无口令 → `401 ACCESS_REQUIRED`）。仍建议在 CF 后台对 `/api/interpret` 追加 Rate Limiting 规则，以补 isolate 内计数可被绕过的缺口
 - **部署防回归**：已禁用 GitHub 集成的自动生产部署（其 Functions 构建缓存会回滚代码并抢占生产），统一由 wrangler direct upload 部署
 
 ### 生成式琴音（bgm.js）
@@ -361,9 +361,12 @@ git status -sb                    # 若显示 ahead，先推送再审计
 
 **其他**
 
-- `LIB_CODE`：卦例库写入口令（secret）。设置后装入卦例库需先在页面「口令登录」；未设置则写入开放。读取（GET）始终开放。
-- `ACCESS_CODE`：全站访问口令（secret），设置后**所有接口**（含断卦）都需口令。一般只需 LIB_CODE，不要两个都设。
-- `RATE_LIMIT_PER_MIN`：选填，`/api/interpret` 按访客 IP 的每分钟请求上限（文本变量）。**未设置则不限流**；仅当前 isolate 内计数，属成本抑制兜底，生产建议在 CF 后台对该路径另配 Rate Limiting 规则。
+- `LIB_CODE`：卦例库写入口令（secret）。设置后装入卦例库需先在页面「口令登录」；未设置则写入开放。读取（GET）始终开放。**生产已设**。
+- `ACCESS_CODE`：全站访问口令（secret），设置后**所有接口**（含断卦）都需口令。**生产已于 2026-09-28 启用**（口令值只存 CF secret，不落仓库与文档）。页面首次调用收 401 → 前端弹框输入 → 存入 `localStorage['ly_access_code']`，此后请求带 `X-Access-Code` 头。
+  换口令只需 `wrangler pages secret put ACCESS_CODE --project-name=liuyao`，**无需重新部署**（secret 即时生效）。
+  > 与 `LIB_CODE` 的关系：设了 `ACCESS_CODE` 后**读取与断卦也需口令**，比只设 `LIB_CODE` 更严。两者可共存——`ACCESS_CODE` 管读与断卦，`LIB_CODE` 专管卦例库写入（`records.js` 中 `LIB_CODE || ACCESS_CODE` 的回退只在 `LIB_CODE` 未设时生效）。
+- `RATE_LIMIT_PER_MIN`：`/api/interpret` 按访客 IP 的每分钟请求上限。**生产已设 `20`**，写在 `wrangler.toml [vars]`（非敏感、随仓库版本管理）。
+  取 20 的理由：正常用法是「一次起卦 + 若干追问」，约 3~6 次/分；20 留 3~5 倍余量，共用出口（同 IP）也不易误伤；对脚本则把天花板压到 ≈2.9 万次/日/IP。仅当前 isolate 内计数，属成本抑制兜底，仍建议在 CF 后台对该路径另配 Rate Limiting 规则叠加。
 - 文件清单新增 `bgm.js`（琴音引擎）。
 
 > ⚠️ 注意：wrangler CLI 部署时 `wrangler.toml [vars]` 会覆盖后台同名**文本**变量（secret 不受影响）。后台改完变量后用 wrangler 重新部署一次生效。
@@ -389,14 +392,44 @@ npm run gen:jieqi                 # 重新生成节气表（改覆盖范围时�
 
 ## 部署
 
+**先判断要不要部署**：只有触及 `public/`、`functions/`、`wrangler.toml` 的提交才进部署产物；
+只改 `tests/`、`tools/`、README 的提交推上去线上也不会变（本项目自动部署已禁用）。
+
 ```bash
-npx wrangler pages deploy public --project-name=liuyao --branch=main
+npx wrangler pages deploy public --project-name=liuyao --branch=main \
+  --commit-hash=$(git rev-parse HEAD) --commit-message="<一句话>"
 ```
 
 > 部署根是 `public/`（`wrangler.toml` 内 `pages_build_output_dir` 已固定）。
 > 部署后请确认 `https://<域名>/wrangler.toml` **不可**取到真实内容
 > （若返回 `text/html` 即页面回退，说明隔离正常；返回 `application/toml` 即为泄露）。
 > 注意本项目对未知路径有 SPA 回退，故不能只看 HTTP 状态码，必须比对 `Content-Type`。
+
+### ⚠️ 两个会让「逐字节校验」误判的坑（2026-09-28 实测）
+
+**① 行尾：wrangler 把 `public/` 文件原样上传。**
+本仓库远端是 LF，而 Windows 工作区被 `core.autocrlf` 检出为 CRLF。
+直接 `wrangler pages deploy public` 会把 **CRLF 版本**推上线（`analyze.js` 多出 671 字节、
+`app.js` 多出 855 字节）。功能无影响（`index.html` 用的是普通 `<script src>`，无内容哈希），
+但「线上 == main 逐字节」这一审计不变量会失效。要保住它，就从 LF 归一化的副本部署：
+
+```bash
+rm -rf .tmp-deploy && mkdir -p .tmp-deploy
+cp -r public functions wrangler.toml .tmp-deploy/
+python -c "import os
+for d,_,fs in os.walk('.tmp-deploy'):
+    for f in fs:
+        p=os.path.join(d,f); b=open(p,'rb').read()
+        if b'\r\n' in b: open(p,'wb').write(b.replace(b'\r\n',b'\n'))"
+cd .tmp-deploy && npx wrangler pages deploy public --project-name=liuyao --branch=main
+```
+
+**② HTML 永远不能逐字节比。**
+Cloudflare 会向 `text/html` 注入 Bot Management 脚本
+（`window.__CF$cv$params` + `/cdn-cgi/challenge-platform/scripts/jsd/main.js`），
+实测首页多出 938 字节。判据要换成「**最长公共前缀 + 最长公共后缀**」：
+若 `live = prefix + 注入段 + suffix` 且 `repo = prefix + suffix`，即为注入而非改动。
+静态 JS/CSS 不会被注入，可直接 `cmp`。
 
 D1 建库：控制台创建后将 `database_id` 填入 wrangler.toml，并执行 `schema.sql`。
 

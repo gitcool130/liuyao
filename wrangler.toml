@@ -31,6 +31,21 @@ database_id = "42279a23-7032-42bb-b675-bb7a2015fcc0"
 # 未配置时后端回退 Google 原生端点 generativelanguage.googleapis.com（数据中心 IP 常被拒）
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
+# ---- 两道费用/访问闸门（2026-09-28 启用）----
+# RATE_LIMIT_PER_MIN：/api/interpret 按访客 IP 的每分钟上限。
+# 取 20 的理由：正常用法是「一次起卦 + 若干追问」，约 3~6 次/分；20 留 3~5 倍余量，
+# 连公司/家庭共用出口（同 IP）也不易误伤；对脚本则把天花板压到 20 次/分 ≈ 2.9 万次/日/IP。
+# 注意：只在单个 isolate 内计数，属「削减」而非「根治」——要根治需在 CF 后台
+# Rules → Rate limiting rules 对 /api/interpret 另加规则（与本变量叠加）。
+RATE_LIMIT_PER_MIN = "20"
+#
+# ACCESS_CODE 是敏感值，**刻意不写在本文件**（仓库公开），改用 Pages secret 设置：
+#   wrangler pages secret put ACCESS_CODE --project-name=liuyao
+# 已设于 production。设置后页面首次调用会收 401，前端弹框要求输入口令并存入
+# localStorage（键名 ly_access_code），后续请求带 X-Access-Code 头。
+# 换口令：重跑上面那条命令即可（改完无需重新部署，secret 即时生效）。
+# 注意：本文件的 vars 会覆盖 Pages 后台同名「文本」变量，但**不影响** secret。
+
 # ---- GPT / OpenAI 兼容供应商（后台也可直接设这三个变量）----
 # GPT_API_KEY / GPT_BASE_URL / GPT_MODELS（逗号分隔模型名）
 # 注意：本文件里写的 vars 会覆盖 Pages 后台的同名"文本"变量（secret 不受影响）；
@@ -45,7 +60,7 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 # 若用 wrangler CLI 部署，需把 CUSTOM_PROVIDERS 同步写到这里（JSON 写成单行字符串）：
 # CUSTOM_PROVIDERS = '[{"id":"kimi","label":"Moonshot","base":"https://api.moonshot.cn/v1","models":["kimi-k2"]}]'
 
-# ACCESS_CODE = ""   # 选填：访问口令；设置后页面首次调用会提示输入
-# RATE_LIMIT_PER_MIN = "30"  # 选填：/api/interpret 按访客 IP 的每分钟上限；不设则不限流。
-#                            # 仅当前 isolate 内计数（成本抑制兜底），生产建议同时在
-#                            # CF 后台 Rules → Rate limiting rules 对 /api/interpret 加规则
+# 上面两道闸门见本节前述说明；ACCESS_CODE 走 secret，RATE_LIMIT_PER_MIN 走本文件 [vars]。
+#
+# 仍未做（需在 CF 后台手动操作，CLI 不支持）：Rules → Rate limiting rules 对
+# /api/interpret 加规则。本文件里的 RATE_LIMIT_PER_MIN 只在 isolate 内计数，可被绕过。
