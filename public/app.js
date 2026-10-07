@@ -439,6 +439,9 @@
       list.innerHTML = '<li>选择所测之事，先观用神旺衰。通用次第：一观世爻旺衰，二观用神与世应，三审动爻生克，四定旬空月破与应期。</li>' +
         (target === '__custom__' ? '<li>自定义所测不作旺衰粗判，所测事项将写入排盘文本交由大模型细断。</li>' : '');
       vBox.hidden = true; lastBullets = [];
+      // 清空旧分析：否则断后审查会拿「上一次所选事类」的 judgments
+      // 去撞自定义事由的断语，必然误报（如旧选妻财、新问跳槽取官鬼）。
+      lastAnalysis = null;
       return;
     }
     const res = C.analyze(pan, target);
@@ -740,9 +743,11 @@
     } catch (e) { /* 审计自身出错不得影响断语展示 */ }
 
     // 二、推理一致性审查（真空/动空混淆、暗动写成日破、取错用神、漏审结构）
+    // 第三参传 pan：A2「无中生有」类须按全盘六爻重算——analyze 只判用神一线，
+    // 断语谈其他爻的旬空/月破/日冲完全合法，只看 judgments 会误报。
     if (!HAS_COVER) return out;
     try {
-      const cv = C.auditCoverage(reply, lastAnalysis);
+      const cv = C.auditCoverage(reply, lastAnalysis, pan);
       const txt = C.coverageText(cv);
       if (!txt) return out;
       // 概念误置是硬告警，纯遗漏只作普通提示——两者视觉上必须分清，

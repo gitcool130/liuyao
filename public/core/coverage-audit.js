@@ -9,6 +9,7 @@
  *        真空 / 动不为空 / 旬空待时     真破 / 假破      暗动 / 日破 / 冲散
  *      盘面判成「暗动」而断语写成「日破」，文字通顺、盘面也没写反，
  *      唯独结论反了——fact-audit 查不出，这里查。
+ *      （「非日破，实为暗动」这类否定表述有豁免，见 findAsserted）
  *
  *   B. 结构遗漏（软提示）
  *      盘里判定出来的月破、旬空、伏神、三合、刑害，断语一个字没提。
@@ -68,12 +69,51 @@
     }
   ];
 
-  // 盘面本无此结构，断语却言之凿凿——同样是误置
+  // 盘面本无此结构，断语却言之凿凿——同样是误置。
+  // 注意：analyze 只判用神一线，judgments 无某 tag ≠ 全盘无该结构；
+  // 故此类必须结合第三参 pan 对六爻重算（见 panHasStructure）。
   const ABSENT_CLAIMS = [
     { tag: '月破', words: ['月破', '真破', '假破'], truth: '卦盘未判月破' },
     { tag: '旬空', words: ['旬空', '空亡'], truth: '卦盘未判旬空' },
     { tag: '日冲', words: ['暗动', '日破'], truth: '卦盘未判日辰相冲' }
   ];
+
+  // ---- 否定豁免：「出现某词」≠「断言某词」 ----
+  // 「非真空也」「并非日破，实为暗动」「幸无月破」——都是正确的断语，
+  // 子串匹配会把它们当成反向断言。命中词前 3 字内含否定字即视为否定表述。
+  // 方向是保守的：长距否定（「……吗？不，是真空」）会漏报，但绝不误报。
+  const NEG = ['非', '不', '未', '无', '莫'];
+  function isNegated(src, idx) {
+    const pre = src.slice(Math.max(0, idx - 3), idx);
+    for (let i = 0; i < NEG.length; i++) if (pre.indexOf(NEG[i]) >= 0) return true;
+    return false;
+  }
+  /** 找 word 的非否定出现位置；全部出现都在否定语境中则返回 -1。 */
+  function findAsserted(src, word) {
+    let idx = src.indexOf(word);
+    while (idx >= 0) {
+      if (!isNegated(src, idx)) return idx;
+      idx = src.indexOf(word, idx + word.length);
+    }
+    return -1;
+  }
+
+  // ---- 全盘结构重算（A2 用） ----
+  // judgments 只覆盖用神一线；断语谈其他爻的旬空/月破/日冲是正常操作。
+  // 返回 true=全盘确有该结构 / false=全盘皆无 / null=无 pan 无法确定。
+  function panHasStructure(pan, tag) {
+    if (!pan || !Array.isArray(pan.lines) || !pan.pillars) return null;
+    const pil = pan.pillars;
+    const ch = function (a, b) { return ((a - b) % 12 + 12) % 12 === 6; };
+    let found = false;
+    pan.lines.forEach(function (L) {
+      if (!L || typeof L.zhiIdx !== 'number') return;
+      if (tag === '月破' && typeof pil.monthZhi === 'number' && ch(L.zhiIdx, pil.monthZhi)) found = true;
+      if (tag === '旬空' && Array.isArray(pil.kong) && pil.kong.indexOf(L.zhiIdx) >= 0) found = true;
+      if (tag === '日冲' && typeof pil.dayZhi === 'number' && ch(L.zhiIdx, pil.dayZhi)) found = true;
+    });
+    return found;
+  }
 
   // ---- B. 结构遗漏：盘里判出来了，断语应当交代 ----
   // 关键词取「提到就算」的宽口径：漏看只是软提示，宁可漏报不可误报
@@ -106,9 +146,12 @@
   /**
    * @param {string} text 断语全文
    * @param {object} [analysis] C.analyze() 的返回值（可空，空则只做 A 类）
+   * @param {object} [pan] C.paipan() 的返回值（可空）。给了 pan 之后，A2「无中生有」
+   *        按全盘六爻重算：断语谈非用神爻的旬空/月破/日冲属正常，不再误报；
+   *        只有「全盘六爻皆无该结构」才告警。不给 pan 则退回旧行为（仅按 judgments）。
    * @returns {{accepted:boolean, conflicts:Array, missing:Array, yongshen:?object, checked:string[]}}
    */
-  function auditCoverage(text, analysis) {
+  function auditCoverage(text, analysis, pan) {
     const src = String(text == null ? '' : text);
     const js = (analysis && Array.isArray(analysis.judgments)) ? analysis.judgments : [];
     const conflicts = [];
@@ -120,13 +163,13 @@
 
     const tags = tagsOf(js);
 
-    // A1. 成对立判：盘面判成 X，断语却用了 X 的反义词
+    // A1. 成对立判：盘面判成 X，断语却用了 X 的反义词（否定表述豁免）
     CONCEPTS.forEach(function (c) {
       if (!tags[c.tag]) return;
       const hit = js.filter(function (j) { return j.tag === c.tag && c.pick(j); });
       if (!hit.length) return;
       c.deny.forEach(function (w) {
-        if (src.indexOf(w) >= 0) {
+        if (findAsserted(src, w) >= 0) {
           conflicts.push({
             type: c.tag + '误置',
             claimed: w,
@@ -138,18 +181,21 @@
     });
     checked.push('成对概念误置（真空/动空/待时 · 真破/假破 · 暗动/日破/冲散）');
 
-    // A2. 盘面本无此结构，断语却断言存在
+    // A2. 盘面本无此结构，断语却断言存在（否定表述豁免；有 pan 时按全盘重算）
     ABSENT_CLAIMS.forEach(function (a) {
       if (tags[a.tag]) return;
       a.words.forEach(function (w) {
-        if (src.indexOf(w) >= 0) {
-          conflicts.push({
-            type: a.tag + '无中生有',
-            claimed: w,
-            actual: a.truth,
-            hint: a.truth + '，断语却写了「' + w + '」——须核对是另有所指还是误判。'
-          });
-        }
+        if (findAsserted(src, w) < 0) return;
+        const panHas = panHasStructure(pan, a.tag);
+        // 非用神爻确有此结构：断语另有所指，完全合法，放行。
+        if (panHas === true) return;
+        const truth = panHas === false ? '全盘六爻皆无' + a.tag : a.truth;
+        conflicts.push({
+          type: a.tag + '无中生有',
+          claimed: w,
+          actual: truth,
+          hint: truth + '，断语却写了「' + w + '」——须核对是另有所指还是误判。'
+        });
       });
     });
     checked.push('无此结构而断言（月破/旬空/日冲）');
@@ -164,20 +210,29 @@
     });
     checked.push('结构遗漏（月破/旬空/日冲/动变/伏神/三合/刑害）');
 
-    // C. 用神一致性：只审明说的取用，不说就不审
+    // C. 用神一致性：只审明说的取用，不说就不审。
+    // 「以官鬼为忌神」「取父母为原神」说的是忌/仇/原神，不是取用——
+    // 命中词后紧跟「为忌/为仇/为原」等角色词的匹配一律跳过。
     let ys = null;
-    const m = src.match(/(?:以|取|用神(?:为|是|取)?)\s*(父母|兄弟|子孙|妻财|官鬼|世爻)/);
-    if (m && analysis && analysis.yongshen) {
-      const actual = analysis.yongshen.type;
-      ys = { claimed: m[1], actual: actual, match: m[1] === actual };
-      if (!ys.match) {
-        conflicts.push({
-          type: '用神不一致',
-          claimed: m[1],
-          actual: actual,
-          hint: '断语取「' + m[1] + '」为用，卦盘按所测之事取的是「' + actual + '」——用神一错，全篇生克皆落空处。'
-        });
+    const YS_SKIP = ['为忌', '为仇', '为原', '作忌', '为闲'];
+    const reYs = /(?:以|取|用神(?:为|是|取)?)\s*(父母|兄弟|子孙|妻财|官鬼|世爻)/g;
+    let m;
+    while ((m = reYs.exec(src)) !== null) {
+      const tail = src.slice(m.index + m[0].length, m.index + m[0].length + 3);
+      if (YS_SKIP.some(function (s) { return tail.indexOf(s) === 0; })) continue;
+      if (analysis && analysis.yongshen) {
+        const actual = analysis.yongshen.type;
+        ys = { claimed: m[1], actual: actual, match: m[1] === actual };
+        if (!ys.match) {
+          conflicts.push({
+            type: '用神不一致',
+            claimed: m[1],
+            actual: actual,
+            hint: '断语取「' + m[1] + '」为用，卦盘按所测之事取的是「' + actual + '」——用神一错，全篇生克皆落空处。'
+          });
+        }
       }
+      break; // 只审第一个有效取用，避免同篇多角色词互相干扰
     }
     checked.push('用神一致性（仅在断语明说取用时审）');
 

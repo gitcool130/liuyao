@@ -245,5 +245,41 @@ if (missOnly.missing.length) {
   ok('纯遗漏提示说明是漏审', t.indexOf('漏审') >= 0);
 } else { ok('纯遗漏用例跳过', true); }
 
+// ---------- 8. 覆盖率审查的误报豁免（第二轮审计修复） ----------
+// 这一组是「豁免过头」与「豁免不足」的双向断言：改任何一边都应变红。
+
+// 否定句式：「非真空」「并非日破」「幸无月破」都是正确断语，不得当反向断言。
+// 实测：旧版把「非真空也」报成真空冲突、「非日破也，实为暗动」报成日破冲突。
+eq('否定「非真空」→放行', C.auditCoverage('此爻发动值空，动不为空，非真空也。', kDong).accepted, true);
+eq('否定「非日破」→放行', C.auditCoverage('旺相逢冲，非日破也，实为暗动。', andong).accepted, true);
+eq('否定「幸无月破」→放行', C.auditCoverage('用神无伤，幸无月破。', noPo).accepted, true);
+// 肯定句照拦（防豁免过头）
+eq('肯定「到底空」照拦', C.auditCoverage('用神发动，然到底空。', kDong).accepted, false);
+eq('肯定「月破」照拦', C.auditCoverage('用神月破，凶。', noPo).accepted, false);
+
+// 全盘结构豁免：analyze 只判用神一线，judgments 无某 tag ≠ 全盘无该结构。
+// 断语谈非用神爻的旬空/月破/日冲完全合法——第三参 pan 给了之后才查得出来。
+// 样本：震为雷 [1,6,0,1,0,0]@D0，三爻辰值旬空（kong=[4,5]）；取官鬼为用时
+// 用神在五爻申，不临空，judgments 无旬空 tag。
+const panKong = C.paipan([1, 6, 0, 1, 0, 0], D0);
+const anGG = C.analyze(panKong, '官鬼');
+eq('豁免样本前提：用神无旬空判语',
+  anGG.judgments.some(function (j) { return j.tag === '旬空'; }), false);
+eq('豁免样本前提：三爻（非用神）值旬空', panKong.lines[2].zhiIdx, 4);
+eq('断语谈非用神爻旬空→放行（有 pan）',
+  C.auditCoverage('三爻值旬空，无力。', anGG, panKong).accepted, true);
+const stillBad = C.auditCoverage('三爻逢月破。', anGG, panKong);
+eq('全盘皆无月破→照拦（有 pan）', stillBad.accepted, false);
+ok('有 pan 时告警文案升级为「全盘六爻皆无」',
+  stillBad.conflicts.length > 0 && stillBad.conflicts[0].actual.indexOf('全盘六爻皆无') >= 0);
+eq('无 pan→退回旧行为（仍按 judgments 告警）',
+  C.auditCoverage('三爻值旬空。', anGG).accepted, false);
+
+// 用神角色词豁免：「以X为忌神/为原神/为仇神」说的是忌原仇，不是取用。
+// 实测：旧版把「以官鬼为忌神」报成「用神不一致」。
+eq('「以官鬼为忌神」→不审用神', C.auditCoverage('以官鬼为忌神，忌神发动则忧。', ripo).yongshen, null);
+eq('「取父母为原神」→不审用神', C.auditCoverage('取父母为原神，原神有力。', ripo).yongshen, null);
+eq('正常取用仍审（防豁免过头）', C.auditCoverage('以妻财为用神观之。', ripo).accepted, false);
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);
