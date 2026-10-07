@@ -629,7 +629,8 @@
     if (!pick.primary) {
       bullets.push(pick.note);
       bullets.push('【粗判】' + TREND_TEXT['待审'] + '（仅为旺衰规则粗判，非全卦结论）');
-      return { yongshen: null, judgments: judgments, trend: '待审', yingqiClues: [], bullets: bullets, verdict: TREND_TEXT['待审'] };
+      // 形状与正常分支保持一致：消费侧可无条件读 yingqiLayers 三个数组
+      return { yongshen: null, judgments: judgments, trend: '待审', yingqiClues: [], yingqiLayers: { main: [], auxiliary: [], risk: [] }, bullets: bullets, verdict: TREND_TEXT['待审'] };
     }
 
     const L = pick.primary;
@@ -655,12 +656,36 @@
     ruleXingHai(L, pil, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
 
     // 应期线索（只出线索，不下结论）
-    if (xunkong.isKong && !xunkong.zhen) clues.push('用神旬空：出空之日或冲空之日应');
-    if (yuepo.isPo && !yuepo.zhen) clues.push('月破：出月之日或逢合、逢值之日应');
-    if (daychong.kind === 'andong') clues.push('暗动之爻：其应极速');
-    if (dayhe.kind === 'heban') clues.push('合绊：逢冲之日应');
-    if (L.isFu) clues.push('伏藏：日辰生扶之日或冲开飞神之日，为引拔之期');
-    if (dongbian.kind === '回克') clues.push('忌神发动回头克：须制忌之神值班之日应');
+    // 分层口径：主应期 = 用神解除受制的直接窗口（出空、出月）；
+    //           辅助节点 = 触发性的冲合节点（暗动、合绊）；
+    //           风险窗口 = 使结论转向的条件（伏藏待引拔、忌神回克）。
+    // 线索文本与旧版逐字一致，只是另按层归档——`yingqiClues` 保持原有扁平顺序，
+    // 便于既有测试与排盘文本继续消费；`yingqiLayers` 为新增的结构化视图。
+    const layers = { main: [], auxiliary: [], risk: [] };
+    if (xunkong.isKong && !xunkong.zhen) {
+      clues.push('用神旬空：出空之日或冲空之日应');
+      layers.main.push('用神旬空：出空之日或冲空之日应');
+    }
+    if (yuepo.isPo && !yuepo.zhen) {
+      clues.push('月破：出月之日或逢合、逢值之日应');
+      layers.main.push('月破：出月之日或逢合、逢值之日应');
+    }
+    if (daychong.kind === 'andong') {
+      clues.push('暗动之爻：其应极速');
+      layers.auxiliary.push('暗动之爻：其应极速');
+    }
+    if (dayhe.kind === 'heban') {
+      clues.push('合绊：逢冲之日应');
+      layers.auxiliary.push('合绊：逢冲之日应');
+    }
+    if (L.isFu) {
+      clues.push('伏藏：日辰生扶之日或冲开飞神之日，为引拔之期');
+      layers.risk.push('伏藏：日辰生扶之日或冲开飞神之日，为引拔之期');
+    }
+    if (dongbian.kind === '回克') {
+      clues.push('忌神发动回头克：须制忌之神值班之日应');
+      layers.risk.push('忌神发动回头克：须制忌之神值班之日应');
+    }
 
     const agg = aggregateTrend({
       hasYongshen: true, grade: month.grade,
@@ -683,6 +708,7 @@
       supports: agg.supports,
       harms: agg.harms,
       yingqiClues: clues,
+      yingqiLayers: layers,
       bullets: bullets,
       verdict: TREND_TEXT[agg.trend]
     };

@@ -12,7 +12,8 @@
 import { jsonWithin, safeEqual, onRequestGet, onRequestDelete } from './functions/api/records.js';
 import { customProviders, gptModelList, isSafeModelId } from './functions/api/_lib.js';
 import { onRequestGet as modelsGet } from './functions/api/models.js';
-import { onRequestPost as interpretPost, isRateLimited, __rlState } from './functions/api/interpret.js';
+import { onRequestPost as interpretPost, isRateLimited, __rlState, SYSTEM_PROMPT } from './functions/api/interpret.js';
+import { readFileSync } from 'node:fs';
 
 let pass = 0, fail = 0;
 function eq(name, got, want) {
@@ -237,6 +238,19 @@ eq('未设 RATE_LIMIT_PER_MIN → 不限流',
   isRateLimited(new Request('https://x/', { headers: RL_IP }), {}), false);
 
 globalThis.fetch = origFetch;
+
+// ---------- 上层契约：app.js 与 interpret.js 的 SYSTEM_PROMPT 必须同源 ----------
+// 两份提示词是同一契约的两个副本（app.js 那份用于「复制请求内容手动断卦」的降级路径）。
+// 任一侧漏改都会让「手动断卦」与「线上断卦」口径分叉，故此处逐段比对契约标记。
+const CONTRACT_MARKS = ['【盘面事实不可改写】', '【主次次序】', '【追问沿用原盘】', '【现实边界】'];
+const appSrc = readFileSync(new URL('./public/app.js', import.meta.url), 'utf8');
+CONTRACT_MARKS.forEach(function (m) {
+  eq('app.js 含契约段 ' + m, appSrc.indexOf(m) >= 0, true);
+  eq('interpret.js SYSTEM_PROMPT 含契约段 ' + m, SYSTEM_PROMPT.indexOf(m) >= 0, true);
+});
+eq('两份提示词同引经据典口径', appSrc.indexOf('引经据典') >= 0 && SYSTEM_PROMPT.indexOf('引经据典') >= 0, true);
+// 反向对照：契约段一旦被删，本组断言必须变红（防止断言写成恒真）
+eq('对照：契约段总数应为 4', CONTRACT_MARKS.length, 4);
 
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

@@ -7,8 +7,9 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node test-core.js && node test-rules.js && node test-gua-types.js",
+    "test": "node test-core.js && node test-rules.js && node test-gua-types.js && node test-absorb.js",
     "test:fn": "node test-functions.mjs",
+    "test:absorb": "node test-absorb.js",
     "test:all": "npm test && npm run test:fn && npm run test:diff && npm run test:guji && npm run test:guji:self && npm run test:paipan && npm run test:verify",
     "test:diff": "node test-diff.mjs",
     "test:gua": "node test-gua-types.js",

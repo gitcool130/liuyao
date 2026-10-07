@@ -267,6 +267,14 @@
           <button class="btn primary" id="btnConfirm">落爻</button>
           <button class="btn ghost" id="btnUndo">撤销重摇此卦</button>
         </div>
+        <div class="btn-row" style="justify-content:flex-start;align-items:center;margin-top:14px">
+          <span class="muted">或按卦名起卦（复现古籍卦例／已有之卦）：</span>
+          <input id="guaNameInput" list="guaList" placeholder="卦名，如水雷屯" class="use-select" style="margin-bottom:0;width:150px" maxlength="8">
+          <datalist id="guaList"></datalist>
+          <input id="guaDongInput" placeholder="动爻，如 3 或 3,4（留空＝静卦）" class="use-select" style="margin-bottom:0;width:190px" maxlength="12">
+          <button class="btn ghost" id="btnByName">按卦名排</button>
+        </div>
+        <div class="muted" id="byNameHint" style="margin-top:6px;line-height:1.6"></div>
       </div>
       <div class="yao-stack" id="yaoStack"></div>
     </div>
@@ -276,6 +284,7 @@
   <section class="card" id="panCard" hidden>
     <h2>卦象</h2>
     <div id="panBody"></div>
+    <div id="wxBlock"></div>
     <div class="btn-row">
       <button class="btn" id="btnCopy">复制排盘文本</button>
       <button class="btn ghost" id="btnReset">重新起卦</button>
@@ -298,6 +307,7 @@
     <input type="text" class="use-select" id="useCustom" maxlength="60"
       placeholder="例如：能否跳槽去新公司？孩子考研顺利吗？（旺衰粗判需选上方固定事类，此处交由 AI 细断）"
       hidden style="width:100%;box-sizing:border-box">
+    <div id="senseBox" hidden></div>
     <ul class="concl" id="conclList"></ul>
     <div class="verdict" id="verdictBox" hidden></div>
     <p class="muted" style="margin-top:12px">以上为旺衰硬规则的粗判。动爻组合、用神取舍、应期推断皆需通盘细审——可将排盘文本复制予 AI 或明师参断。</p>
@@ -345,6 +355,9 @@
 <script src="core/calendar.js"></script>
 <script src="core/paipan.js"></script>
 <script src="core/analyze.js"></script>
+<script src="core/sensitive.js"></script>
+<script src="core/domain-methods.js"></script>
+<script src="core/fact-audit.js"></script>
 <script src="app.js"></script>
 <script src="bgm.js"></script>
 </body>

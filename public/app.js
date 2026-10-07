@@ -17,6 +17,15 @@
 
   const $ = function (s) { return document.querySelector(s); };
 
+  // 上层契约层（sensitive / domain-methods / fact-audit）可用性探测。
+  // 这三个文件排在 analyze.js 之后加载；旧缓存页面可能只加载到 analyze.js，
+  // 此时不应整页失效——降级为「关闭新增能力」，排盘主流程照旧可用。
+  const HAS_ABSORB = !!(C.classifySensitive && C.domainBlock && C.auditFactClaims);
+  if (!HAS_ABSORB) {
+    console.warn('[liuyao] core/sensitive.js / domain-methods.js / fact-audit.js 未加载，' +
+      '敏感分流、分析方法注入与断后事实审计已降级关闭。');
+  }
+
   const LINE_NAMES = ['初爻', '二爻', '三爻', '四爻', '五爻', '上爻'];
   const TOSS_MEAN = {
     1: { name: '单', sym: '━━━━━', desc: '少阳 · 静' },
@@ -228,6 +237,10 @@
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
     $('#useSelect').value = '';
     const uc = $('#useCustom'); if (uc) { uc.value = ''; uc.hidden = true; }
+    // 一并清掉新增三块的状态：敏感提示、按卦名提示、被拦截而禁用的断卦按钮
+    const sb = $('#senseBox'); if (sb) { sb.hidden = true; sb.innerHTML = ''; lastSensitive = null; }
+    const bnh = $('#byNameHint'); if (bnh) bnh.innerHTML = '';
+    const bai = $('#btnAI'); if (bai) bai.disabled = false;
     renderTime(); renderCoins(); renderTossHint(); renderStack();
   };
 
@@ -301,6 +314,76 @@
       '<div class="hex-title">' + title + '</div>' +
       '<div class="meta-line">占时 ' + fmtDT(selectedDate) + ' ｜ ' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时 ｜ 旬空 <span class="kong">' + pil.kongStr + '</span></div>' +
       '<table class="pan"><thead><tr><th>六神</th><th>伏神</th><th>本卦</th><th>世应</th><th>变爻</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    renderWxBlock();
+  }
+
+  // 旺相休囚死：五行之气在当月令下的流转（自旺至死）。
+  // 只陈述时令旺衰这一层事实，不掺吉凶——与「无评分制」同一立场。
+  function renderWxBlock() {
+    const box = $('#wxBlock');
+    if (!box || !pan || typeof C.wangXiangXiuQiuSi !== 'function') return;
+    const mz = pan.pillars.monthZhi;
+    const GRADES = ['旺', '相', '休', '囚', '死'];
+    const rows = ['木', '火', '土', '金', '水'].map(function (w) {
+      return { w: w, g: C.wangXiangXiuQiuSi(w, mz) };
+    }).sort(function (a, b) { return GRADES.indexOf(a.g) - GRADES.indexOf(b.g); });
+    box.innerHTML = '<div class="verdict" style="margin-top:12px;padding:10px 14px;font-size:14px">' +
+      '<b>旺相休囚死</b>（月令 ' + C.ZHI[mz] + '）　' +
+      rows.map(function (r) { return r.w + '<b>' + r.g + '</b>'; }).join(' · ') +
+      '<div class="muted" style="margin-top:4px">五行之气在本月令下的流转，自旺至死；只陈述时令旺衰，不作吉凶断语。</div></div>';
+  }
+
+  // ---------- 按卦名起卦（复现古籍卦例 / 录入已有之卦） ----------
+  // 卦名 → 六爻卦画（自下而上）→ 叠加动爻 → tossVals。
+  // 全链路确定性换算，不经手大模型，也不掷币：古籍卦例只记卦画与动爻，本来就没有爻值。
+  function guaBitsByName(name) {
+    const keys = Object.keys(C.HEXNAMES).filter(function (k) { return C.HEXNAMES[k] === name; });
+    if (!keys.length) return null;
+    const key = keys[0];                       // key = 下卦名 + 上卦名（各一字）
+    const lo = key.slice(0, 1), up = key.slice(1);
+    if (!C.TRIG[lo] || !C.TRIG[up]) return null;
+    return C.TRIG[lo].bits.concat(C.TRIG[up].bits);   // 自下而上 [初..上]
+  }
+
+  // val → 背面个数（与 tossValFromBacks 互逆）：9=3背 1=1背 0=2背 6=0背
+  function coinsFromVal(val) {
+    const backs = val === 9 ? 3 : val === 1 ? 1 : val === 0 ? 2 : 0;
+    const coins = [];
+    for (let i = 0; i < 3; i++) coins.push(i < backs ? '背' : '字');
+    return coins;
+  }
+
+  function castByName() {
+    const hint = $('#byNameHint');
+    const name = ($('#guaNameInput').value || '').trim();
+    const raw = ($('#guaDongInput').value || '').trim();
+    if (!name) { hint.innerHTML = '<span style="color:#a83f39">请输入卦名。</span>'; return; }
+    const bits = guaBitsByName(name);
+    if (!bits) { hint.innerHTML = '<span style="color:#a83f39">未收录该卦名，请从下拉清单中选六十四卦之一。</span>'; return; }
+    let dong = [];
+    if (raw) {
+      dong = raw.replace(/[，、\s]+/g, ',').split(',').filter(Boolean).map(function (s) { return parseInt(s, 10); });
+      if (!dong.length || dong.some(function (n) { return !(n >= 1 && n <= 6); })) {
+        hint.innerHTML = '<span style="color:#a83f39">动爻须为 1–6 的数字，多个以逗号分隔（如 3,4）。</span>';
+        return;
+      }
+    }
+    records = [];
+    for (let i = 0; i < 6; i++) {
+      const moving = dong.indexOf(i + 1) >= 0;
+      const val = bits[i] === 1 ? (moving ? 9 : 1) : (moving ? 6 : 0);
+      records.push({ coins: coinsFromVal(val), backs: val === 9 ? 3 : val === 1 ? 1 : val === 0 ? 2 : 0, val: val, mode: 'byname' });
+    }
+    resetTossState();
+    // 现场模式下首摇会锁时刻；按卦名起卦不经过首摇，故补一次锁定，保持口径一致
+    if (timeMode === 'live' && !timeLocked) {
+      selectedDate = new Date(); timeLocked = true; lockedDate = selectedDate; renderTime();
+    }
+    computePan();
+    hint.innerHTML = '已按「' + esc(name) + (dong.length ? '，动爻 ' + dong.join('、') : '，静卦') + '」起卦。' +
+      (timeMode === 'live'
+        ? '<div class="muted" style="margin-top:4px">复现古籍卦例需指定古占之日：点[切换补录模式]再改占问时刻。</div>'
+        : '');
   }
 
   // ---------- 断卦 ----------
@@ -312,12 +395,42 @@
     return useMap[t] || '';
   }
 
+  // ---------- 敏感问题确定性分流（core/sensitive.js） ----------
+  // 只对「用户自己写下的事由」分流：固定事类的下拉标签（如「功名·官司·疾病」）
+  // 带「疾病」二字纯属分类说明，拿它去分流会让每个选官鬼的人都吃到就医提示。
+  let lastSensitive = null;
+  function sensitiveDecision() {
+    if (!HAS_ABSORB) return { category: 'not_sensitive', action: 'pass', urgent: false, message: '' };
+    const isCustom = $('#useSelect').value === '__custom__';
+    return C.classifySensitive(isCustom ? currentQuestion() : '');
+  }
+  function renderSensitive() {
+    const box = $('#senseBox'), btn = $('#btnAI');
+    if (!box) return;
+    const d = sensitiveDecision();
+    lastSensitive = d;
+    if (d.action === 'pass') {
+      box.hidden = true; box.innerHTML = '';
+      if (btn) btn.disabled = false;
+      return;
+    }
+    box.hidden = false;
+    // block 用告警框（朱红），advisory 用普通提示框
+    box.className = d.action === 'block' ? 'ai-block warn' : 'verdict';
+    box.innerHTML = (d.urgent ? '<b>⚠ 紧急　</b>' : '') + esc(d.message) +
+      (d.action === 'block'
+        ? '<div class="muted" style="margin-top:6px">此问已按安全边界拦截，不进入大模型断卦；排盘与旺衰粗判仍可查看。</div>'
+        : '<div class="muted" style="margin-top:6px">可继续断卦，但断语不得写成医学诊断或替代现实处置。</div>');
+    if (btn) btn.disabled = (d.action === 'block');
+  }
+
   function renderAnalysis() {
     const target = $('#useSelect').value;
     const list = $('#conclList');
     const vBox = $('#verdictBox');
     const customInput = $('#useCustom');
     customInput.hidden = (target !== '__custom__');
+    renderSensitive();     // 每次改选事类都重算分流（含把拦截态解除）
     if (!target || target === '__custom__') {
       // 空选与自定义：无固定用神可取，旺衰硬规则不适用，给出通用次第
       list.innerHTML = '<li>选择所测之事，先观用神旺衰。通用次第：一观世爻旺衰，二观用神与世应，三审动爻生克，四定旬空月破与应期。</li>' +
@@ -333,13 +446,25 @@
     }).join('');
     vBox.hidden = false;
     const TREND_LABEL = { '吉': '趋吉', '凶': '趋凶', '平': '持平', '待审': '待审' };
-    vBox.innerHTML = '<b>粗判（' + TREND_LABEL[res.trend] + '）</b>　' + res.verdict +
-      (res.yingqiClues && res.yingqiClues.length
-        ? '<div class="muted" style="margin-top:6px">应期线索：' + res.yingqiClues.join('；') + '</div>'
-        : '');
+    // 应期三层展示（主应期 / 辅助节点 / 风险窗口）：结构化视图优先，
+    // 老版本引擎（无 yingqiLayers）自动回落到扁平线索，不因字段缺失而空白。
+    const LAYER_LABEL = { main: '主应期', auxiliary: '辅助节点', risk: '风险窗口' };
+    const ly = res.yingqiLayers;
+    let yq = '';
+    if (ly && (ly.main.length || ly.auxiliary.length || ly.risk.length)) {
+      yq = ['main', 'auxiliary', 'risk'].filter(function (k) { return ly[k] && ly[k].length; })
+        .map(function (k) {
+          return '<div class="muted" style="margin-top:4px">' + LAYER_LABEL[k] + '：' + esc(ly[k].join('；')) + '</div>';
+        }).join('');
+    } else if (res.yingqiClues && res.yingqiClues.length) {
+      yq = '<div class="muted" style="margin-top:6px">应期线索：' + esc(res.yingqiClues.join('；')) + '</div>';
+    }
+    vBox.innerHTML = '<b>粗判（' + TREND_LABEL[res.trend] + '）</b>　' + res.verdict + yq;
   }
   $('#useSelect').onchange = function () { renderAnalysis(); if ($('#useCustom').hidden === false) $('#useCustom').focus(); };
-  $('#useCustom').oninput = function () { /* 输入变化无需重算粗判，buildPanText 实时读取 */ };
+  // 自定义事由逐字输入即重算分流：写到「能不能活多久」这类词时立刻拦截，
+  // 不必等点击断卦才提示（粗判不重算——自定义本就不作旺衰粗判）。
+  $('#useCustom').oninput = function () { renderSensitive(); };
 
   // ---------- 排盘文本（复制与 AI 共用） ----------
   function buildPanText(forAI) {
@@ -367,6 +492,16 @@
       lastBullets.forEach(function (b) {
         txt += '- ' + b.replace(/<[^>]+>/g, '') + '\n';
       });
+    }
+    if (forAI && HAS_ABSORB) {
+      // 领域分析方法注入：只规定看盘次序与常见误判，不预设吉凶，也不得被当成古籍引文。
+      const blk = C.domainBlock($('#useSelect').value, currentQuestion());
+      if (blk) txt += '\n' + blk;
+      const d = sensitiveDecision();
+      if (d.action === 'advisory') txt += '\n【现实边界提示】' + d.message + '\n';
+      // 契约：盘面事实不可改写，传统推断可自由但不得与盘面矛盾。
+      txt += '\n【契约】「卦象」「旺衰粗判」两节为确定性结果：六亲、纳甲、世应、动爻、旬空、月破' +
+        '不得改写或重新推算。吉凶、应期与取象可作传统推断，但每一条都须与上述盘面事实一致。\n';
     }
     if (!forAI) txt += '\n请依京房纳甲六爻法通盘断卦：世应关系、动爻生克、用神取舍、应期推断，并给出白话结论。';
     return txt;
@@ -563,7 +698,17 @@
     '三、断应期：据旬空、冲合、生扶之理推断应验之时。',
     '四、白话总结：用一段简明中文给出结论与建议。',
     '若信息不足，明确指出需补充何事，不得臆造。',
-    '用户后续追问时，保持卦理一致，延续断卦思路作答。'
+    // ↓ 以下四段为「上层契约」（不可改盘 / 盘面优先 / 追问不重起卦 / 现实边界），
+    //   与 functions/api/interpret.js 的 SYSTEM_PROMPT 保持一致，改一处须改两处。
+    '【盘面事实不可改写】排盘里的六亲、纳甲、世应、动爻、旬空、月破、伏神均为程序确定性推算结果；' +
+    '不得重新推算、不得改写，也不得写出与之矛盾的表述。吉凶、应期与取象可作传统推断，但须与盘面一致。',
+    '【主次次序】以作用到世、应、用神的实际生克冲合为主证据；只出现在卦中却未作用到主线的结构，' +
+    '列为辅助信息，不得升级为结论。不得用正负计分替代断卦。',
+    '【追问沿用原盘】用户就同一事继续追问时，沿用本次排盘的起卦时刻、月日、爻值、世应与用神主线，' +
+    '不重新起卦、不因当前日期变化而重算原盘、不事后改写首次结论；' +
+    '只有当事项、对象、目标或时间范围发生实质变化时才说明需另起一卦。',
+    '【现实边界】健康、生死、失踪、胎儿性别、重大财法决策不得由卦象替代现实判断；' +
+    '涉及此类内容须明确提示就医、报警或咨询专业人士，不得写成医学诊断或法律意见。'
   ].join('\n');
 
   // 拼装发给大模型的完整请求文本（失败/无输出时可复制到任意对话窗口手动断卦）
@@ -575,6 +720,18 @@
       }
     });
     return txt;
+  }
+
+  // 断后事实审计：把断语里显式写出的盘面断言与卦盘对撞，只提示冲突，不改断语、不评吉凶。
+  // 流式输出没有回检时，「三爻为妻财」写错也照样通顺，故此处补一道确定性对照。
+  function auditHTML(reply) {
+    if (!HAS_ABSORB || !pan) return '';
+    let r;
+    try { r = C.auditFactClaims(reply, pan); }
+    catch (e) { return ''; }   // 审计自身出错不得影响断语展示
+    if (!r || r.accepted) return '';
+    return '<div class="ai-block warn" style="margin-top:8px;font-size:13px;line-height:1.7">⚠ ' +
+      esc(C.auditText(r)) + '</div>';
   }
 
   async function callInterpret(model, history) {
@@ -655,7 +812,7 @@
         try {
           const reply = await callInterpret(m, []);
           aiStates[m] = { history: [{ role: 'assistant', content: reply }] };
-          colBody(m).innerHTML = '<div class="ai-block">' + mdLite(reply) + '</div>';
+          colBody(m).innerHTML = '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply);
         } catch (e) {
           renderFailBox(colBody(m), m, [], e);
         }
@@ -690,7 +847,7 @@
         try {
           const reply = await callInterpret(m, historySnapshot);
           aiStates[m].history.push({ role: 'assistant', content: reply });
-          if (loadEl) loadEl.innerHTML = mdLite(reply);
+          if (loadEl) loadEl.innerHTML = mdLite(reply) + auditHTML(reply);
         } catch (e) {
           if (loadEl) {
             const box = document.createElement('div');
@@ -855,6 +1012,20 @@
   }
 
   // ---------- init ----------
+  // 卦名下拉：64 卦全量（由 HEXNAMES 反查，避免手抄清单与排盘引擎脱节）
+  const _dl = $('#guaList');
+  if (_dl) {
+    _dl.innerHTML = Object.keys(C.HEXNAMES).map(function (k) {
+      return '<option value="' + escAttr(C.HEXNAMES[k]) + '"></option>';
+    }).join('');
+  }
+  const _btnByName = $('#btnByName');
+  if (_btnByName) _btnByName.onclick = castByName;
+  ['#guaNameInput', '#guaDongInput'].forEach(function (sel) {
+    const el = $(sel);
+    if (el) el.onkeydown = function (e) { if (e.key === 'Enter') castByName(); };
+  });
+
   renderModelChips();
   loadModels();
   renderLoginBtn();
