@@ -21,6 +21,9 @@
   // 这三个文件排在 analyze.js 之后加载；旧缓存页面可能只加载到 analyze.js，
   // 此时不应整页失效——降级为「关闭新增能力」，排盘主流程照旧可用。
   const HAS_ABSORB = !!(C.classifySensitive && C.domainBlock && C.auditFactClaims);
+  // coverage-audit 是后加的第四块，旧缓存页面可能没有它：
+  // 缺了就只跑盘面对撞，不让整块校对能力失效。
+  const HAS_COVER = !!(C.auditCoverage && C.coverageText);
   if (!HAS_ABSORB) {
     console.warn('[liuyao] core/sensitive.js / domain-methods.js / fact-audit.js 未加载，' +
       '敏感分流、分析方法注入与断后事实审计已降级关闭。');
@@ -726,12 +729,29 @@
   // 流式输出没有回检时，「三爻为妻财」写错也照样通顺，故此处补一道确定性对照。
   function auditHTML(reply) {
     if (!HAS_ABSORB || !pan) return '';
-    let r;
-    try { r = C.auditFactClaims(reply, pan); }
-    catch (e) { return ''; }   // 审计自身出错不得影响断语展示
-    if (!r || r.accepted) return '';
-    return '<div class="ai-block warn" style="margin-top:8px;font-size:13px;line-height:1.7">⚠ ' +
-      esc(C.auditText(r)) + '</div>';
+    let out = '';
+    // 一、盘面事实对撞（六亲 / 世应 / 卦名 / 动爻写没写反）
+    try {
+      const r = C.auditFactClaims(reply, pan);
+      if (r && !r.accepted) {
+        out += '<div class="ai-block warn" style="margin-top:8px;font-size:13px;line-height:1.7">⚠ ' +
+          esc(C.auditText(r)) + '</div>';
+      }
+    } catch (e) { /* 审计自身出错不得影响断语展示 */ }
+
+    // 二、推理一致性审查（真空/动空混淆、暗动写成日破、取错用神、漏审结构）
+    if (!HAS_COVER) return out;
+    try {
+      const cv = C.auditCoverage(reply, lastAnalysis);
+      const txt = C.coverageText(cv);
+      if (!txt) return out;
+      // 概念误置是硬告警，纯遗漏只作普通提示——两者视觉上必须分清，
+      // 否则用户会把「提醒」当「错误」，真告警反而被无视。
+      out += '<div class="' + (cv.accepted ? 'verdict' : 'ai-block warn') +
+        '" style="margin-top:8px;font-size:13px;line-height:1.7">' +
+        (cv.accepted ? '· ' : '⚠ ') + esc(txt) + '</div>';
+    } catch (e) { /* 同上 */ }
+    return out;
   }
 
   async function callInterpret(model, history) {

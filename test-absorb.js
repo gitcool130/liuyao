@@ -176,5 +176,74 @@ ok('考试事由推父母', C.domainBlock('__custom__', '这次考试能不能�
 ok('无语义线索时不强推用神', C.domainBlock('__custom__', '此事成否').indexOf('用神建议') < 0);
 eq('固定事类不出现用神建议段', C.domainBlock('妻财', '').indexOf('用神建议') < 0, true);
 
+// ---------- 7. 推理一致性审查（core/coverage-audit.js） ----------
+// fact-audit 只管盘面写没写反；这一组管「推理走没走样」。
+// 每组都配反向对照（说对→放行，说反→告警），确保断言本身会变红。
+const D0 = new Date(2026, 8, 24, 9, 0);
+const D1 = new Date(2026, 2, 15, 14, 0);
+const D3 = new Date(2026, 10, 3, 16, 0);
+function an(vals, target, d) { return C.analyze(C.paipan(vals, d || D0), target); }
+
+// 真空 / 动不为空 / 旬空待时 —— 三态互斥
+const kZhen = an([1, 0, 0, 0, 0, 9], '子孙');
+const kDong = an([6, 9, 0, 0, 0, 1], '子孙');
+const kDai = an([1, 6, 0, 1, 0, 0], '妻财');
+eq('真空盘说「动不为空」→告警', C.auditCoverage('此爻动不为空，出空可用。', kZhen).accepted, false);
+eq('真空盘说「真空」→放行', C.auditCoverage('用神安静无扶，是为真空。', kZhen).accepted, true);
+eq('动空盘说「真空」→告警', C.auditCoverage('用神发动，然到底空。', kDong).accepted, false);
+eq('动空盘说「出空即有用」→放行', C.auditCoverage('动不为空，出空之日即有用。', kDong).accepted, true);
+eq('待时盘说「到底空」→告警', C.auditCoverage('用神到底空，终无成。', kDai).accepted, false);
+eq('待时盘说「出空可应」→放行', C.auditCoverage('旺不惧空，出空之日可应。', kDai).accepted, true);
+
+// 真破 / 假破
+const pZhen = an([1, 1, 1, 6, 1, 9], '兄弟');
+const pJia = an([0, 9, 0, 1, 0, 1], '子孙', D3);
+eq('真破盘说「出月可解」→告警', C.auditCoverage('虽月破，出月可解。', pZhen).accepted, false);
+eq('真破盘说「真破难扶」→放行', C.auditCoverage('休囚无救，真破难扶。', pZhen).accepted, true);
+eq('假破盘说「真破」→告警', C.auditCoverage('真破难扶，事不可为。', pJia).accepted, false);
+eq('假破盘说「假破」→放行', C.auditCoverage('旺相为假破，出月可解。', pJia).accepted, true);
+
+// 暗动 / 日破 —— 六爻最高频的一步之差
+const andong = an([0, 1, 0, 6, 6, 1], '兄弟', D1);
+const ripo = an([1, 1, 0, 1, 1, 0], 'shi');
+eq('暗动盘说「日破」→告警', C.auditCoverage('此爻日破，败象已成。', andong).accepted, false);
+eq('暗动盘说「暗动」→放行', C.auditCoverage('旺相被日辰冲之，为暗动。', andong).accepted, true);
+eq('日破盘说「暗动」→告警', C.auditCoverage('此爻暗动，事机已萌。', ripo).accepted, false);
+eq('日破盘说「日破」→放行', C.auditCoverage('休囚被日辰冲之，为日破。', ripo).accepted, true);
+
+// 无此结构而断言
+const noPo = an([1, 6, 0, 1, 0, 0], '妻财');
+const hasPoTag = noPo.judgments.some(function (j) { return j.tag === '月破'; });
+eq('样本前提：该盘确无月破', hasPoTag, false);
+eq('无月破却断言「月破」→告警', C.auditCoverage('用神月破，凶。', noPo).accepted, false);
+
+// 用神一致性
+eq('取用与卦盘不符→告警', C.auditCoverage('以妻财为用神观之。', ripo).accepted, false);
+eq('取用与卦盘相符→放行',
+  C.auditCoverage('以' + ripo.yongshen.type + '为用神观之。', ripo).accepted, true);
+eq('未明说取用→不审（不误报）', C.auditCoverage('用神旺相，可图。', ripo).yongshen, null);
+
+// 结构遗漏属软提示：进 missing，不进 conflicts
+const withFu = an([1, 0, 0, 0, 0, 9], '官鬼');
+const hasFuTag = withFu.judgments.some(function (j) { return j.tag === '伏神'; });
+if (hasFuTag) {
+  const r = C.auditCoverage('世爻旺相，事可成。', withFu);
+  ok('漏提伏神→记入 missing', r.missing.some(function (x) { return x.tag === '伏神'; }));
+  eq('漏审不算冲突（软提示，不染红）', r.accepted, true);
+} else { ok('伏神样本跳过（该盘无伏神判语）', true); }
+
+// 边界：不得因输入异常而崩，也不得无中生有
+eq('空断语→放行', C.auditCoverage('', withFu).accepted, true);
+eq('无判语可对照→放行', C.auditCoverage('随便写点什么。', { judgments: [] }).accepted, true);
+eq('null 判语→放行（不炸）', C.auditCoverage('用神旺相。', null).accepted, true);
+eq('无冲突且无遗漏→提示文本为空串', C.coverageText({ accepted: true, conflicts: [], missing: [] }), '');
+// 漏审只给「提醒」措辞，不得出现告警口径——否则用户会把提醒当错误，真告警反被无视
+const missOnly = C.auditCoverage('世爻旺相，事可成。', withFu);
+if (missOnly.missing.length) {
+  const t = C.coverageText(missOnly);
+  ok('纯遗漏提示不含告警字样', t.indexOf('相左') < 0);
+  ok('纯遗漏提示说明是漏审', t.indexOf('漏审') >= 0);
+} else { ok('纯遗漏用例跳过', true); }
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

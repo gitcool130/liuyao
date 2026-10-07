@@ -48,6 +48,7 @@ jobs:
           node --check public/core/sensitive.js
           node --check public/core/domain-methods.js
           node --check public/core/fact-audit.js
+          node --check public/core/coverage-audit.js
           node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON -e "
           // Functions 为 ESM（含 import 声明），动态 import 既验语法也验依赖解析
           // 注：Pages Functions 的 .js 一律按 ESM 处理，与 package.json 的 type 无关，
@@ -61,7 +62,7 @@ jobs:
           const html=fs.readFileSync('public/index.html','utf8');
           const s=[...html.matchAll(/<script src=\"([^\"]+)\"><\/script>/g)].map(m=>m[1]);
           // 后三个为上层契约层：依赖 paipan/analyze 的输出，必须排在 analyze.js 之后
-          const expect=['core/data.js','core/data-jieqi.js','core/calendar.js','core/paipan.js','core/analyze.js','core/sensitive.js','core/domain-methods.js','core/fact-audit.js','app.js','bgm.js'];
+          const expect=['core/data.js','core/data-jieqi.js','core/calendar.js','core/paipan.js','core/analyze.js','core/sensitive.js','core/domain-methods.js','core/fact-audit.js','core/coverage-audit.js','app.js','bgm.js'];
           if(JSON.stringify(s)!==JSON.stringify(expect)){console.error('脚本加载顺序错误:',s);process.exit(1)}
           console.log('脚本加载顺序 ✓');
           "

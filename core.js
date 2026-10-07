@@ -6,7 +6,7 @@
  *   → public/core/calendar.js → public/core/paipan.js
  *   → public/core/analyze.js
  *   → public/core/sensitive.js → public/core/domain-methods.js
- *   → public/core/fact-audit.js
+ *   → public/core/fact-audit.js → public/core/coverage-audit.js
  * （public/index.html 已如此引用；本文件不参与浏览器加载链路）
  * 后三个为「上层契约层」：不参与排盘，只做分流、方法注入与断后审计，
  * 依赖 paipan.js 的输出，故必须排在 analyze.js 之后。
@@ -23,6 +23,7 @@ if (typeof window === 'undefined') {
   require('./public/core/sensitive.js');
   require('./public/core/domain-methods.js');
   require('./public/core/fact-audit.js');
+  require('./public/core/coverage-audit.js');
   module.exports = globalThis.LY;
 } else {
   // 浏览器兜底：若单独引入本文件（旧页面），提示正确用法与完整顺序
@@ -36,6 +37,7 @@ if (typeof window === 'undefined') {
       '  <script src="core/sensitive.js"></script>  <!-- 敏感分流 -->\n' +
       '  <script src="core/domain-methods.js"></script> <!-- 所测之事的分析规程 -->\n' +
       '  <script src="core/fact-audit.js"></script> <!-- 断语事实审计 -->\n' +
+      '  <script src="core/coverage-audit.js"></script> <!-- 断语推理审查 -->\n' +
       '（以上路径相对部署根 public/，在仓库根运行测试请用 public/core/ 前缀）');
   }
 }
