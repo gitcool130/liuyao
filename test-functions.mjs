@@ -7,9 +7,10 @@
  *   #8  模型 id 字符集校验（XSS 上游根因）
  *   #15 /api/models 去重表不得被原型链污染（第二十轮）
  *   #16 读路径口令收口（与写同源）+ DELETE 的 ID_RE 校验（第二十轮）
+ *   #19 结果回执（M16）：sanitizeOutcome 白名单三态、回填端点三关拦截、主 POST 不触碰 outcome 列
  * 运行：npm run test:fn
  * ============================================================ */
-import { jsonWithin, safeEqual, onRequestGet, onRequestDelete } from './functions/api/records.js';
+import { jsonWithin, safeEqual, onRequestGet, onRequestDelete, onRequestPost, sanitizeOutcome } from './functions/api/records.js';
 import { customProviders, gptModelList, isSafeModelId } from './functions/api/_lib.js';
 import { onRequestGet as modelsGet } from './functions/api/models.js';
 import { onRequestPost as interpretPost, isRateLimited, __rlState, SYSTEM_PROMPT } from './functions/api/interpret.js';
@@ -98,16 +99,17 @@ eq('去重逻辑仍生效（normal-model 只留一个）', mIds.filter(function 
 
 // ---------- #16 records.js：读路径口令收口 + DELETE 的 ID_RE 校验（第二十轮） ----------
 // D1 最小桩：记录被下发的 SQL 与被绑定的参数，用于断言「非法 id 不下探数据库」
+// bind 可变参（UPDATE 等多参语句全部记录）；run 的 meta.changes 可由 state.changes 控制（默认 1）
 function mkDb() {
-  const state = { sqls: [], bound: [] };
+  const state = { sqls: [], bound: [], changes: 1 };
   return {
     state: state,
     prepare: function (sql) {
       state.sqls.push(sql);
       return {
-        bind: function (v) {
-          state.bound.push(v);
-          return { run: async function () { return {}; }, first: async function () { return null; } };
+        bind: function () {
+          state.bound.push(Array.prototype.slice.call(arguments));
+          return { run: async function () { return { meta: { changes: state.changes } }; }, first: async function () { return null; } };
         },
         all: async function () { return { results: [] }; }
       };
@@ -136,6 +138,62 @@ eq('带口令读列表 → 200', (await get('', { 'X-Access-Code': 'k' })).statu
 eq('未配置任何口令时读列表保持开放（向后兼容）', (await get('', {}, { LIUYAO_DB: mkDb() })).status, 200);
 eq('读路径同样认 ACCESS_CODE（与写路径同源）',
   (await get('', { 'X-Access-Code': 'a' }, { LIUYAO_DB: mkDb(), ACCESS_CODE: 'a' })).status, 200);
+
+// ---------- #19 结果回执（M16）：白名单校验 + 只写 outcome 列 + 不被自动保存冲掉 ----------
+// sanitizeOutcome 三态：object = 合法；null = 显式清除；undefined = 非法
+eq('回执 null → 清除', sanitizeOutcome(null), null);
+eq('回执非对象 → 非法', sanitizeOutcome('成了'), undefined);
+eq('回执数组 → 非法', sanitizeOutcome(['success']), undefined);
+eq('回执空对象 → 非法（至少居其一）', sanitizeOutcome({}), undefined);
+eq('回执枚举外取值 → 非法', sanitizeOutcome({ result: '成了' }), undefined);
+eq('回执 note 修剪并截断 200', (function () {
+  const o = sanitizeOutcome({ result: 'success', note: '  ' + '备'.repeat(300) + '  ' });
+  return o.note.length === 200;
+})(), true);
+eq('回执合法全字段', (function () {
+  const o = sanitizeOutcome({ result: 'partial', yingqi: 'on_time', note: '如期' });
+  return [o.result, o.yingqi, o.note, typeof o.updated_at];
+})(), ['partial', 'on_time', '如期', 'string']);
+
+// 回填端点：口令 / id / 回执三关各自独立拦截，且非法输入一律不下探数据库
+const postRaw = function (q, body, headers, env) {
+  return onRequestPost({
+    request: new Request('https://x/api/records' + q, {
+      method: 'POST',
+      headers: Object.assign({ 'content-type': 'application/json' }, headers || {}),
+      body: JSON.stringify(body)
+    }),
+    env: env || envLib
+  });
+};
+const dbOc = mkDb();
+const envOc = { LIUYAO_DB: dbOc, LIB_CODE: 'k' };
+eq('回填无口令 → 401', (await postRaw('?outcome=1', { id: 'ok-1', outcome: { result: 'success' } }, {}, envOc)).status, 401);
+eq('回填非法 id → 400', (await postRaw('?outcome=1', { id: 'bad id', outcome: { result: 'success' } }, { 'X-Access-Code': 'k' }, envOc)).status, 400);
+eq('回填非法回执 → 400', (await postRaw('?outcome=1', { id: 'ok-1', outcome: { result: '成了' } }, { 'X-Access-Code': 'k' }, envOc)).status, 400);
+eq('回填三关拦截均不下探数据库', dbOc.state.sqls.length, 0);
+const rOcOk = await postRaw('?outcome=1', { id: 'ok-1', outcome: { result: 'success', yingqi: 'pending' } }, { 'X-Access-Code': 'k' }, envOc);
+eq('回填合法 → 200', rOcOk.status, 200);
+eq('回填只写 outcome 列', /^UPDATE casts SET outcome = \? WHERE id = \?$/.test(dbOc.state.sqls[0]), true);
+eq('回填绑定参数（回执 JSON 可解析 + id 正确）', (function () {
+  const b = dbOc.state.bound[0];
+  return parses(b[0]) && JSON.parse(b[0]).result === 'success' && b[1] === 'ok-1';
+})(), true);
+dbOc.state.changes = 0;
+eq('回填不存在的卦例 → 404', (await postRaw('?outcome=1', { id: 'ok-9', outcome: { result: 'fail' } }, { 'X-Access-Code': 'k' }, envOc)).status, 404);
+dbOc.state.changes = 1;
+const rOcClear = await postRaw('?outcome=1', { id: 'ok-1', outcome: null }, { 'X-Access-Code': 'k' }, envOc);
+eq('清除回执 → 200 且落库值为 SQL NULL', rOcClear.status === 200 && dbOc.state.bound[dbOc.state.bound.length - 1][0] === null, true);
+
+// 列表下发 outcome（前端徽标与命中率统计的数据源）
+const dbList = mkDb();
+await get('', { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbList, LIB_CODE: 'k' });
+eq('卦例列表 SQL 含 outcome 列', /SELECT id, created_at, datetime, question, hex, pillars, outcome FROM casts/.test(dbList.state.sqls[0]), true);
+
+// 反向锁定：断卦后的自动保存（主 POST）绝不得触碰 outcome 列——否则回填会被下一次保存冲掉
+const dbMain = mkDb();
+await postRaw('', { panText: '排盘', tosses: [], messages: [] }, { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbMain, LIB_CODE: 'k' });
+eq('主 POST 的 INSERT 不含 outcome 列', dbMain.state.sqls[0].indexOf('outcome') < 0, true);
 
 // ---------- #17 上游超时与流式缓冲双守卫（第二十一轮 B4/B5） ----------
 // 上游是「用户自配的 OpenAI 兼容中转」，属信任边界外的输入：可能挂起不返回、也可能

@@ -1,10 +1,11 @@
 /* Cloudflare Pages Function: /api/records
  * 卦例库（D1 数据库 LIUYAO_DB）
- *   GET    /api/records          → 卦例列表（不含正文，含 question），需口令
- *   GET    /api/records?id=xxx   → 单条卦例详情，需口令
- *   POST   /api/records          → 新建/更新卦例（需 LIB_CODE 口令）
- *   POST   /api/records?verify=1 → 口令验证探针，不落库
- *   DELETE /api/records?id=xxx   → 删除卦例（需 LIB_CODE 口令）
+ *   GET    /api/records           → 卦例列表（不含正文，含 question 与 outcome），需口令
+ *   GET    /api/records?id=xxx    → 单条卦例详情，需口令
+ *   POST   /api/records           → 新建/更新卦例（需 LIB_CODE 口令）
+ *   POST   /api/records?verify=1  → 口令验证探针，不落库
+ *   POST   /api/records?outcome=1 → 结果回执回填（M16，只写 outcome 列，需口令）
+ *   DELETE /api/records?id=xxx    → 删除卦例（需 LIB_CODE 口令）
  * 绑定：Pages 项目 → Settings → Functions → D1 database bindings → 变量名 LIUYAO_DB
  */
 
@@ -125,6 +126,43 @@ function noDb() {
   return json({ error: 'NO_DB', message: '服务端未绑定 D1 数据库（变量名应为 LIUYAO_DB）' }, 503);
 }
 
+// ---------- 结果回执（M16）：白名单校验 ----------
+// outcome 是「卦象—结果」成对样本的另一半，取值必须收敛在固定枚举内，
+// 否则统计口径会被自由文本污染（「成了」「成了吧」「大概率成」无法汇总）。
+const OUTCOME_RESULTS = ['success', 'fail', 'partial', 'unclear'];   // 事之成败
+const OUTCOME_YINGQI = ['on_time', 'missed', 'pending', 'unclear'];  // 应期是否按时应验
+// 返回值三态：object = 合法回执；null = 显式清除；undefined = 非法输入（调用方应 400）
+export function sanitizeOutcome(o) {
+  if (o === null) return null;
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return undefined;
+  const out = {};
+  if (OUTCOME_RESULTS.indexOf(o.result) >= 0) out.result = o.result;
+  if (OUTCOME_YINGQI.indexOf(o.yingqi) >= 0) out.yingqi = o.yingqi;
+  if (typeof o.note === 'string' && o.note.trim()) out.note = o.note.trim().slice(0, 200);
+  if (!out.result && !out.yingqi) return undefined; // 成败与应期至少居其一
+  out.updated_at = new Date().toISOString();
+  return out;
+}
+
+// 回执回填：只写 outcome 一列，绝不动卦例本体（pan_text/messages 由断卦流程维护）。
+// 与主 POST 的 ON CONFLICT 更新清单互不包含——自动保存不会冲掉已回填的回执，
+// 回填回执也不会改写卦例内容。
+async function handleOutcome(request, env) {
+  let b;
+  try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+  const id = (b && typeof b.id === 'string') ? b.id : '';
+  if (!ID_RE.test(id)) return json({ error: 'BAD_ID', message: '非法 id' }, 400);
+  const oc = sanitizeOutcome(b ? b.outcome : undefined);
+  if (oc === undefined) {
+    return json({ error: 'BAD_OUTCOME', message: '回执须含 result（success/fail/partial/unclear）或 yingqi（on_time/missed/pending/unclear）至少一项' }, 400);
+  }
+  const r = await env.LIUYAO_DB.prepare('UPDATE casts SET outcome = ? WHERE id = ?')
+    .bind(oc === null ? null : JSON.stringify(oc), id).run();
+  const changes = r && r.meta && typeof r.meta.changes === 'number' ? r.meta.changes : 0;
+  if (!changes) return json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
+  return json({ ok: true, outcome: oc });
+}
+
 export async function onRequestGet(context) {
   const { request, env } = context;
   const denied = await checkAccess(request, env); if (denied) return denied;
@@ -138,8 +176,9 @@ export async function onRequestGet(context) {
     const row = await env.LIUYAO_DB.prepare('SELECT * FROM casts WHERE id = ?').bind(id).first();
     return row ? json({ record: row }) : json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
   }
+  // outcome 一并下发：列表徽标与命中率统计（M16）都在前端据它计算；单条 JSON ≤ 数百字节，100 行体量可控
   const { results } = await env.LIUYAO_DB.prepare(
-    'SELECT id, created_at, datetime, question, hex, pillars FROM casts ORDER BY created_at DESC LIMIT 100'
+    'SELECT id, created_at, datetime, question, hex, pillars, outcome FROM casts ORDER BY created_at DESC LIMIT 100'
   ).all();
   // 读路径同样不能信库里的数据：历史无校验写入的非法 id 行一律不下发前端
   // （这些 id 会被拼进 data-id / data-del 属性，是存储型 XSS 的入口）
@@ -161,9 +200,12 @@ export async function onRequestDelete(context) {
 export async function onRequestPost(context) {
   const { request, env } = context;
   const denied = await writeGuard(request, env); if (denied) return denied;
+  const url = new URL(request.url);
   // 口令验证探针：POST /api/records?verify=1 只校验口令不落库
-  if (new URL(request.url).searchParams.get('verify')) return json({ ok: true });
+  if (url.searchParams.get('verify')) return json({ ok: true });
   if (!env.LIUYAO_DB) return noDb();
+  // 结果回执回填（M16）：独立分支，只写 outcome 列
+  if (url.searchParams.get('outcome')) return handleOutcome(request, env);
 
   let b;
   try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
@@ -172,6 +214,7 @@ export async function onRequestPost(context) {
   // id 策略：客户端可携带 id（复用/更新场景），但必须通过格式校验（ID_RE 见文件头）；
   // 缺失或非法一律服务端生成 UUID，杜绝空主键、超长主键与伪造覆盖
   const id = (typeof b.id === 'string' && ID_RE.test(b.id)) ? b.id : crypto.randomUUID();
+  // 注意：ON CONFLICT 更新清单刻意不含 outcome——断卦后的自动保存不得冲掉已回填的结果回执
   await env.LIUYAO_DB.prepare(
     'INSERT INTO casts (id, created_at, datetime, pillars, question, hex, tosses, pan_text, messages) ' +
     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ' +

@@ -959,16 +959,64 @@
     renderLoginBtn();
   };
 
+  // ---------- 结果回执与命中率统计（M16） ----------
+  // 排盘与断卦都不增加卦象与所占之事间的互信息（数据处理不等式），
+  // 唯一能估它下界的工程路径是攒「卦象—结果」成对样本。此处只做忠实记录与汇总，
+  // 样本不足时不宣称任何预测效力（见 README M16）。
+  const OC_RESULT = { success: '事已成', fail: '事败', partial: '部分应验', unclear: '成败未明' };
+  const OC_YINGQI = { on_time: '应期准', missed: '应期不准', pending: '应期未至', unclear: '应期未明' };
+  function parseOutcome(raw) {
+    if (!raw) return null;
+    let o = raw;
+    if (typeof raw === 'string') { try { o = JSON.parse(raw); } catch (e) { return null; } }
+    if (!o || typeof o !== 'object') return null;
+    if (!OC_RESULT[o.result] && !OC_YINGQI[o.yingqi]) return null;
+    return o;
+  }
+  function outcomeBadge(raw) {
+    const o = parseOutcome(raw);
+    if (!o) return '';
+    const cls = o.result === 'success' ? ' oc-success' : o.result === 'fail' ? ' oc-fail' : o.result === 'partial' ? ' oc-partial' : '';
+    const parts = [];
+    if (OC_RESULT[o.result]) parts.push(OC_RESULT[o.result]);
+    if (OC_YINGQI[o.yingqi]) parts.push(OC_YINGQI[o.yingqi]);
+    return '<span class="oc-badge' + cls + '" title="结果回执">' + esc(parts.join(' · ')) + '</span>';
+  }
+  // 命中率汇总：只按已回填且判定明确的样本计数；unclear/pending 属「尚无定论」，不进率值分母
+  function renderLibStats(recs) {
+    const box = $('#libStats');
+    if (!box) return;
+    const filled = recs.map(function (r) { return parseOutcome(r.outcome); }).filter(Boolean);
+    if (!filled.length) {
+      box.innerHTML = recs.length
+        ? '<div class="muted">尚无结果回执。点开卦例详情可回填「事之成败 / 应期是否按时应验」，攒够样本后可估命中率。</div>'
+        : '';
+      return;
+    }
+    const cnt = function (key) { return filled.filter(function (o) { return o.result === key; }).length; };
+    const ycnt = function (key) { return filled.filter(function (o) { return o.yingqi === key; }).length; };
+    const decided = cnt('success') + cnt('fail') + cnt('partial');
+    const ydecided = ycnt('on_time') + ycnt('missed');
+    const pct = function (a, b) { return b ? '（' + Math.round(a * 100 / b) + '%）' : ''; };
+    box.innerHTML = '<div class="verdict" style="padding:10px 14px"><b>命中率统计</b>　已回填 ' + filled.length + ' / ' + recs.length + ' 例' +
+      '<div class="muted" style="margin-top:4px">事之成败（判定明确 ' + decided + ' 例）：成 ' + cnt('success') + pct(cnt('success'), decided) +
+      ' · 部分 ' + cnt('partial') + pct(cnt('partial'), decided) + ' · 败 ' + cnt('fail') + pct(cnt('fail'), decided) + '</div>' +
+      '<div class="muted">应期验证（应期已至 ' + ydecided + ' 例）：按时 ' + ycnt('on_time') + pct(ycnt('on_time'), ydecided) +
+      ' · 未按时 ' + ycnt('missed') + pct(ycnt('missed'), ydecided) + '；另 ' + ycnt('pending') + ' 例应期未至</div>' +
+      '<div class="muted" style="margin-top:4px">样本尚少，以上只是忠实计数，不构成预测效力的证据；Brier score 等待样本量足够后再算。</div></div>';
+  }
+
   $('#btnLib').onclick = async function () {
     $('#libList').innerHTML = '<div class="muted">载入中…</div>';
     try {
       const res = await apiFetch('/api/records', {});
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || '读取失败');
-      if (!data.records.length) { $('#libList').innerHTML = '<div class="muted">尚无卦例。</div>'; return; }
+      if (!data.records.length) { $('#libList').innerHTML = '<div class="muted">尚无卦例。</div>'; renderLibStats([]); return; }
+      renderLibStats(data.records);
       $('#libList').innerHTML = data.records.map(function (r) {
         return '<div class="lib-item" data-id="' + escAttr(r.id) + '"><span>' + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) + '</span>' +
-          '<span class="lib-side"><span class="muted">' + esc((r.created_at || '').slice(0, 10)) + '</span>' +
+          '<span class="lib-side">' + outcomeBadge(r.outcome) + '<span class="muted">' + esc((r.created_at || '').slice(0, 10)) + '</span>' +
           '<button class="lib-del" data-del="' + escAttr(r.id) + '" title="删除此卦例">×</button></span></div>';
       }).join('');
       Array.prototype.forEach.call(document.querySelectorAll('.lib-item'), function (el) {
@@ -1025,10 +1073,61 @@
           }).join('') + '</div>';
       }).join('');
       if (!colHTML) colHTML = '<div class="muted">该卦例无对话记录。</div>';
+      // 结果回执（M16）：展示当前值 + 回填表单。应期是最佳验证切口——
+      // 天然带时间戳，不需主观标注「准不准」，只记「那天发生了没有」。
+      const oc = parseOutcome(r.outcome);
+      const ocNow = oc
+        ? [OC_RESULT[oc.result], OC_YINGQI[oc.yingqi]].filter(Boolean).join(' · ') +
+          (oc.note ? '　备注：' + oc.note : '') +
+          (oc.updated_at ? '　（记于 ' + String(oc.updated_at).slice(0, 10) + '）' : '')
+        : '尚未回填';
       $('#libDetail').innerHTML = '<div class="ai-block"><b>' + esc(r.hex) + '</b>　<span class="muted">' +
         esc(r.datetime || '') + '　' + esc(r.pillars || '') + '</span>' +
         '<pre class="pan-text">' + esc(r.pan_text || '') + '</pre>' +
-        '<div class="ai-cols">' + colHTML + '</div></div>';
+        '<div class="ai-cols">' + colHTML + '</div>' +
+        '<div class="oc-box"><b>结果回执</b>　<span class="muted" id="ocNow">' + esc(ocNow) + '</span>' +
+        '<div class="muted" style="margin-top:4px;font-size:12px">事后据实回填，供命中率统计；如实记录，败例同样宝贵。</div>' +
+        '<div class="oc-row">' +
+        '<select id="ocResult"><option value="">事之成败…</option><option value="success">事已成</option>' +
+        '<option value="fail">事败</option><option value="partial">部分应验</option><option value="unclear">成败未明</option></select>' +
+        '<select id="ocYingqi"><option value="">应期…</option><option value="on_time">应期准（按时应验）</option>' +
+        '<option value="missed">应期不准</option><option value="pending">应期未至</option><option value="unclear">应期未明</option></select>' +
+        '<input id="ocNote" maxlength="200" placeholder="备注（≤200 字，可留空）">' +
+        '<button class="btn primary" id="btnOcSave">保存回执</button>' +
+        (oc ? '<button class="btn ghost" id="btnOcClear">清除回执</button>' : '') +
+        '</div><div class="muted" id="ocMsg" style="margin-top:6px;font-size:12px"></div></div>' +
+        '</div>';
+      if (oc) {
+        if (oc.result) $('#ocResult').value = oc.result;
+        if (oc.yingqi) $('#ocYingqi').value = oc.yingqi;
+        if (oc.note) $('#ocNote').value = oc.note;
+      }
+      const saveOutcome = async function (outcome) {
+        const msg = $('#ocMsg');
+        const btn = $('#btnOcSave'); if (btn) btn.disabled = true;
+        try {
+          const res = await apiFetch('/api/records?outcome=1', {
+            method: 'POST', body: JSON.stringify({ id: r.id, outcome: outcome })
+          });
+          const d = await res.json();
+          if (!res.ok) throw new Error(d.message || '保存失败');
+          msg.textContent = outcome === null ? '回执已清除。' : '回执已保存。';
+          // 刷新列表徽标与命中率统计（详情区保持不动）
+          $('#btnLib').onclick();
+          setTimeout(function () { loadCast(r.id); }, 300); // 重载详情以刷新「当前值」行
+        } catch (e) {
+          msg.textContent = '保存失败：' + e.message;
+        } finally { if (btn) btn.disabled = false; }
+      };
+      $('#btnOcSave').onclick = function () {
+        const outcome = { result: $('#ocResult').value, yingqi: $('#ocYingqi').value, note: $('#ocNote').value };
+        if (!outcome.result && !outcome.yingqi) { $('#ocMsg').textContent = '请至少选择「事之成败」或「应期」之一。'; return; }
+        saveOutcome(outcome);
+      };
+      const btnClear = $('#btnOcClear');
+      if (btnClear) btnClear.onclick = function () {
+        if (confirm('确定清除此卦例的结果回执？')) saveOutcome(null);
+      };
       $('#libDetail').scrollIntoView({ behavior: 'smooth' });
     } catch (e) {
       // 部署传播期 / 网络抖动 / 后端 500 返回 HTML → res.json() 在此抛出

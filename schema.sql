@@ -17,8 +17,16 @@ CREATE TABLE IF NOT EXISTS casts (
   hex        TEXT,
   tosses     TEXT,   -- JSON：摇卦记录
   pan_text   TEXT,   -- 排盘文本
-  messages   TEXT    -- JSON：AI 断卦与进阶探讨对话历史
+  messages   TEXT,   -- JSON：AI 断卦与进阶探讨对话历史
+  outcome    TEXT    -- JSON：结果回执（M16）{result, yingqi, note, updated_at}，未回填为 NULL
 );
+
+-- 既有库补加 outcome 列（SQLite 支持 ALTER TABLE ADD COLUMN，无需重建表）：
+--   npx wrangler d1 execute liuyao-db --remote --command="ALTER TABLE casts ADD COLUMN outcome TEXT;"
+-- outcome 取值口径（functions/api/records.js 的 sanitizeOutcome 白名单）：
+--   result  ∈ success | fail | partial | unclear   （事之成败）
+--   yingqi  ∈ on_time | missed | pending | unclear （应期是否按时应验）
+--   note    ≤ 200 字自由备注；updated_at 由服务端写入
 
 CREATE INDEX IF NOT EXISTS idx_casts_created ON casts(created_at DESC);
 

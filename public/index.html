@@ -222,6 +222,22 @@
     color: var(--ink-light); cursor: pointer; transition: all .2s;
   }
   .lib-del:hover { border-color: var(--cinnabar); color: var(--cinnabar); background: #fbf1ef; }
+  /* 结果回执（M16） */
+  .oc-badge {
+    font-size: 11px; padding: 1px 7px; border-radius: 10px; white-space: nowrap;
+    border: 1px solid var(--line); color: var(--ink-light); background: #f7f2e7;
+  }
+  .oc-badge.oc-success { color: #2e6b34; border-color: #b8d4bc; background: #eef5ee; }
+  .oc-badge.oc-fail { color: #a83f39; border-color: #e3c0bd; background: #fbf1ef; }
+  .oc-badge.oc-partial { color: #8a6d1d; border-color: #ddcda0; background: #faf4e3; }
+  .oc-box { margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 8px; background: #fbf8f1; }
+  .oc-box .oc-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  .oc-box select, .oc-box input {
+    font-family: inherit; font-size: 13px; padding: 6px 10px;
+    border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  }
+  .oc-box input { flex: 1; min-width: 160px; }
+  #libStats { font-size: 13px; line-height: 1.8; }
   .pan-text {
     white-space: pre-wrap; font-family: "Courier New", monospace; font-size: 13px;
     background: #fff; border: 1px solid var(--line); border-radius: 6px;
@@ -341,6 +357,7 @@
       <button class="btn ghost" id="btnLogin">口令登录</button>
       <span class="muted" id="loginTip" style="align-self:center;font-size:13px">卦例浏览开放，装入需口令</span>
     </div>
+    <div id="libStats" style="margin-top:10px"></div>
     <div id="libList" style="margin-top:12px"></div>
     <div id="libDetail" style="margin-top:12px"></div>
   </section>
