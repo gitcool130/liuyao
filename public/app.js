@@ -759,26 +759,115 @@
     return out;
   }
 
-  async function callInterpret(model, history) {
-    let res, raw;
-    try {
-      res = await apiFetch('/api/interpret', {
-        method: 'POST',
-        body: JSON.stringify({ panText: buildPanText(true), messages: history, model: model })
-      });
-      raw = await res.text();
-    } catch (e) {
-      throw { kind: 'net', message: '网络请求失败：' + e.message };
+  // AI 请求重试/超时策略：25 秒截止、指数退避、按返回类型决定是否重试。
+  // 只有过了截止时间仍无结果，才渲染「复制请求内容」降级；期间用户看到的是重试状态。
+  const AI_RETRY_DEADLINE = 25000;
+  const AI_RETRY_MIN_DELAY = 1200;
+  const AI_RETRY_MAX_DELAY = 6000;
+  const AI_RETRY_MIN_TIMEOUT = 8000;
+
+  function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
+
+  function isRetriableError(res, data, kind) {
+    if (kind === 'net' || kind === 'html' || kind === 'empty') return true;
+    if (kind !== 'api') return false;
+    // 配置/请求类错误不重试：改环境变量或重排盘才能解决
+    const noRetry = { BAD_JSON: 1, NO_PAN: 1, BAD_PROVIDER: 1, BAD_MODEL: 1, NO_KEY: 1, ACCESS_REQUIRED: 1 };
+    if (data && data.error && noRetry[data.error]) return false;
+    if (data && (data.error === 'LLM_ERROR' || data.error === 'LLM_TIMEOUT' || data.error === 'EMPTY' || data.error === 'RATE_LIMITED')) return true;
+    if (res && (res.status === 429 || res.status >= 500)) return true;
+    return false;
+  }
+
+  async function callInterpret(model, history, onStatus) {
+    const start = Date.now();
+    const details = [];
+    let lastErr = null;
+    let attempt = 0;
+    while (true) {
+      attempt++;
+      const elapsed = Date.now() - start;
+      const remaining = AI_RETRY_DEADLINE - elapsed;
+      if (remaining <= 0) {
+        lastErr = { kind: 'html', message: '接口暂未就绪（已重试，仍无响应）', detail: details.join(' | ') };
+        break;
+      }
+      if (onStatus) onStatus('推卦中…' + (attempt > 1 ? '（第 ' + attempt + ' 次尝试）' : ''));
+      const attemptTimeout = Math.max(AI_RETRY_MIN_TIMEOUT, remaining);
+      const ctrl = new AbortController();
+      const timer = setTimeout(function () { ctrl.abort(); }, attemptTimeout);
+      let res, raw, netErr;
+      try {
+        res = await apiFetch('/api/interpret', {
+          method: 'POST',
+          body: JSON.stringify({ panText: buildPanText(true), messages: history, model: model }),
+          signal: ctrl.signal
+        });
+        raw = await res.text();
+      } catch (e) {
+        netErr = e;
+      } finally {
+        clearTimeout(timer);
+      }
+      if (netErr) {
+        const isAbort = netErr.name === 'AbortError';
+        const msg = isAbort ? '请求超时' : ('网络请求失败：' + netErr.message);
+        details.push('第' + attempt + '次：' + msg);
+        lastErr = { kind: 'net', message: msg };
+        const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));
+        if (Date.now() - start + delay >= AI_RETRY_DEADLINE) {
+          lastErr = { kind: 'html', message: '接口暂未就绪（已重试，仍无响应）', detail: details.join(' | ') };
+          break;
+        }
+        if (onStatus) onStatus(msg + '，' + Math.round(delay / 1000) + ' 秒后重试…');
+        await sleep(delay);
+        continue;
+      }
+      let data;
+      try { data = JSON.parse(raw); }
+      catch (e) {
+        const snippet = raw.replace(/\s+/g, ' ').slice(0, 120);
+        details.push('第' + attempt + '次：HTML 响应 ' + snippet);
+        lastErr = { kind: 'html', message: '接口暂未就绪（新部署传播中，稍等片刻重试即可）', detail: snippet };
+        const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));
+        if (Date.now() - start + delay >= AI_RETRY_DEADLINE) {
+          lastErr = { kind: 'html', message: '接口暂未就绪（已重试，仍无响应）', detail: details.join(' | ') };
+          break;
+        }
+        if (onStatus) onStatus('接口未就绪，' + Math.round(delay / 1000) + ' 秒后重试…');
+        await sleep(delay);
+        continue;
+      }
+      if (!res.ok) {
+        const err = { kind: 'api', message: data.message || data.error || ('HTTP ' + res.status), detail: data.detail || '', code: data.error || '' };
+        if (isRetriableError(res, data, 'api')) {
+          details.push('第' + attempt + '次：' + err.message + (err.detail ? ' / ' + String(err.detail).slice(0, 80) : ''));
+          lastErr = err;
+          const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));
+          if (Date.now() - start + delay >= AI_RETRY_DEADLINE) break;
+          if (onStatus) onStatus(err.message + '，' + Math.round(delay / 1000) + ' 秒后重试…');
+          await sleep(delay);
+          continue;
+        }
+        throw err;
+      }
+      if (!data.reply) {
+        details.push('第' + attempt + '次：大模型返回为空');
+        lastErr = { kind: 'empty', message: '大模型返回为空' };
+        const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));
+        if (Date.now() - start + delay >= AI_RETRY_DEADLINE) break;
+        if (onStatus) onStatus('模型返回为空，' + Math.round(delay / 1000) + ' 秒后重试…');
+        await sleep(delay);
+        continue;
+      }
+      return data.reply;
     }
-    let data;
-    try { data = JSON.parse(raw); }
-    catch (e) {
-      // 返回了 HTML（部署传播中/边缘缓存）——给可读提示，不抛 JSON 天书
-      throw { kind: 'html', message: '接口暂未就绪（新部署传播中，稍等片刻重试即可）' };
+    if (lastErr) {
+      if (!lastErr.detail) lastErr.detail = '';
+      lastErr.detail = (lastErr.detail ? lastErr.detail + ' | ' : '') + details.join(' | ');
+      throw lastErr;
     }
-    if (!res.ok) throw { kind: 'api', message: data.message || data.error || ('HTTP ' + res.status), detail: data.detail || '' };
-    if (!data.reply) throw { kind: 'empty', message: '大模型返回为空' };
-    return data.reply;
+    throw { kind: 'html', message: '接口暂未就绪（已重试，仍无响应）', detail: details.join(' | ') };
   }
 
   // 失败/无输出时的降级展示：友好提示 + 完整请求内容（可一键复制去任意对话窗口）
@@ -835,7 +924,10 @@
       });
       await Promise.all(selModels.map(async function (m) {
         try {
-          const reply = await callInterpret(m, []);
+          const reply = await callInterpret(m, [], function (msg) {
+            const el = colBody(m);
+            if (el) el.innerHTML = '<div class="loading">' + esc(msg) + '</div>';
+          });
           aiStates[m] = { history: [{ role: 'assistant', content: reply }] };
           colBody(m).innerHTML = '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply);
         } catch (e) {
@@ -870,7 +962,9 @@
         // 本次追问已入栈，须整段送出：旧版 slice(0,-1) 把刚入栈的问题切掉，大模型收不到追问
         const historySnapshot = aiStates[m].history.slice();
         try {
-          const reply = await callInterpret(m, historySnapshot);
+          const reply = await callInterpret(m, historySnapshot, function (msg) {
+            if (loadEl) loadEl.innerHTML = '<span class="loading">' + esc(msg) + '</span>';
+          });
           aiStates[m].history.push({ role: 'assistant', content: reply });
           if (loadEl) loadEl.innerHTML = mdLite(reply) + auditHTML(reply);
         } catch (e) {

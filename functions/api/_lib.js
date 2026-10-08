@@ -6,6 +6,16 @@
 
 export const DEFAULT_GPT_MODELS = 'gpt-6-luna,gpt-6-sol,gpt-6-astra';
 
+// 已被判定为「签到送流量但请求不到模型」的问题模型/中转站，强制从清单与白名单剔除。
+// 即使后台 GPT_MODELS / CUSTOM_PROVIDERS 里还留着，前端不会再展示，服务端也会拒绝请求。
+const BANNED_MODEL_RE = /^gpt[-\s]?5[.-]2$/i;
+const BANNED_MODEL_SET = new Set(['gpt-5-2', 'gpt5-2', 'gpt 5.2', 'gpt 5-2']);
+export function isBannedModelId(id) {
+  if (typeof id !== 'string') return false;
+  const t = id.trim().toLowerCase();
+  return BANNED_MODEL_SET.has(t) || BANNED_MODEL_RE.test(t);
+}
+
 export function json(data, status) {
   return new Response(JSON.stringify(data), {
     status: status || 200,
@@ -53,7 +63,9 @@ export function gptModelList(env) {
   const all = raw.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
   const bad = all.filter(function (m) { return !isSafeModelId(m); });
   if (bad.length) console.warn('[liuyao] GPT_MODELS 中忽略非法模型名:', bad.join(','));
-  return all.filter(isSafeModelId);
+  const banned = all.filter(isBannedModelId);
+  if (banned.length) console.warn('[liuyao] GPT_MODELS 中已禁用模型:', banned.join(','));
+  return all.filter(function (m) { return isSafeModelId(m) && !isBannedModelId(m); });
 }
 
 // 自定义供应商：CUSTOM_PROVIDERS（JSON 数组）
@@ -84,10 +96,13 @@ export function customProviders(env) {
       warns.push(p.id + ' 未配置 models');
       return;
     }
-    const models = p.models.filter(isSafeModelId).slice(0, 8);
-    const dropped = p.models.length - p.models.filter(isSafeModelId).length;
+    const safeModels = p.models.filter(isSafeModelId);
+    const bannedModels = safeModels.filter(isBannedModelId);
+    const models = safeModels.filter(function (m) { return !isBannedModelId(m); }).slice(0, 8);
+    const dropped = p.models.length - safeModels.length;
     if (dropped > 0) warns.push(p.id + ' 有 ' + dropped + ' 个模型名含非法字符，已忽略');
-    if (!models.length) { warns.push(p.id + ' 的模型名全部非法，已忽略'); return; }
+    if (bannedModels.length) warns.push(p.id + ' 已禁用模型：' + bannedModels.join('、'));
+    if (!models.length) { warns.push(p.id + ' 的模型名全部非法/被禁用，已忽略'); return; }
     const entry = Object.assign({}, p, { models: models });
     // label 非法时只删 label（models.js 的 `p.label || p.id` 会自然回退为 id），
     // 不整条丢弃供应商——否则后台一个引号就会让该供应商从清单里整体消失

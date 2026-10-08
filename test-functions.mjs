@@ -83,6 +83,9 @@ const cp = customProviders({ CUSTOM_PROVIDERS: JSON.stringify([
 eq('含注入字符的模型被剔除', cp[0].models, ['kimi-k2']);
 eq('非法供应商 id 被剔除', cp.length, 1);
 eq('GPT_MODELS 过滤注入名', gptModelList({ GPT_MODELS: 'gpt-6-luna,<img src=x>,gpt-6-sol' }), ['gpt-6-luna', 'gpt-6-sol']);
+eq('GPT_MODELS 禁用 gpt-5.2 类中转站', gptModelList({ GPT_MODELS: 'gpt-5.2,gpt5.2,gpt-6-luna' }), ['gpt-6-luna']);
+const cpBanned = customProviders({ CUSTOM_PROVIDERS: JSON.stringify([{ id: 'foo', models: ['gpt-5.2', 'ok-model'] }]) });
+eq('CUSTOM_PROVIDERS 也剔除被禁模型', cpBanned[0].models, ['ok-model']);
 console.warn = origWarn;
 
 // ---------- #15 /api/models 去重表不得被原型链污染（第二十轮） ----------
