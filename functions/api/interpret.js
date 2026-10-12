@@ -9,7 +9,8 @@
  *   GEMINI_API_KEY    secret，Google AI Studio key（AIza 开头）
  *   GEMINI_BASE_URL   走 CF AI Gateway 的 google-ai-studio 原生路径（绕开 Google 对数据中心 IP 的拒绝）
  *   DEEPSEEK_API_KEY  secret，DeepSeek key（sk- 开头）
- *   DEEPSEEK_BASE_URL 默认 https://api.deepseek.com/v1
+ *   DEEPSEEK_BASE_URL secret，生产走 CF AI Gateway 的 /deepseek 路径（网关重试 + 日志）；
+ *                      未配置时回退 https://api.deepseek.com/v1 直连
  *   GPT_API_KEY       secret，OpenAI 兼容接口 key（官方或中转均可）；别名 OPENAI_API_KEY
  *   GPT_BASE_URL      OpenAI 兼容接口地址，默认 https://api.openai.com/v1（中转接口改这里）；别名 OPENAI_BASE_URL
  *   GPT_MODELS        GPT 可用模型清单（逗号分隔），默认 gpt-6-luna,gpt-6-sol,gpt-6-astra；别名 OPENAI_MODELS
@@ -191,30 +192,37 @@ export async function onRequestPost(context) {
     }
   });
 
-  let url, headers, payload;
-  if (isGoogle) {
-    url = cfg.base + '/models/' + encodeURIComponent(model) + ':generateContent';
-    headers = { 'x-goog-api-key': cfg.key, 'Content-Type': 'application/json' };
-    const contents = messages.filter(function (m) { return m.role !== 'system'; }).map(function (m) {
-      return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] };
-    });
-    payload = {
-      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents: contents,
-      generationConfig: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } }
-    };
-  } else {
-    url = cfg.base + '/chat/completions';
-    headers = { 'Authorization': 'Bearer ' + cfg.key, 'Content-Type': 'application/json' };
+  // 按模型组装一次上游调用（Google 原生 generateContent；其余 OpenAI 兼容流式）。
+  // 抽成函数是为了「跨模型降级」：备选模型要用同一套参数构造规则再发一次。
+  function buildCall(modelId) {
+    if (isGoogle) {
+      const contents = messages.filter(function (m) { return m.role !== 'system'; }).map(function (m) {
+        return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] };
+      });
+      return {
+        url: cfg.base + '/models/' + encodeURIComponent(modelId) + ':generateContent',
+        headers: { 'x-goog-api-key': cfg.key, 'Content-Type': 'application/json' },
+        payload: {
+          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          contents: contents,
+          generationConfig: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } }
+        }
+      };
+    }
     // 统一走流式（服务端拼接完整文本后返回），避免中转站网关的 60s 整响应硬超时
-    payload = { model: model, messages: messages, stream: true };
-    if (/^(gpt-5|o[134])/.test(model)) {
+    const payload = { model: modelId, messages: messages, stream: true };
+    if (/^(gpt-5|o[134])/.test(modelId)) {
       // gpt-5 / o 系思考模型：不支持 temperature；推理强度可用环境变量 GPT_EFFORT 调（minimal/low/medium/high），默认 low 防超时
       const effort = (env.GPT_EFFORT || 'low').trim();
       if (effort && effort !== 'none') payload.reasoning_effort = effort;
     } else {
       payload.temperature = 0.3;
     }
+    return {
+      url: cfg.base + '/chat/completions',
+      headers: { 'Authorization': 'Bearer ' + cfg.key, 'Content-Type': 'application/json' },
+      payload: payload
+    };
   }
 
   // 流式 SSE 读取：拼接 delta.content（跳过 reasoning 思考链片段），突破网关整响应超时。
@@ -255,43 +263,74 @@ export async function onRequestPost(context) {
   // 上游硬超时。fetch 默认无超时，上游挂起（不返回也不断开）会让该请求一直悬置，
   // 流式只绕过了「整响应超时」，并不自带超时保护。计时覆盖「建连 + 读完整流」全程；
   // 正常断卦约 10–60 s，默认 90 s 留余量（可用 LLM_TIMEOUT_MS 调）。
+  // 计时器覆盖主调用与降级重试的总时长，超时任一环节都会被 abort 并落入下方 504 分支。
   const timeoutMs = Math.max(1000, parseInt(env.LLM_TIMEOUT_MS || '90000', 10) || 90000);
   const ctrl = new AbortController();
   let timedOut = false;
   const timer = setTimeout(function () { timedOut = true; ctrl.abort(); }, timeoutMs);
 
-  try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(payload),
-      signal: ctrl.signal
-    });
+  // 单次上游尝试。成功 → { reply, cut }；失败 → { fail: { status, detail, retryable } }。
+  // retryable=false 表示 4xx 客户端错误（模型名非法/请求体错误等），换模型重试无意义；
+  // 429/5xx 与网络错误视为可恢复，允许跨模型降级。
+  async function attempt(modelId) {
+    const call = buildCall(modelId);
+    let resp;
+    try {
+      resp = await fetch(call.url, {
+        method: 'POST',
+        headers: call.headers,
+        body: JSON.stringify(call.payload),
+        signal: ctrl.signal
+      });
+    } catch (e) {
+      if (timedOut) throw e;   // 硬超时交由外层统一返回 504
+      return { fail: { status: 0, detail: e.message, retryable: true } };
+    }
     if (!resp.ok) {
       const t = await resp.text();
-      return json({ error: 'LLM_ERROR', message: '大模型接口返回 ' + resp.status, detail: t.slice(0, 500) }, 502);
+      const st = resp.status;
+      return { fail: { status: st, detail: t.slice(0, 500), retryable: st === 429 || st >= 500 } };
     }
     const ct = (resp.headers.get('content-type') || '').toLowerCase();
-    let reply = '', cut = null;
-    if (!isGoogle && payload.stream && ct.indexOf('text/event-stream') !== -1) {
+    if (!isGoogle && call.payload.stream && ct.indexOf('text/event-stream') !== -1) {
       // 流式 SSE：拼接完整文本（个别中转站忽略 stream 参数回 JSON 时走下方兜底）
       const sse = await readSSE(resp);
-      reply = sse.text;
-      cut = sse.cut;
-    } else {
-      const data = await resp.json();
-      if (isGoogle) {
-        const cand = data.candidates && data.candidates[0];
-        const parts = cand && cand.content && cand.content.parts;
-        if (parts) reply = parts.map(function (p) { return p.text || ''; }).join('');
-      } else {
-        const choice = data.choices && data.choices[0];
-        reply = choice && choice.message ? (choice.message.content || '') : '';
+      return { reply: sse.text, cut: sse.cut };
+    }
+    const data = await resp.json();
+    if (isGoogle) {
+      const cand = data.candidates && data.candidates[0];
+      const parts = cand && cand.content && cand.content.parts;
+      return { reply: parts ? parts.map(function (p) { return p.text || ''; }).join('') : '', cut: null };
+    }
+    const choice = data.choices && data.choices[0];
+    return { reply: choice && choice.message ? (choice.message.content || '') : '', cut: null };
+  }
+
+  try {
+    let usedModel = model;
+    let r = await attempt(usedModel);
+    // gemini 跨模型降级（2026-10-12）：所选模型可恢复性失败（429/5xx/网络错误）时，
+    // 自动落到同族备选模型重试一次。起因：gemini-3.8-flash 常因 Google 侧 high demand
+    // 整段 503（AI Gateway 日志自 2026-10-01 起反复出现），网关 3 次重试盖不住持续拥塞；
+    // 4xx 属配置/请求错误，换模型同样失败，不降级。
+    // 备选也失败时保留**首次**错误返回——它更贴近用户所选模型的真实状态。
+    let fellBackTo = null;
+    if (r.fail && r.fail.retryable && provider === 'gemini') {
+      const alt = wl.gemini.filter(function (m) { return m !== model; })[0];
+      if (alt) {
+        const r2 = await attempt(alt);
+        if (!r2.fail) { fellBackTo = alt; usedModel = alt; r = r2; }
       }
     }
-    if (!reply) return json({ error: 'EMPTY', message: '大模型返回为空' }, 502);
-    // 被守卫截断时仍返回已收到的部分答复，并带上原因（truncated 缺省时不出现在 JSON 里）
-    return json({ reply: reply, provider: provider, model: model, truncated: cut || undefined });
+    if (r.fail) {
+      if (r.fail.status === 0) return json({ error: 'NET_ERROR', message: '无法连接大模型服务：' + r.fail.detail }, 502);
+      return json({ error: 'LLM_ERROR', message: '大模型接口返回 ' + r.fail.status, detail: r.fail.detail }, 502);
+    }
+    if (!r.reply) return json({ error: 'EMPTY', message: '大模型返回为空' }, 502);
+    // 被守卫截断时仍返回已收到的部分答复，并带上原因（truncated 缺省时不出现在 JSON 里）；
+    // 发生降级时 fallback 标出实际兜底模型（未降级则不出现该字段）
+    return json({ reply: r.reply, provider: provider, model: usedModel, truncated: r.cut || undefined, fallback: fellBackTo || undefined });
   } catch (e) {
     if (timedOut) {
       return json({ error: 'LLM_TIMEOUT', message: '大模型 ' + Math.round(timeoutMs / 1000) + ' 秒内未返回完整响应，请重试或改用更快的模型' }, 504);

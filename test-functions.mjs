@@ -8,6 +8,7 @@
  *   #15 /api/models 去重表不得被原型链污染（第二十轮）
  *   #16 读路径口令收口（与写同源）+ DELETE 的 ID_RE 校验（第二十轮）
  *   #19 结果回执（M16）：sanitizeOutcome 白名单三态、回填端点三关拦截、主 POST 不触碰 outcome 列
+ *   #20 gemini 跨模型降级：可恢复失败（429/5xx/网络错误）自动落同族备选，4xx 不降级（2026-10-12）
  * 运行：npm run test:fn
  * ============================================================ */
 import { jsonWithin, safeEqual, onRequestGet, onRequestDelete, onRequestPost, sanitizeOutcome } from './functions/api/records.js';
@@ -297,6 +298,81 @@ eq('不同 IP 独立计数（不受上者限流影响）',
 // 未配置 RATE_LIMIT_PER_MIN 时恒不限流（＝当前生产状态，第十七轮撤销后）
 eq('未设 RATE_LIMIT_PER_MIN → 不限流',
   isRateLimited(new Request('https://x/', { headers: RL_IP }), {}), false);
+
+// ---------- #20 gemini 跨模型降级（2026-10-12） ----------
+// gemini-3.8-flash 常因 Google 侧 high demand 整段 503（AI Gateway 日志自 2026-10-01 反复出现），
+// 网关 3 次重试盖不住持续拥塞，故在 Functions 层对可恢复失败（429/5xx/网络错误）自动落同族备选模型；
+// 4xx 属配置/请求错误，换模型同样失败，不降级。
+const gemCalls = [];
+let gemQueue = [];
+globalThis.fetch = function (url) {
+  gemCalls.push(url);
+  const r = gemQueue.shift();
+  return Promise.resolve(typeof r === 'function' ? r() : r);
+};
+const gemOk = function (txt) {
+  return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: txt }] } }] }), { status: 200 });
+};
+const postGem = function (model) {
+  return interpretPost({
+    request: new Request('https://x/api/interpret', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ panText: '占测试', provider: 'gemini', model: model })
+    }),
+    env: { GEMINI_API_KEY: 'k' }
+  });
+};
+
+// 主模型 503 → 自动降级备选，响应标出实际兜底模型
+gemQueue = [new Response('high demand', { status: 503 }), gemOk('降级正文')];
+gemCalls.length = 0;
+const rFb = await postGem('gemini-3.8-flash');
+const jFb = await rFb.json();
+eq('主模型 503 → 降级后 200', rFb.status, 200);
+eq('降级正文来自备选', jFb.reply, '降级正文');
+eq('model 字段为实际兜底模型', jFb.model, 'gemini-3.6-flash');
+eq('fallback 字段标出兜底', jFb.fallback, 'gemini-3.6-flash');
+eq('两次调用依次命中主/备模型', [gemCalls[0].indexOf('gemini-3.8-flash') >= 0, gemCalls[1].indexOf('gemini-3.6-flash') >= 0], [true, true]);
+eq('降级恰好两次调用', gemCalls.length, 2);
+
+// 反向：主模型直接成功时不触发降级、不引入 fallback 字段（不污染正常响应）
+gemQueue = [gemOk('正文')];
+gemCalls.length = 0;
+const rDirect = await postGem('gemini-3.6-flash');
+const jDirect = await rDirect.json();
+eq('主模型成功不触发降级', gemCalls.length, 1);
+eq('成功响应不带 fallback 字段', 'fallback' in jDirect, false);
+
+// 4xx（客户端错误）不降级：换模型同样失败，重试无意义
+gemQueue = [new Response('bad request', { status: 400 })];
+gemCalls.length = 0;
+const r400 = await postGem('gemini-3.8-flash');
+eq('4xx 不降级（仅一次调用）', gemCalls.length, 1);
+eq('4xx 原样 502 透出', r400.status, 502);
+eq('4xx 错误码 LLM_ERROR', (await r400.json()).error, 'LLM_ERROR');
+
+// 主备皆 503 → 保留**首次**错误返回（更贴近用户所选模型的真实状态）
+gemQueue = [new Response('主模型503', { status: 503 }), new Response('备选503', { status: 503 })];
+gemCalls.length = 0;
+const rBoth = await postGem('gemini-3.8-flash');
+const jBoth = await rBoth.json();
+eq('主备皆挂 → 尝试两次后 502', [rBoth.status, gemCalls.length], [502, 2]);
+eq('主备皆挂 → detail 保留首次错误', jBoth.detail, '主模型503');
+
+// 非 gemini 供应商不做跨模型降级（无同族备选语义，防误伤 gpt/deepseek 错误透传）
+gemQueue = [new Response('gpt down', { status: 500 })];
+gemCalls.length = 0;
+const rNoFb = await interpretPost({
+  request: new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panText: '占测试', provider: 'gpt', model: 'gpt-6-luna' })
+  }),
+  env: { GPT_API_KEY: 'k', GPT_MODELS: 'gpt-6-luna' }
+});
+eq('非 gemini 供应商不降级（仅一次调用）', gemCalls.length, 1);
+eq('非 gemini 失败原样 502', rNoFb.status, 502);
 
 globalThis.fetch = origFetch;
 

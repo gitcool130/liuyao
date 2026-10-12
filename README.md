@@ -400,7 +400,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | `test-rules.js` | 断卦规则链 127 项单测（暗动闭环、进退神、三合、夜子时正法、伏神伏世下、两现取舍、交节边界等） |
 | `test-diff.mjs` | 三库交叉差分（4096 组合 + 历法时点 + 夜子时双流派 + 节气全量，10 万+字段） |
 | `tools/gen-jieqi.js` | 节气表离线生成器（lunar-javascript → 差分压缩表） |
-| `functions/api/interpret.js` | 断卦接口（多供应商路由 + 流式 SSE 拼接） |
+| `functions/api/interpret.js` | 断卦接口（多供应商路由 + 流式 SSE 拼接 + gemini 跨模型降级：主模型 429/5xx/网络错误自动落同族备选，响应带 `fallback` 字段） |
 | `functions/api/models.js` | 模型清单接口 |
 | `functions/api/records.js` | 卦例库接口（id 服务端校验/生成，防伪造覆盖；`?outcome=1` 结果回执回填，只写 outcome 列） |
 | `functions/api/_lib.js` | 供应商解析共享层（`_` 前缀不路由，白名单与清单共用一口径） |
@@ -430,7 +430,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | 变量 | 说明 |
 |------|------|
 | `DEEPSEEK_API_KEY` | secret，DeepSeek key |
-| `DEEPSEEK_BASE_URL` | 默认 `https://api.deepseek.com/v1` |
+| `DEEPSEEK_BASE_URL` | **secret**，CF AI Gateway `/deepseek` 路径（网关重试 + 日志，2026-10-12 起；此前为 `wrangler.toml [vars]` 明文直连）。含账号 ID 与网关名，故不写进仓库，用 `wrangler pages secret put DEEPSEEK_BASE_URL` 设置；模板：`https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/<GATEWAY_NAME>/deepseek`。未配置则回退 `https://api.deepseek.com/v1` 直连 |
 
 **GPT / OpenAI 兼容通道（中转站等）**
 
@@ -473,7 +473,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 npm install                       # 安装测试裁判库（devDependencies）
 npx wrangler pages dev public     # 本地起 Pages（部署根为 public/，需先在 wrangler.toml 绑定 D1）
 npm test                          # 快速环：基础自检 66 项 + 规则链单测 165 项 + 卦型判定回归 88 项（均无需裁判库）
-npm run test:fn                   # Functions 层单测 85 项（jsonWithin 合法性/常量时间口令/模型名白名单/去重与读鉴权/结果回执）
+npm run test:fn                   # Functions 层单测 102 项（jsonWithin 合法性/常量时间口令/模型名白名单/去重与读鉴权/结果回执/gemini 跨模型降级）
 npm run test:paipan               # 排盘金标准回归 173 项（零依赖，只加载 core.js）
 npm run test:ui                   # UI 冒烟 49 断言（Playwright + Edge 通道，需先起本地静态服务）
 npm run test:all                  # 完整环：上者 + 三库交叉差分（CI 即用此命令）
