@@ -151,7 +151,12 @@
 
   // 浏览器禁止自动播放有声内容：默认开启时，等首次手势再启动
   if (enabled) {
-    const kick = function () {
+    const kick = function (e) {
+      // 手势启动必须让位于按钮自身的显式切换：pointerdown 先于 click 且冒泡到
+      // document，若访客第一个交互就是点琴按钮，kick 的 start() 会与随后
+      // btn.onclick 的 enabled=!enabled → stop() 在同一帧内抵消，
+      // 并把 localStorage 永久写成 'off'（用户感知：按钮点了没反应）。
+      if (e && e.target && e.target.closest && e.target.closest('#bgmBtn')) return;
       document.removeEventListener('pointerdown', kick);
       if (enabled && !playing) start();
     };

@@ -610,10 +610,19 @@
   let selModels = loadSelModels();
   let aiStates = {};   // { modelId: { history: [] } }
   let castId = null;
+  // AI 请求代际管理：每次「开始断卦」递增代数并新建 AbortController；
+  // resetAIState（重新起卦/撤销）时 abort 在途请求并递增代数，
+  // 旧请求的回调凭代数比对后丢弃，避免旧卦断语污染新卦栏目与对话上下文。
+  let aiGen = 0;
+  let aiAbort = null;
 
   function loadSelModels() {
     let saved = [];
     try { saved = JSON.parse(localStorage.getItem('ly_models') || '[]'); } catch (e) {}
+    // 旧版未校验类型：localStorage 里若是合法 JSON 但非数组（"x"/null/{}），
+    // 下一行 saved.filter 抛 TypeError，而本函数在 IIFE 中段被调用，
+    // 异常会中断其后全部事件绑定与 init——铜钱区、时间区全空白。
+    if (!Array.isArray(saved)) saved = [];
     const valid = saved.filter(function (m) { return MODELS.some(function (x) { return x.id === m; }); });
     return valid.length ? valid : DEFAULT_MODELS.slice();
   }
@@ -637,6 +646,12 @@
   }
 
   function resetAIState() {
+    // 中断在途 AI 请求并递增代数：旧请求回调随后凭 aiGen 比对被丢弃。
+    // 无此机制时，断卦在途点[重新起卦]会让旧卦断语写入新卦栏目，
+    // 追问在途时更会把两个卦象的盘面文本混进同一趟上下文发给模型。
+    aiGen++;
+    if (aiAbort) { try { aiAbort.abort(); } catch (e) { /* 已 abort 则忽略 */ } }
+    aiAbort = null;
     aiStates = {}; castId = null;
     $('#aiReply').innerHTML = '';
     const box = $('#chatBox'); if (box) box.hidden = true;
@@ -808,8 +823,16 @@
           if (!data || data === '[DONE]') continue;
           try {
             const j = JSON.parse(data);
+            // 服务端终止事件（上游断连/超时/守卫撞限）：区分「正常完篇」与
+            // 「中途断流」，抛出交由上层走重试，避免无声截断的半篇被当作完整答案
+            if (j && j.error) {
+              throw { kind: 'stream', message: j.message || j.error, code: j.error };
+            }
             if (j && j.t) full += j.t;
-          } catch (e) { /* 忽略无法解析的分片 */ }
+          } catch (e) {
+            if (e && e.kind === 'stream') throw e;
+            /* 其余无法解析的分片忽略 */
+          }
         }
         // 仅在内容有增长时回调：SSE 心跳/注释行也会触发 read() 返回，
         // 无条件回调会让长文本每秒重建多次 innerHTML，导致闪烁与选中丢失。
@@ -824,11 +847,19 @@
     return full;
   }
 
-  async function callInterpret(model, history, onStatus, onStream) {
+  // opts.gen：代数令牌，用于丢弃「用户已重新起卦/断卦」后在途旧请求的回调。
+  // opts.signal：外部 AbortSignal（resetAIState 时触发），中断在途 fetch 与流式读取。
+  async function callInterpret(model, history, onStatus, onStream, opts) {
+    opts = opts || {};
+    const gen = opts.gen;
+    const outerSignal = opts.signal;
     const start = Date.now();
     const details = [];
     let lastErr = null;
     let attempt = 0;
+    // 排盘文本在进入重试循环前快照一次：旧版每轮 attempt 重建 buildPanText(true)，
+    // 重试期间用户改事类/时间，后续 attempt 会发出与首次不同的盘面（对话历史还是旧的）。
+    const panTextSnapshot = buildPanText(true);
     while (true) {
       attempt++;
       const elapsed = Date.now() - start;
@@ -837,15 +868,26 @@
         lastErr = { kind: 'html', message: '接口暂未就绪（已重试，仍无响应）', detail: details.join(' | ') };
         break;
       }
+      // 外部已取消（重新起卦/重新断卦）：不再发起新 attempt
+      if (outerSignal && outerSignal.aborted) throw { kind: 'aborted', message: '已取消' };
       if (onStatus) onStatus('推卦中…' + (attempt > 1 ? '（第 ' + attempt + ' 次尝试）' : ''));
       const attemptTimeout = Math.max(AI_RETRY_MIN_TIMEOUT, remaining);
       const ctrl = new AbortController();
       const timer = setTimeout(function () { ctrl.abort(); }, attemptTimeout);
+      // 外部取消转发到本 attempt，使 fetch 与 SSE 流式读取一并中断
+      let onOuterAbort = null;
+      if (outerSignal) {
+        if (outerSignal.aborted) ctrl.abort();
+        else {
+          onOuterAbort = function () { ctrl.abort(); };
+          outerSignal.addEventListener('abort', onOuterAbort, { once: true });
+        }
+      }
       let res, raw, netErr;
       try {
         res = await apiFetch('/api/interpret', {
           method: 'POST',
-          body: JSON.stringify({ panText: buildPanText(true), messages: history, model: model }),
+          body: JSON.stringify({ panText: panTextSnapshot, messages: history, model: model }),
           signal: ctrl.signal
         });
         const ct = (res.headers.get('content-type') || '').toLowerCase();
@@ -868,10 +910,15 @@
         netErr = e;
       } finally {
         clearTimeout(timer);
+        if (onOuterAbort && outerSignal) outerSignal.removeEventListener('abort', onOuterAbort);
       }
       if (netErr) {
+        // 外部取消（重新起卦/重新断卦）直接抛出，不走重试也不渲染失败框
+        if (outerSignal && outerSignal.aborted) throw { kind: 'aborted', message: '已取消' };
         const isAbort = netErr.name === 'AbortError';
-        const msg = isAbort ? '请求超时' : ('网络请求失败：' + netErr.message);
+        const msg = isAbort ? '请求超时'
+          : (netErr.kind === 'stream' ? ('断卦流中断：' + netErr.message)
+            : ('网络请求失败：' + netErr.message));
         details.push('第' + attempt + '次：' + msg);
         lastErr = { kind: 'net', message: msg };
         const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));
@@ -977,6 +1024,12 @@
     // 整体 try/finally：renderCols()/colBody()/Promise.all() 任一在 try 之外抛错，
     // 按钮恢复那两行就不会执行，按钮将永久停在「卦师推敲中…」禁用态。
     try {
+      // 新一轮断卦：递增代数 + 新建 AbortController，中断上一轮在途请求
+      aiGen++;
+      if (aiAbort) { try { aiAbort.abort(); } catch (e) { /* 已 abort 则忽略 */ } }
+      aiAbort = new AbortController();
+      const myGen = aiGen;
+      const mySignal = aiAbort.signal;
       aiStates = {};
       renderCols();
       selModels.forEach(function (m) {
@@ -986,15 +1039,18 @@
       await Promise.all(selModels.map(async function (m) {
         try {
           const reply = await callInterpret(m, [], function (msg) {
+            if (myGen !== aiGen) return;   // 已进入新一轮，丢弃旧状态回调
             const el = colBody(m);
             if (el) el.innerHTML = '<div class="loading">' + esc(msg) + '</div>';
           }, function (text) {
+            if (myGen !== aiGen) return;
             const el = colBody(m);
             if (el) {
               el.innerHTML = '<div class="ai-block">' + mdLite(text) + '</div>';
               scrollBody(el);
             }
-          });
+          }, { gen: myGen, signal: mySignal });
+          if (myGen !== aiGen) return;     // 旧代响应：不写入状态、不渲染
           aiStates[m] = { history: [{ role: 'assistant', content: reply }] };
           const bodyEl = colBody(m);
           if (bodyEl) {
@@ -1002,6 +1058,8 @@
             scrollBody(bodyEl);
           }
         } catch (e) {
+          if (e && e.kind === 'aborted') return;   // 被新一轮取消，静默退出
+          if (myGen !== aiGen) return;
           const el = colBody(m);
           if (el) renderFailBox(el, m, [], e);
         }
@@ -1028,6 +1086,9 @@
     // 末行 chatBusy=false 不会执行，此后所有追问都会被 chatBusy 永久静默拦截。
     try {
       const active = Object.keys(aiStates);
+      // 追问沿用当前代数：若在途时用户点[重新断卦]（代数递增），
+      // 旧追问的响应会被下方代数比对丢弃。
+      const myGen = aiGen;
       // 每轮追问为每个模型分配独立 id，避免旧版共用一个 id 时
       // getElementById 只命中第一个消息块（后续追问全部串到第一轮）。
       const chatIds = {};
@@ -1051,11 +1112,17 @@
           }, function (text) {
             if (loadEl) loadEl.innerHTML = mdLite(text);
             scrollBody(colBody(m));
-          });
+          }, { gen: aiGen, signal: aiAbort ? aiAbort.signal : null });
+          // 追问在途时用户点[重新断卦]：代数已变，丢弃旧响应，
+          // 否则旧卦的 assistant 回复会被追加进新卦 history，下一轮追问
+          // 会把两个卦象的盘面文本混在一趟上下文里发给模型。
+          if (aiGen !== myGen) return;
           aiStates[m].history.push({ role: 'assistant', content: reply });
           if (loadEl) loadEl.innerHTML = mdLite(reply) + auditHTML(reply);
           scrollBody(colBody(m));
         } catch (e) {
+          if (e && e.kind === 'aborted') return;
+          if (aiGen !== myGen) return;
           if (loadEl) {
             const box = document.createElement('div');
             loadEl.innerHTML = '';
@@ -1089,19 +1156,30 @@
     };
   }
 
+  let autoSavePromise = null;
   async function autoSaveCast() {
-    try {
-      // silent：未登录时不弹口令框，静默跳过
-      const res = await apiFetch('/api/records', { method: 'POST', body: JSON.stringify(recordPayload()) }, true);
-      const data = await res.json();
-      if (res.ok && data.id) { castId = data.id; $('#btnSave').textContent = '已入卦例库 ✓'; }
-    } catch (e) { /* 静默：数据库未绑定或未登录时不打扰断卦 */ }
+    if (!pan) return;
+    // 串行化：旧版 autoSaveCast 与 [存入卦例库] 都不 await，用户在其在途时点手动保存，
+    // 两个 POST 都带 id:null → 服务端各生成一个 UUID → 卦例库出现两条重复记录，
+    // 且后返回的把 castId 改成另一条的 id，后续自动保存更新的是另一条。
+    const run = (autoSavePromise || Promise.resolve()).then(async function () {
+      try {
+        // silent：未登录时不弹口令框，静默跳过
+        const res = await apiFetch('/api/records', { method: 'POST', body: JSON.stringify(recordPayload()) }, true);
+        const data = await res.json();
+        if (res.ok && data.id) { castId = data.id; $('#btnSave').textContent = '已入卦例库 ✓'; }
+      } catch (e) { /* 静默：数据库未绑定或未登录时不打扰断卦 */ }
+    });
+    autoSavePromise = run.catch(function () {});
+    return run;
   }
 
   $('#btnSave').onclick = async function () {
     if (!pan) return;
     const btn = $('#btnSave'); btn.disabled = true;
     try {
+      // 先等挂起的自动保存落定，避免与手动保存并发写出两条记录（见 autoSaveCast 注释）
+      if (autoSavePromise) { try { await autoSavePromise; } catch (e) { /* 自动保存失败不阻断手动保存 */ } }
       const res = await apiFetch('/api/records', { method: 'POST', body: JSON.stringify(recordPayload()) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || '保存失败');

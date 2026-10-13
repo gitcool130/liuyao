@@ -280,6 +280,13 @@ export async function onRequestPost(context) {
   const ctrl = new AbortController();
   let timedOut = false;
   const timer = setTimeout(function () { timedOut = true; ctrl.abort(); }, timeoutMs);
+  // 流式透传路径的超时保护必须延续到「读完整条流」全程。
+  // return new Response(readable) 会同步触发下方 finally，若在 finally 里无条件
+  // clearTimeout，计时器在流还没开始读时就已注销，上游挂起将导致请求无限悬挂。
+  // 故流式分支把计时器「托管」给 pipeMergedSSE，由其在流结束时清除；
+  // 心跳 setInterval 同理，随流生命周期启停。
+  let timerHandedOff = false;
+  let heartbeat = null;
 
   // 单次上游尝试。成功 → { reply, cut }；失败 → { fail: { status, detail, retryable } }。
   // retryable=false 表示 4xx 客户端错误（模型名非法/请求体错误等），换模型重试无意义；
@@ -341,10 +348,17 @@ export async function onRequestPost(context) {
       return json({ error: 'LLM_ERROR', message: '大模型接口返回 ' + r.fail.status, detail: r.fail.detail }, 502);
     }
     if (r.stream) {
-      // 透传 SSE 流到客户端，先注入心跳注释避免 CF 边缘 100s 无数据断连。
-      // 上游 fetch 已绑定 abort signal，总时长仍受 LLM_TIMEOUT_MS 约束。
-      // 解析上游 OpenAI SSE，把 delta.content / reasoning_content 合并为简单 data 行输出，
-      // 客户端无需了解 OpenAI 分片格式。
+      // 透传 SSE 流到客户端。三个关键点：
+      // ① 计时器托管：return 会触发 finally，此处置位使 finally 不清除 timer，
+      //    由 pipeMergedSSE 在流结束时清除——否则上游挂起时请求无限悬挂。
+      // ② 周期心跳：开头那一次 : ping 只是「首字节」，不构成心跳；上游思考期
+      //    （DeepSeek 可数十秒无输出）超过 CF 边缘 100s 无数据即遭 524 断连，
+      //    故每 15s 主动写一次注释行，保持连接活跃。
+      // ③ 守卫与终止语义：把 readSSE（已弃用死代码）的 SSE_MAX_* 双守卫迁到这里，
+      //    撞限或上游中断时向下游写 data:{"error":...} 终止事件，客户端据此区分
+      //    「正常完篇」与「中途断流」并走重试；旧版 .catch(()=>{}) 静默吞错后
+      //    w.close() 正常关闭，客户端会把无声截断的半篇当作完整答案渲染。
+      timerHandedOff = true;
       const { readable, writable } = new TransformStream();
       const enc = new TextEncoder();
       const writer = writable.getWriter();
@@ -355,12 +369,24 @@ export async function onRequestPost(context) {
         const reader = upstream.body.getReader();
         const dec = new TextDecoder();
         const w = writable.getWriter();
-        let buf = '';
+        let buf = '', outLen = 0, cut = null;
+        // 向客户端写终止/错误事件（客户端 readStreamSSE 据此 throw 触发重试）
+        const writeErr = async function (code, msg) {
+          try {
+            await w.write(enc.encode('data: ' + JSON.stringify({ error: code, message: msg }) + '\n\n'));
+          } catch (e) { /* 客户端已断开则忽略 */ }
+        };
         try {
           while (true) {
             const r = await reader.read();
             if (r.done) break;
             buf += dec.decode(r.value, { stream: true });
+            // 守卫①：上游持续发送不含换行的数据，行缓冲永不切分。撞上即判定为异常流并断开。
+            if (buf.length > SSE_MAX_LINE) {
+              cut = 'LINE_OVERFLOW';
+              await writeErr(cut, '上游单行数据异常，已中断');
+              break;
+            }
             let idx;
             while ((idx = buf.indexOf('\n')) >= 0) {
               const line = buf.slice(0, idx).trim();
@@ -382,17 +408,35 @@ export async function onRequestPost(context) {
                 }
               } catch (e) { /* 忽略无法解析的分片 */ }
               if (chunk) {
+                outLen += chunk.length;
+                // 守卫②：正文总长上限，防上游不限流数据打爆 isolate 内存
+                if (outLen > SSE_MAX_REPLY) {
+                  cut = 'REPLY_OVERFLOW';
+                  await writeErr(cut, '上游返回过长，已截断');
+                  break;
+                }
                 await w.write(enc.encode('data: ' + JSON.stringify({ t: chunk }) + '\n\n'));
               }
             }
+            if (cut) break;
           }
+        } catch (e) {
+          // 上游断连 / abort（含超时）：告知客户端这是中断而非完篇
+          await writeErr(timedOut ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_STREAM_ERROR',
+            timedOut ? '上游响应超时' : ('上游连接中断：' + (e && e.message ? e.message : '未知原因')));
         } finally {
+          if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+          clearTimeout(timer);
           try { reader.cancel(); } catch (e) { /* 上游已断开则忽略 */ }
           try { w.close(); } catch (e) { /* 已关闭则忽略 */ }
         }
       }
 
-      pipeMergedSSE(r.stream).catch(function () { /* 错误已在 finally 中关闭 writer */ });
+      // 周期心跳：每 15s 写一次注释行。SSE 注释行以 : 开头，客户端解析器跳过。
+      heartbeat = setInterval(function () {
+        writer.write(enc.encode(': ping\n\n')).catch(function () { /* 客户端断开则停 */ });
+      }, 15000);
+      pipeMergedSSE(r.stream).catch(function () { /* 错误已在 pipeMergedSSE 内处理并写终止事件 */ });
       return new Response(readable, {
         headers: {
           'Content-Type': 'text/event-stream; charset=utf-8',
@@ -411,7 +455,10 @@ export async function onRequestPost(context) {
     }
     return json({ error: 'NET_ERROR', message: '无法连接大模型服务：' + e.message }, 502);
   } finally {
-    clearTimeout(timer);
+    // 流式路径的计时器已托管给 pipeMergedSSE（其 finally 负责 clearTimeout），
+    // 此处跳过；否则 return Response 时会提前注销超时保护。
+    if (!timerHandedOff) clearTimeout(timer);
+    if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
   }
 }
 

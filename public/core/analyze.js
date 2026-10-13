@@ -481,7 +481,10 @@
     });
     pan.lines.forEach(function (l) {
       if (!l.moving || !l.bian) return;
-      src.push({ zhiIdx: l.bian.zhiIdx, from: '变爻' + l.bian.lq + l.bian.zhi, owner: 'b' + l.pos });
+      // bian 对象（paipan.js）只有 { gan, zhi, wx, lq }，没有 zhiIdx——
+      // 旧版直接读 l.bian.zhiIdx 得 undefined，而下方按 x.zhiIdx === z（0–11 整数）
+      // 匹配，变爻地支永远命中不了，三合局退化成「只可能由本卦动爻凑成」。
+      src.push({ zhiIdx: ZHI.indexOf(l.bian.zhi), from: '变爻' + l.bian.lq + l.bian.zhi, owner: 'b' + l.pos });
     });
     if (src.length < 3) return js;
     // 用神：仅供吉凶映射。取不到（或调用方未传 target）则只陈述成局事实，不下助伤之断。
