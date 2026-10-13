@@ -221,8 +221,13 @@ export async function onRequestPost(context) {
     const headers = { 'Authorization': 'Bearer ' + cfg.key, 'Content-Type': 'application/json' };
     // CF AI Gateway 默认超时可能短于函数侧（实测 DeepSeek 约 91s 触发 504），
     // 显式声明与函数侧一致，避免网关先超时丢包。
+    // 同时覆盖默认 3 次指数重试：DeepSeek 本身慢且大概率能成，网关重试会拖死 Worker；
+    // Gemini/GPT 等快模型保留轻量重试，constant 1s 延迟足够覆盖偶发 503/429。
     if (cfg.base.indexOf('gateway.ai.cloudflare.com') !== -1) {
       headers['cf-aig-request-timeout'] = String(timeoutMs);
+      headers['cf-aig-max-attempts'] = provider === 'deepseek' ? '1' : '2';
+      headers['cf-aig-retry-delay'] = '1000';
+      headers['cf-aig-backoff'] = 'constant';
     }
     return {
       url: cfg.base + '/chat/completions',
