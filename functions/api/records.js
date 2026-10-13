@@ -73,6 +73,16 @@ export function jsonWithin(value, maxLen) {
   catch (e) { return 'null'; }
   if (raw && raw.length <= maxLen) return raw;
 
+  // 顶层字符串超限：旧版会依次跳过数组分支、对象分支，落到函数末尾
+  // return JSON.stringify(null)——内容被静默替换为 null 而非截断保留。
+  // shrinkStrings 本身有字符串截断能力，但顶层字符串走不到那个分支。
+  if (typeof value === 'string') {
+    // 留足引号与转义余量：先截到 maxLen-8 再 stringify，仍超限则再收紧一档
+    let s = JSON.stringify(value.slice(0, Math.max(0, maxLen - 8)) + '…');
+    if (s.length > maxLen) s = JSON.stringify(value.slice(0, Math.max(0, maxLen - 16)));
+    return s.length <= maxLen ? s : JSON.stringify(value.slice(0, Math.max(0, maxLen - 24)));
+  }
+
   if (Array.isArray(value)) {
     // 二分：保留尽量多的前段元素（卦例的 tosses / 对话历史都以开头为要）
     let lo = 0, hi = value.length;
@@ -92,7 +102,12 @@ export function jsonWithin(value, maxLen) {
   if (value && typeof value === 'object') {
     const keys = Object.keys(value);
     const perKey = Math.max(128, Math.floor((maxLen - 64) / Math.max(1, keys.length)));
-    const out = {};
+    // 必须用无原型对象承载：普通对象字面量的 out[k]=v 对键名 __proto__
+    // 会触发原型 setter（赋对象值时变成改 out 的原型，赋原始值时被静默忽略），
+    // 该键既不成为自有属性也不参与长度核算；且下方 `k in out` 因原型链恒为 true，
+    // _truncated 标记也不会打——含 __proto__ 键的消息存入 D1 时该键无声消失。
+    const out = Object.create(null);
+    const has = function (k) { return Object.prototype.hasOwnProperty.call(out, k); };
     let shrunk = false;
     keys.forEach(function (k) {
       let v = value[k];
@@ -102,11 +117,11 @@ export function jsonWithin(value, maxLen) {
         v = shrinkStrings(v, perKey);
         shrunk = true;
       }
-      const probe = Object.assign({}, out); probe[k] = v;
+      const probe = Object.assign(Object.create(null), out); probe[k] = v;
       if (JSON.stringify(probe).length > maxLen) { shrunk = true; return; } // 放不下则丢弃整键
       out[k] = v;
     });
-    if (shrunk || keys.some(function (k) { return !(k in out); })) out._truncated = true;
+    if (shrunk || keys.some(function (k) { return !has(k); })) out._truncated = true;
     let s = JSON.stringify(out);
     while (s.length > maxLen) {                        // 极端兜底：逐键精简直至合法且不超限
       const ks = Object.keys(out).filter(function (k) { return k !== '_truncated'; });
@@ -209,6 +224,12 @@ export async function onRequestPost(context) {
 
   let b;
   try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+  // JSON 文本 null 是合法 JSON，await request.json() 返回 null 而不抛错，
+  // 下一行 b.panText 会解引用 null 抛未捕获 TypeError → 通用 500。
+  // 同文件 handleOutcome 已有 `b && typeof b.id` 守卫，此处补齐主路径。
+  if (!b || typeof b !== 'object' || Array.isArray(b)) {
+    return json({ error: 'BAD_JSON', message: '请求体应为 JSON 对象' }, 400);
+  }
   if (!b.panText) return json({ error: 'NO_PAN', message: '缺少排盘文本' }, 400);
 
   // id 策略：客户端可携带 id（复用/更新场景），但必须通过格式校验（ID_RE 见文件头）；

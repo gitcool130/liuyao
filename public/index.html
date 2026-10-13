@@ -276,8 +276,8 @@
     <h2>占时</h2>
     <div id="timeInfo"></div>
     <div class="date-row">
-      <span class="muted" id="dtLabel">占问时刻（现场摇卦 · 首摇锁定）：</span>
-      <input type="datetime-local" id="dtInput">
+      <label class="muted" for="dtInput" id="dtLabel">占问时刻（现场摇卦 · 首摇锁定）：</label>
+      <input type="datetime-local" id="dtInput" aria-label="占问时刻">
       <button class="btn ghost" id="btnTimeMode" title="现场摇卦：首摇瞬间锁定时刻，不可改；补录模式：为既往时刻补卦，时间可改">切换补录模式</button>
     </div>
   </section>
@@ -297,9 +297,9 @@
         </div>
         <div class="btn-row" style="justify-content:flex-start;align-items:center;margin-top:14px">
           <span class="muted">或按卦名起卦（复现古籍卦例／已有之卦）：</span>
-          <input id="guaNameInput" list="guaList" placeholder="卦名，如水雷屯" class="use-select" style="margin-bottom:0;width:150px" maxlength="8">
+          <input id="guaNameInput" list="guaList" placeholder="卦名，如水雷屯" aria-label="卦名" class="use-select" style="margin-bottom:0;width:150px" maxlength="8">
           <datalist id="guaList"></datalist>
-          <input id="guaDongInput" placeholder="动爻，如 3 或 3,4（留空＝静卦）" class="use-select" style="margin-bottom:0;width:190px" maxlength="12">
+          <input id="guaDongInput" placeholder="动爻，如 3 或 3,4（留空＝静卦）" aria-label="动爻" class="use-select" style="margin-bottom:0;width:190px" maxlength="12">
           <button class="btn ghost" id="btnByName">按卦名排</button>
         </div>
         <div class="muted" id="byNameHint" style="margin-top:6px;line-height:1.6"></div>
@@ -355,7 +355,7 @@
     <div id="chatBox" hidden>
       <div class="muted" style="margin-top:16px">进阶探讨（各模型上下文独立保留，可连续追问）</div>
       <div class="chat-row">
-        <input id="chatInput" placeholder="如：此卦应期在何时？为何取伏神为用？">
+        <input id="chatInput" placeholder="如：此卦应期在何时？为何取伏神为用？" aria-label="追问内容">
         <button class="btn primary" id="btnChat">发送</button>
       </div>
     </div>

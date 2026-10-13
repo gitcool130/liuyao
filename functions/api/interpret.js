@@ -158,6 +158,12 @@ export async function onRequestPost(context) {
 
   let body;
   try { body = await request.json(); } catch (e) { return json({ error: 'BAD_JSON', message: '请求体解析失败' }, 400); }
+  // JSON 文本 null 是合法 JSON，await request.json() 返回 null 而不抛错，
+  // 下一行 body.panText 会解引用 null 抛未捕获 TypeError → 无 error code 的通用 500，
+  // 前端 isRetriableError 也无法归类。
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return json({ error: 'BAD_JSON', message: '请求体应为 JSON 对象' }, 400);
+  }
 
   const panText = (body.panText || '').toString().slice(0, LIMITS.panText);
   if (!panText) return json({ error: 'NO_PAN', message: '缺少排盘文本' }, 400);
@@ -192,6 +198,23 @@ export async function onRequestPost(context) {
     }
   });
 
+  // CF AI Gateway 请求头：网关默认超时（实测 DeepSeek 约 91s）短于函数侧，
+  // 显式声明与函数侧一致，避免网关先超时丢包。
+  // 同时覆盖默认 3 次指数重试：DeepSeek 本身慢且大概率能成，网关重试会拖死 Worker；
+  // Gemini/GPT 等快模型保留轻量重试，constant 1s 延迟足够覆盖偶发 503/429。
+  // 注意：必须对**所有**走网关的分支生效——旧版只加在 OpenAI 兼容分支，
+  // 而 GEMINI_BASE_URL 指向 gateway 的 google-ai-studio 路径时（README 记载的
+  // 生产通道）不带头，函数侧等 300s、网关 ~91s 先 504，与注释意图相悖。
+  function gatewayHeaders(base) {
+    const h = {};
+    if (base.indexOf('gateway.ai.cloudflare.com') === -1) return h;
+    h['cf-aig-request-timeout'] = String(timeoutMs);
+    h['cf-aig-max-attempts'] = provider === 'deepseek' ? '1' : '2';
+    h['cf-aig-retry-delay'] = '1000';
+    h['cf-aig-backoff'] = 'constant';
+    return h;
+  }
+
   // 按模型组装一次上游调用（Google 原生 generateContent；其余 OpenAI 兼容流式）。
   // 抽成函数是为了「跨模型降级」：备选模型要用同一套参数构造规则再发一次。
   function buildCall(modelId) {
@@ -201,7 +224,10 @@ export async function onRequestPost(context) {
       });
       return {
         url: cfg.base + '/models/' + encodeURIComponent(modelId) + ':generateContent',
-        headers: { 'x-goog-api-key': cfg.key, 'Content-Type': 'application/json' },
+        headers: Object.assign(
+          { 'x-goog-api-key': cfg.key, 'Content-Type': 'application/json' },
+          gatewayHeaders(cfg.base)
+        ),
         payload: {
           systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
           contents: contents,
@@ -218,17 +244,10 @@ export async function onRequestPost(context) {
     } else {
       payload.temperature = 0.3;
     }
-    const headers = { 'Authorization': 'Bearer ' + cfg.key, 'Content-Type': 'application/json' };
-    // CF AI Gateway 默认超时可能短于函数侧（实测 DeepSeek 约 91s 触发 504），
-    // 显式声明与函数侧一致，避免网关先超时丢包。
-    // 同时覆盖默认 3 次指数重试：DeepSeek 本身慢且大概率能成，网关重试会拖死 Worker；
-    // Gemini/GPT 等快模型保留轻量重试，constant 1s 延迟足够覆盖偶发 503/429。
-    if (cfg.base.indexOf('gateway.ai.cloudflare.com') !== -1) {
-      headers['cf-aig-request-timeout'] = String(timeoutMs);
-      headers['cf-aig-max-attempts'] = provider === 'deepseek' ? '1' : '2';
-      headers['cf-aig-retry-delay'] = '1000';
-      headers['cf-aig-backoff'] = 'constant';
-    }
+    const headers = Object.assign(
+      { 'Authorization': 'Bearer ' + cfg.key, 'Content-Type': 'application/json' },
+      gatewayHeaders(cfg.base)
+    );
     return {
       url: cfg.base + '/chat/completions',
       headers: headers,
@@ -236,9 +255,10 @@ export async function onRequestPost(context) {
     };
   }
 
-  // 流式 SSE 读取：拼接 delta.content（跳过 reasoning 思考链片段），突破网关整响应超时。
-  // 返回 { text, cut }：cut 为 null 表示正常读完，否则是触发守卫的原因（见 SSE_MAX_*）。
-  // 注意 buf.slice(0, idx) 只是「消费已处理部分」，不是长度上限——上限判断见两处守卫注释。
+  // 【死代码，保留备查】流式透传上线后已无调用点（2026-10-13 审计确认）。
+  // SSE_MAX_* 双守卫已迁入活路径 pipeMergedSSE；此函数仅留作「非流式降级」
+  // 的参考实现，若中转站忽略 stream 参数回 JSON 需重新启用，勿直接删除——
+  // 其中的守卫语义（LINE_OVERFLOW / REPLY_OVERFLOW）是活路径的对齐基准。
   async function readSSE(resp) {
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
@@ -344,8 +364,16 @@ export async function onRequestPost(context) {
       }
     }
     if (r.fail) {
-      if (r.fail.status === 0) return json({ error: 'NET_ERROR', message: '无法连接大模型服务：' + r.fail.detail }, 502);
-      return json({ error: 'LLM_ERROR', message: '大模型接口返回 ' + r.fail.status, detail: r.fail.detail }, 502);
+      // 上游原始错误体只进服务端日志，不回传客户端：本端点未配 ACCESS_CODE /
+      // RATE_LIMIT_PER_MIN 时完全开放，而自配中转站的错误响应可能回显请求头或
+      // key（部分中转确有此类行为），直接透出会造成 *_API_KEY 泄露。
+      // 前端只需 data.error 即可完成重试分类，detail 对它没有价值。
+      if (r.fail.status === 0) {
+        console.error('[liuyao] 上游连接失败:', r.fail.detail);
+        return json({ error: 'NET_ERROR', message: '无法连接大模型服务，请稍后重试' }, 502);
+      }
+      console.error('[liuyao] 上游返回 ' + r.fail.status + ':', r.fail.detail);
+      return json({ error: 'LLM_ERROR', message: '大模型接口返回 ' + r.fail.status + '，请稍后重试' }, 502);
     }
     if (r.stream) {
       // 透传 SSE 流到客户端。三个关键点：

@@ -68,28 +68,38 @@ export function gptModelList(env) {
   return all.filter(function (m) { return isSafeModelId(m) && !isBannedModelId(m); });
 }
 
+// 内置供应商 id：自定义条目不得占用。
+// 否则 modelWhitelist 的 wl[p.id] = p.models 会整体覆盖内置白名单，
+// 而 providerConfig 仍取内置的 <ID>_API_KEY / <ID>_BASE_URL——
+// 模型清单与上游配置错配，请求必然 404/401，且后台无任何提示。
+const RESERVED_PROVIDER_IDS = { gemini: 1, deepseek: 1, gpt: 1 };
+
 // 自定义供应商：CUSTOM_PROVIDERS（JSON 数组）
 //   { "id": "kimi", "label": "Moonshot", "base": "https://api.moonshot.cn/v1", "models": ["kimi-k2"] }
-// id 需为小写字母数字；对应密钥环境变量为 <ID大写>_API_KEY
+// id 需为小写字母数字且非内置 id；对应密钥环境变量为 <ID大写>_API_KEY
 // 解析失败/条目非法不再静默吞掉：console.warn 告警，并可由 customProviderWarnings 取回原因
-export function customProviders(env) {
+export function customProvidersWithWarnings(env) {
   const warns = [];
-  if (!env.CUSTOM_PROVIDERS) return [];
+  if (!env.CUSTOM_PROVIDERS) return { providers: [], warnings: warns };
   let arr;
   try {
     arr = JSON.parse(env.CUSTOM_PROVIDERS);
   } catch (e) {
     console.warn('[liuyao] CUSTOM_PROVIDERS 不是合法 JSON，已忽略:', e.message);
-    return [];
+    return { providers: [], warnings: ['CUSTOM_PROVIDERS 不是合法 JSON：' + e.message] };
   }
   if (!Array.isArray(arr)) {
     console.warn('[liuyao] CUSTOM_PROVIDERS 应为 JSON 数组，实际为 ' + typeof arr + '，已忽略');
-    return [];
+    return { providers: [], warnings: ['CUSTOM_PROVIDERS 应为 JSON 数组，实际为 ' + typeof arr] };
   }
   const out = [];
   arr.forEach(function (p, i) {
     if (!p || typeof p.id !== 'string' || !/^[a-z][a-z0-9]*$/.test(p.id)) {
       warns.push('第 ' + (i + 1) + ' 项 id 非法（应为小写字母数字）');
+      return;
+    }
+    if (RESERVED_PROVIDER_IDS[p.id]) {
+      warns.push(p.id + ' 是内置供应商 id，自定义条目不得占用，已忽略该条');
       return;
     }
     if (!Array.isArray(p.models) || !p.models.length) {
@@ -113,19 +123,19 @@ export function customProviders(env) {
     out.push(entry);
   });
   if (warns.length) console.warn('[liuyao] CUSTOM_PROVIDERS 部分条目被忽略：' + warns.join('；'));
-  return out;
+  return { providers: out, warnings: warns };
 }
 
-// 供应商配置告警（供 /api/models 一并向页面回传，用户可见「后台配错了」）
+export function customProviders(env) {
+  return customProvidersWithWarnings(env).providers;
+}
+
+// 供应商配置告警（供 /api/models 一并向页面回传，用户可见「后台配错了」）。
+// 旧版只覆盖 JSON 解析失败/非数组两种，条目级告警（id 非法、占用内置 id、
+// 缺 models、模型名含非法字符、label 非法）只走 console.warn，页面无感知——
+// 后台把 id 写成大写时，用户只看到供应商凭空消失而看不到原因。
 export function customProviderWarnings(env) {
-  if (!env.CUSTOM_PROVIDERS) return [];
-  try {
-    const arr = JSON.parse(env.CUSTOM_PROVIDERS);
-    if (!Array.isArray(arr)) return ['CUSTOM_PROVIDERS 应为 JSON 数组'];
-  } catch (e) {
-    return ['CUSTOM_PROVIDERS 不是合法 JSON：' + e.message];
-  }
-  return [];
+  return customProvidersWithWarnings(env).warnings;
 }
 
 

@@ -382,7 +382,14 @@
     if (timeMode === 'live' && !timeLocked) {
       selectedDate = new Date(); timeLocked = true; lockedDate = selectedDate; renderTime();
     }
+    // 三件套必须重渲染：resetTossState 已把 curCoins 重置为背背背、revealed 置空，
+    // 但 DOM 仍是上一轮状态——爻位堆叠显示旧卦爻值（与排盘表矛盾）、
+    // 铜钱残留上一爻的揭晓样式、提示文字陈旧。旧版只调 computePan()，
+    // 用户看到的是「排盘表新、爻栈旧」的自相矛盾盘面。
     computePan();
+    renderCoins();
+    renderTossHint();
+    renderStack();
     hint.innerHTML = '已按「' + esc(name) + (dong.length ? '，动爻 ' + dong.join('、') : '，静卦') + '」起卦。' +
       (timeMode === 'live'
         ? '<div class="muted" style="margin-top:4px">复现古籍卦例需指定古占之日：点[切换补录模式]再改占问时刻。</div>'
@@ -518,9 +525,13 @@
     if (!pan) return;
     const txt = buildPanText(false);
     const done = function () {
-      const btn = $('#btnCopy'); const old = btn.textContent;
+      const btn = $('#btnCopy'); if (!btn) return;
+      // 原始文案缓存到 dataset：旧版在 done() 里读 btn.textContent，
+      // 连点两次时第二次读到的是第一次刚改成的「已复制 ✓」，
+      // 其还原定时器最终把按钮永久停在「已复制 ✓」，原文案丢失。
+      if (!btn.dataset.label) btn.dataset.label = btn.textContent;
       btn.textContent = '已复制 ✓';
-      setTimeout(function () { btn.textContent = old; }, 1500);
+      setTimeout(function () { btn.textContent = btn.dataset.label; }, 1500);
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(txt).then(done).catch(function () { fallbackCopy(txt); done(); });
@@ -570,7 +581,7 @@
         id: m.id,
         pv: m.pv || '',
         label: modelLabel(m.id),
-        tip: (m.configured === false) ? '后台未配 key' : (MODEL_TIPS[m.id] || '')
+        tip: (m.configured === false) ? '后台未配 key' : (pick(MODEL_TIPS, m.id) || '')
       };
     });
     // 合并而非覆盖：清单异步返回期间用户已点选的模型不得被静默丢弃
@@ -616,6 +627,25 @@
   let aiGen = 0;
   let aiAbort = null;
 
+  // localStorage 写入容错：Safari 隐私模式 / 配额超限时 setItem 会抛
+  // QuotaExceededError。旧版裸调，抛错后 selModels 已变而 renderModelChips()
+  // 不执行——芯片 UI 与内部状态不一致，且持久化写入失败。
+  function lsSet(key, val) {
+    try { localStorage.setItem(key, val); return true; } catch (e) { return false; }
+  }
+  function lsRemove(key) {
+    try { localStorage.removeItem(key); return true; } catch (e) { return false; }
+  }
+
+  // 对象字面量查表防原型链：key 可来自外部数据（卦例库 outcome、服务端 error code、
+  // 模型 id），obj['__proto__'] / obj['toString'] / obj['constructor'] 会因原型属性
+  // 为 truthy 而通过校验，随后把 Object.prototype 或函数源码 esc() 之后渲染进徽章；
+  // noRetry['constructor'] 更会把本可重试的错误误判为不重试。
+  function pick(map, key) {
+    if (typeof key !== 'string') return undefined;
+    return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+  }
+
   function loadSelModels() {
     let saved = [];
     try { saved = JSON.parse(localStorage.getItem('ly_models') || '[]'); } catch (e) {}
@@ -637,9 +667,11 @@
       btn.onclick = function () {
         const id = btn.dataset.m;
         const i = selModels.indexOf(id);
+        const before = selModels.slice();
         if (i >= 0) { if (selModels.length > 1) selModels.splice(i, 1); }
         else selModels.push(id);
-        localStorage.setItem('ly_models', JSON.stringify(selModels));
+        // 持久化失败时回滚选中态，保证芯片 UI 与内部状态一致
+        if (!lsSet('ly_models', JSON.stringify(selModels))) selModels = before;
         renderModelChips();
       };
     });
@@ -794,9 +826,11 @@
   function isRetriableError(res, data, kind) {
     if (kind === 'net' || kind === 'html' || kind === 'empty') return true;
     if (kind !== 'api') return false;
-    // 配置/请求类错误不重试：改环境变量或重排盘才能解决
+    // 配置/请求类错误不重试：改环境变量或重排盘才能解决。
+    // 用 pick 而非 noRetry[data.error]：error 来自服务端响应，
+    // noRetry['constructor'] 会因原型属性 truthy 而把本可重试的错误误判为不重试。
     const noRetry = { BAD_JSON: 1, NO_PAN: 1, BAD_PROVIDER: 1, BAD_MODEL: 1, NO_KEY: 1, ACCESS_REQUIRED: 1 };
-    if (data && data.error && noRetry[data.error]) return false;
+    if (data && data.error && pick(noRetry, data.error)) return false;
     if (data && (data.error === 'LLM_ERROR' || data.error === 'LLM_TIMEOUT' || data.error === 'EMPTY' || data.error === 'RATE_LIMITED')) return true;
     if (res && (res.status === 429 || res.status >= 500)) return true;
     return false;
@@ -893,8 +927,18 @@
         const ct = (res.headers.get('content-type') || '').toLowerCase();
         if (ct.indexOf('text/event-stream') >= 0) {
           // SSE 流式响应：边读边渲染，避免长时间无数据被浏览器/代理断开。
+          // 流式期间**不能**放弃超时守卫：旧版 clearTimeout 后 readStreamSSE 自身
+          // 无任何超时，上游挂起时 reader.read() 可无限期 pending——用户对着
+          // 「推卦中…」干等到服务端 300s 才断开，远超自己声明的 180s 截止策略。
+          // 改为把守卫重设为「距 AI_RETRY_DEADLINE 的剩余量」，与总截止口径一致。
           clearTimeout(timer);
-          const text = await readStreamSSE(res, onStream);
+          const streamTimeout = setTimeout(function () { ctrl.abort(); }, Math.max(1000, remaining));
+          let text;
+          try {
+            text = await readStreamSSE(res, onStream);
+          } finally {
+            clearTimeout(streamTimeout);
+          }
           if (text) return text;
           // 流结束但内容为空，按空响应重试
           details.push('第' + attempt + '次：大模型返回为空');
@@ -1138,7 +1182,9 @@
     }
   }
   $('#btnChat').onclick = sendChat;
-  $('#chatInput').onkeydown = function (e) { if (e.key === 'Enter') sendChat(); };
+  // isComposing：IME 组字确认时 Enter 同样触发 keydown，旧版会把残缺的候选词
+  // 当即发送——问题进入 aiStates[m].history 无法收回，input.value 被清空丢字。
+  $('#chatInput').onkeydown = function (e) { if (e.key === 'Enter' && !e.isComposing) sendChat(); };
 
   function recordPayload() {
     const pil = pan.pillars;
@@ -1230,7 +1276,10 @@
     let o = raw;
     if (typeof raw === 'string') { try { o = JSON.parse(raw); } catch (e) { return null; } }
     if (!o || typeof o !== 'object') return null;
-    if (!OC_RESULT[o.result] && !OC_YINGQI[o.yingqi]) return null;
+    // pick 防原型链：outcome 来自 D1 历史数据，result 为 'toString' / 'constructor'
+    // 时 OC_RESULT[o.result] 会取到原型属性（truthy）而通过校验，
+    // 随后把函数源码 esc() 之后渲染进徽章。
+    if (!pick(OC_RESULT, o.result) && !pick(OC_YINGQI, o.yingqi)) return null;
     return o;
   }
   function outcomeBadge(raw) {
@@ -1238,8 +1287,8 @@
     if (!o) return '';
     const cls = o.result === 'success' ? ' oc-success' : o.result === 'fail' ? ' oc-fail' : o.result === 'partial' ? ' oc-partial' : '';
     const parts = [];
-    if (OC_RESULT[o.result]) parts.push(OC_RESULT[o.result]);
-    if (OC_YINGQI[o.yingqi]) parts.push(OC_YINGQI[o.yingqi]);
+    if (pick(OC_RESULT, o.result)) parts.push(OC_RESULT[o.result]);
+    if (pick(OC_YINGQI, o.yingqi)) parts.push(OC_YINGQI[o.yingqi]);
     return '<span class="oc-badge' + cls + '" title="结果回执">' + esc(parts.join(' · ')) + '</span>';
   }
   // 命中率汇总：只按已回填且判定明确的样本计数；unclear/pending 属「尚无定论」，不进率值分母
@@ -1311,13 +1360,17 @@
     alert(msg);
   }
 
+  // 卦例库详情加载代际：每条列表项点击即发一次请求，旧版无序号/取消，
+  // 先点的慢请求后返回会把旧详情整体覆盖到新详情上（#libDetail 被整块重写）。
+  let castToken = 0;
   async function loadCast(id) {
+    const myToken = ++castToken;
     try {
       const res = await apiFetch('/api/records?id=' + encodeURIComponent(id), {});
       const data = await res.json();
-      if (!res.ok) { libDetailError('读取失败：' + (data.message || '')); return; }
+      if (!res.ok) { if (myToken === castToken) libDetailError('读取失败：' + (data.message || '')); return; }
       const r = data.record;
-      if (!r) { libDetailError('读取失败：卦例不存在'); return; }
+      if (!r) { if (myToken === castToken) libDetailError('读取失败：卦例不存在'); return; }
       let msgs = {}; try { msgs = JSON.parse(r.messages || '{}'); } catch (e) {}
       // 兼容旧格式（单模型数组）
       if (Array.isArray(msgs)) msgs = msgs.length ? { '（旧版记录）': msgs } : {};
@@ -1337,10 +1390,12 @@
       // 天然带时间戳，不需主观标注「准不准」，只记「那天发生了没有」。
       const oc = parseOutcome(r.outcome);
       const ocNow = oc
-        ? [OC_RESULT[oc.result], OC_YINGQI[oc.yingqi]].filter(Boolean).join(' · ') +
+        ? [pick(OC_RESULT, oc.result), pick(OC_YINGQI, oc.yingqi)].filter(Boolean).join(' · ') +
           (oc.note ? '　备注：' + oc.note : '') +
           (oc.updated_at ? '　（记于 ' + String(oc.updated_at).slice(0, 10) + '）' : '')
         : '尚未回填';
+      // 代际校验：在途期间用户已点开另一条，丢弃本次响应，不覆盖新详情
+      if (myToken !== castToken) return;
       $('#libDetail').innerHTML = '<div class="ai-block"><b>' + esc(r.hex) + '</b>　<span class="muted">' +
         esc(r.datetime || '') + '　' + esc(r.pillars || '') + '</span>' +
         '<pre class="pan-text">' + esc(r.pan_text || '') + '</pre>' +
@@ -1374,7 +1429,9 @@
           msg.textContent = outcome === null ? '回执已清除。' : '回执已保存。';
           // 刷新列表徽标与命中率统计（详情区保持不动）
           $('#btnLib').onclick();
-          setTimeout(function () { loadCast(r.id); }, 300); // 重载详情以刷新「当前值」行
+          // 重载详情以刷新「当前值」行。需校验代际：用户在这 300ms 内点开另一条时
+          // castToken 已变，旧卦例详情随后覆盖新打开的会造成错乱。
+          setTimeout(function () { if (castToken === myToken) loadCast(r.id); }, 300);
         } catch (e) {
           msg.textContent = '保存失败：' + e.message;
         } finally { if (btn) btn.disabled = false; }
@@ -1391,6 +1448,7 @@
       $('#libDetail').scrollIntoView({ behavior: 'smooth' });
     } catch (e) {
       // 部署传播期 / 网络抖动 / 后端 500 返回 HTML → res.json() 在此抛出
+      if (myToken !== castToken) return;   // 已切到另一条，不覆盖新详情
       libDetailError('读取失败：' + ((e && e.message) || '接口不可用，请稍后重试'));
     }
   }
@@ -1407,7 +1465,7 @@
   if (_btnByName) _btnByName.onclick = castByName;
   ['#guaNameInput', '#guaDongInput'].forEach(function (sel) {
     const el = $(sel);
-    if (el) el.onkeydown = function (e) { if (e.key === 'Enter') castByName(); };
+    if (el) el.onkeydown = function (e) { if (e.key === 'Enter' && !e.isComposing) castByName(); };
   });
 
   renderModelChips();

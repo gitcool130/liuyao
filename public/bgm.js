@@ -79,14 +79,28 @@
     return buf;
   }
 
+  // 活跃音源登记表：stop() 需要真正停掉它们，否则已排程音符会在 gain 回升后
+  // 「幽灵般」重新变得可闻（见 stop() 注释）。
+  const liveSrcs = new Set();
+
   function pluck(freq, when, dur, gain, bright) {
     const src = ctx.createBufferSource();
     src.buffer = pluckBuffer(freq, dur, bright);
     const g = ctx.createGain();
-    // 轻微起音柔化，避免爆音
+    // 起音柔化（12ms 淡入）避免爆音；**同时补 release 淡出**——
+    // Karplus-Strong 低频音衰减极慢（73/82Hz 的 T60 约 20s+），而缓冲只有
+    // 2.6–4.5s，旧版只做起音包络，末尾以显著振幅戛然而止产生阶跃 discontinuity，
+    // 安静环境下可闻为轻微「嗒」声（实测最低两个音级末尾 50ms RMS 达 6.4–11.4%）。
     g.gain.setValueAtTime(0, when);
     g.gain.linearRampToValueAtTime(gain, when + 0.012);
+    g.gain.setValueAtTime(gain, when + dur - 0.35);
+    g.gain.linearRampToValueAtTime(0, when + dur);
     src.connect(g); g.connect(bus);
+    liveSrcs.add(src);
+    src.onended = function () {
+      liveSrcs.delete(src);
+      try { g.disconnect(); } catch (e) { /* 已断开则忽略 */ }
+    };
     src.start(when);
   }
 
@@ -134,6 +148,16 @@
   function stop() {
     playing = false;
     clearTimeout(timer);
+    // 必须真正停掉已排程的音源：phrase() 一次性把整句音符排到 AudioContext
+    // 绝对时间线（最末音起点 + dur 最长约 13s），旧版只把 master gain 在
+    // 1.5s 内拉低而不调 src.stop()——停止后 13s 内再次播放时 gain 回升，
+    // 上一句已排程音符会按原绝对时间点重新变得可闻，听到上一乐句片段
+    // 「幽灵般」插进来。
+    liveSrcs.forEach(function (src) {
+      try { src.stop(); } catch (e) { /* 已结束则忽略 */ }
+      try { src.disconnect(); } catch (e) { /* 已断开则忽略 */ }
+    });
+    liveSrcs.clear();
     if (ctx) {
       master.gain.cancelScheduledValues(ctx.currentTime);
       master.gain.setValueAtTime(master.gain.value, ctx.currentTime);

@@ -124,7 +124,19 @@ eq('动卦：变卦为天风姤', dongPan.bianName, '天风姤');
 
 // ---------- 六、边界与鲁棒性 ----------
 eq('soulGua 非 6/7 变次返回 null', C.soulGua([1, 1, 1, 1, 1, 1]), null); // 乾为天=本宫
-eq('soulGua 无此卦画返回 null', C.soulGua([0, 1, 0, 1, 0, 1]), C.PALACE['010101'] ? C.soulGua([0, 1, 0, 1, 0, 1]) : null);
+// 旧版这条是**恒真断言**：
+//   eq('soulGua 无此卦画返回 null', C.soulGua([0,1,0,1,0,1]),
+//      C.PALACE['010101'] ? C.soulGua([0,1,0,1,0,1]) : null);
+// PALACE 含全部 64 键，三元恒取真分支，got 与 want 是同一个表达式，
+// 无论 soulGua 返回什么都相等；且 [0,1,0,1,0,1] 本身就是 64 卦之一，
+// 根本测不到「无此卦画」分支——测试名与实测语义脱节。
+// 改为真正不在 PALACE 键空间内的输入（7 位长度、含非 0/1 爻值）。
+eq('soulGua 无此卦画返回 null（7 位）', C.soulGua([0, 1, 0, 1, 0, 1, 0]), null);
+eq('soulGua 无此卦画返回 null（含 2）', C.soulGua([0, 1, 2, 1, 0, 1]), null);
+// 正向对照：确保上面两条不是「函数恒返回 null」造成的假通过
+const _soulKeys = Object.keys(C.PALACE);
+eq('soulGua 对游魂卦返回游魂', C.soulGua(_soulKeys.filter(function (k) { return C.PALACE[k].variant === 6; })[0].split('').map(Number)), '游魂');
+eq('soulGua 对归魂卦返回归魂', C.soulGua(_soulKeys.filter(function (k) { return C.PALACE[k].variant === 7; })[0].split('').map(Number)), '归魂');
 eq('chongGua 对 64 卦均为布尔', ALL64.every(b => typeof C.chongGua(b) === 'boolean'), true);
 eq('heGua 对 64 卦均为布尔', ALL64.every(b => typeof C.heGua(b) === 'boolean'), true);
 
