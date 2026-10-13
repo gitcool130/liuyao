@@ -218,9 +218,15 @@ export async function onRequestPost(context) {
     } else {
       payload.temperature = 0.3;
     }
+    const headers = { 'Authorization': 'Bearer ' + cfg.key, 'Content-Type': 'application/json' };
+    // CF AI Gateway 默认超时可能短于函数侧（实测 DeepSeek 约 91s 触发 504），
+    // 显式声明与函数侧一致，避免网关先超时丢包。
+    if (cfg.base.indexOf('gateway.ai.cloudflare.com') !== -1) {
+      headers['cf-aig-request-timeout'] = String(timeoutMs);
+    }
     return {
       url: cfg.base + '/chat/completions',
-      headers: { 'Authorization': 'Bearer ' + cfg.key, 'Content-Type': 'application/json' },
+      headers: headers,
       payload: payload
     };
   }
@@ -262,9 +268,10 @@ export async function onRequestPost(context) {
 
   // 上游硬超时。fetch 默认无超时，上游挂起（不返回也不断开）会让该请求一直悬置，
   // 流式只绕过了「整响应超时」，并不自带超时保护。计时覆盖「建连 + 读完整流」全程；
-  // 正常断卦约 10–60 s，默认 90 s 留余量（可用 LLM_TIMEOUT_MS 调）。
+  // Gemini 断卦约 10–30 s；DeepSeek（含深推理模型）可超 90 s，默认 300 s 留足余量
+  // （可用 LLM_TIMEOUT_MS 调）。
   // 计时器覆盖主调用与降级重试的总时长，超时任一环节都会被 abort 并落入下方 504 分支。
-  const timeoutMs = Math.max(1000, parseInt(env.LLM_TIMEOUT_MS || '90000', 10) || 90000);
+  const timeoutMs = Math.max(1000, parseInt(env.LLM_TIMEOUT_MS || '300000', 10) || 300000);
   const ctrl = new AbortController();
   let timedOut = false;
   const timer = setTimeout(function () { timedOut = true; ctrl.abort(); }, timeoutMs);
@@ -293,9 +300,10 @@ export async function onRequestPost(context) {
     }
     const ct = (resp.headers.get('content-type') || '').toLowerCase();
     if (!isGoogle && call.payload.stream && ct.indexOf('text/event-stream') !== -1) {
-      // 流式 SSE：拼接完整文本（个别中转站忽略 stream 参数回 JSON 时走下方兜底）
-      const sse = await readSSE(resp);
-      return { reply: sse.text, cut: sse.cut };
+      // 上游返回 SSE 时，直接透传给客户端，避免服务端缓冲导致 CF 边缘 524 超时。
+      // 服务端拼接完整文本的旧路径已弃用：DeepSeek v4-pro 整体响应可超 120s，
+      // CF 边缘约 100s 无数据即断连；透传流式后首字节一到即开始向下发送。
+      return { stream: resp };
     }
     const data = await resp.json();
     if (isGoogle) {
@@ -326,6 +334,67 @@ export async function onRequestPost(context) {
     if (r.fail) {
       if (r.fail.status === 0) return json({ error: 'NET_ERROR', message: '无法连接大模型服务：' + r.fail.detail }, 502);
       return json({ error: 'LLM_ERROR', message: '大模型接口返回 ' + r.fail.status, detail: r.fail.detail }, 502);
+    }
+    if (r.stream) {
+      // 透传 SSE 流到客户端，先注入心跳注释避免 CF 边缘 100s 无数据断连。
+      // 上游 fetch 已绑定 abort signal，总时长仍受 LLM_TIMEOUT_MS 约束。
+      // 解析上游 OpenAI SSE，把 delta.content / reasoning_content 合并为简单 data 行输出，
+      // 客户端无需了解 OpenAI 分片格式。
+      const { readable, writable } = new TransformStream();
+      const enc = new TextEncoder();
+      const writer = writable.getWriter();
+      writer.write(enc.encode(': ping\n\n'));
+      writer.releaseLock();
+
+      async function pipeMergedSSE(upstream) {
+        const reader = upstream.body.getReader();
+        const dec = new TextDecoder();
+        const w = writable.getWriter();
+        let buf = '';
+        try {
+          while (true) {
+            const r = await reader.read();
+            if (r.done) break;
+            buf += dec.decode(r.value, { stream: true });
+            let idx;
+            while ((idx = buf.indexOf('\n')) >= 0) {
+              const line = buf.slice(0, idx).trim();
+              buf = buf.slice(idx + 1);
+              if (!line || line.indexOf(':') === 0) continue;
+              if (line.indexOf('data:') !== 0) continue;
+              const data = line.slice(5).trim();
+              if (!data || data === '[DONE]') continue;
+              let chunk = '';
+              try {
+                const j = JSON.parse(data);
+                const c = j.choices && j.choices[0];
+                const d = c && c.delta;
+                if (d) {
+                  if (d.reasoning_content) chunk += d.reasoning_content;
+                  if (d.content) chunk += d.content;
+                } else if (c && c.message && c.message.content) {
+                  chunk = c.message.content;
+                }
+              } catch (e) { /* 忽略无法解析的分片 */ }
+              if (chunk) {
+                await w.write(enc.encode('data: ' + JSON.stringify({ t: chunk }) + '\n\n'));
+              }
+            }
+          }
+        } finally {
+          try { reader.cancel(); } catch (e) { /* 上游已断开则忽略 */ }
+          try { w.close(); } catch (e) { /* 已关闭则忽略 */ }
+        }
+      }
+
+      pipeMergedSSE(r.stream).catch(function () { /* 错误已在 finally 中关闭 writer */ });
+      return new Response(readable, {
+        headers: {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive'
+        }
+      });
     }
     if (!r.reply) return json({ error: 'EMPTY', message: '大模型返回为空' }, 502);
     // 被守卫截断时仍返回已收到的部分答复，并带上原因（truncated 缺省时不出现在 JSON 里）；

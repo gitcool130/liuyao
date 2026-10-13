@@ -759,12 +759,13 @@
     return out;
   }
 
-  // AI 请求重试/超时策略：25 秒截止、指数退避、按返回类型决定是否重试。
+  // AI 请求重试/超时策略：180 秒截止、指数退避、按返回类型决定是否重试。
+  // Gemini 约 10–30 s；DeepSeek（含深推理模型）可达 90–180 s，需留足时间。
   // 只有过了截止时间仍无结果，才渲染「复制请求内容」降级；期间用户看到的是重试状态。
-  const AI_RETRY_DEADLINE = 25000;
+  const AI_RETRY_DEADLINE = 180000;
   const AI_RETRY_MIN_DELAY = 1200;
   const AI_RETRY_MAX_DELAY = 6000;
-  const AI_RETRY_MIN_TIMEOUT = 8000;
+  const AI_RETRY_MIN_TIMEOUT = 15000;
 
   function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
@@ -779,7 +780,39 @@
     return false;
   }
 
-  async function callInterpret(model, history, onStatus) {
+  // 读取服务端透传的 SSE 流。服务端已把上游 delta.content / reasoning_content
+  // 合并为简单 data: {"t":"..."} 行，客户端只需累加 t 字段。
+  async function readStreamSSE(res, onStream) {
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', full = '';
+    try {
+      while (true) {
+        const r = await reader.read();
+        if (r.done) break;
+        buf += dec.decode(r.value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line || line.indexOf(':') === 0) continue;
+          if (line.indexOf('data:') !== 0) continue;
+          const data = line.slice(5).trim();
+          if (!data || data === '[DONE]') continue;
+          try {
+            const j = JSON.parse(data);
+            if (j && j.t) full += j.t;
+          } catch (e) { /* 忽略无法解析的分片 */ }
+        }
+        if (onStream && full) onStream(full);
+      }
+    } finally {
+      try { reader.cancel(); } catch (e) { /* 上游已断开则忽略 */ }
+    }
+    return full;
+  }
+
+  async function callInterpret(model, history, onStatus, onStream) {
     const start = Date.now();
     const details = [];
     let lastErr = null;
@@ -803,6 +836,21 @@
           body: JSON.stringify({ panText: buildPanText(true), messages: history, model: model }),
           signal: ctrl.signal
         });
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.indexOf('text/event-stream') >= 0) {
+          // SSE 流式响应：边读边渲染，避免长时间无数据被浏览器/代理断开。
+          clearTimeout(timer);
+          const text = await readStreamSSE(res, onStream);
+          if (text) return text;
+          // 流结束但内容为空，按空响应重试
+          details.push('第' + attempt + '次：大模型返回为空');
+          lastErr = { kind: 'empty', message: '大模型返回为空' };
+          const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));
+          if (Date.now() - start + delay >= AI_RETRY_DEADLINE) break;
+          if (onStatus) onStatus('模型返回为空，' + Math.round(delay / 1000) + ' 秒后重试…');
+          await sleep(delay);
+          continue;
+        }
         raw = await res.text();
       } catch (e) {
         netErr = e;
@@ -927,6 +975,9 @@
           const reply = await callInterpret(m, [], function (msg) {
             const el = colBody(m);
             if (el) el.innerHTML = '<div class="loading">' + esc(msg) + '</div>';
+          }, function (text) {
+            const el = colBody(m);
+            if (el) el.innerHTML = '<div class="ai-block">' + mdLite(text) + '</div>';
           });
           aiStates[m] = { history: [{ role: 'assistant', content: reply }] };
           colBody(m).innerHTML = '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply);
@@ -964,6 +1015,8 @@
         try {
           const reply = await callInterpret(m, historySnapshot, function (msg) {
             if (loadEl) loadEl.innerHTML = '<span class="loading">' + esc(msg) + '</span>';
+          }, function (text) {
+            if (loadEl) loadEl.innerHTML = mdLite(text);
           });
           aiStates[m].history.push({ role: 'assistant', content: reply });
           if (loadEl) loadEl.innerHTML = mdLite(reply) + auditHTML(reply);
