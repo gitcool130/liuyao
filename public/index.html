@@ -195,6 +195,16 @@
   /* 多模型对比分栏 */
   .ai-cols { display: flex; gap: 14px; flex-wrap: wrap; align-items: stretch; }
   .ai-col { flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: 8px; }
+  .ai-col-body {
+    flex: 1;
+    min-height: 360px;
+    max-height: 360px;
+    overflow-y: auto;
+    background: #fffdf8;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
   .ai-col-head {
     font-size: 14px; font-weight: 600; letter-spacing: 1px;
     padding: 6px 12px; border-radius: 6px; background: #f3ece0;
@@ -248,6 +258,8 @@
     .cast-grid { flex-direction: column; }
     table.pan { font-size: 13px; }
     .yao-sym { font-size: 13px; }
+    /* 移动端分栏纵向堆叠，360px 过高，压低滚动区 */
+    .ai-col-body { min-height: 280px; max-height: 280px; }
   }
 </style>
 </head>

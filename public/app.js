@@ -694,6 +694,13 @@
       .replace(/^#{1,6}\s*(.+)$/gm, '<b>$1</b>')
       .replace(/\n/g, '<br>');
   }
+  function scrollBody(el) {
+    if (!el) return;
+    // 只在用户没有主动向上滚动时自动跟到底部；
+    // 若用户已向上翻看历史内容，不强行拉回。
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }
 
   // 与服务端 interpret.js 的 SYSTEM_PROMPT 保持一致（用于失败时手动断卦的提示词）
   const SYSTEM_PROMPT = [
@@ -785,7 +792,7 @@
   async function readStreamSSE(res, onStream) {
     const reader = res.body.getReader();
     const dec = new TextDecoder();
-    let buf = '', full = '';
+    let buf = '', full = '', emitted = '';
     try {
       while (true) {
         const r = await reader.read();
@@ -804,7 +811,12 @@
             if (j && j.t) full += j.t;
           } catch (e) { /* 忽略无法解析的分片 */ }
         }
-        if (onStream && full) onStream(full);
+        // 仅在内容有增长时回调：SSE 心跳/注释行也会触发 read() 返回，
+        // 无条件回调会让长文本每秒重建多次 innerHTML，导致闪烁与选中丢失。
+        if (onStream && full && full !== emitted) {
+          emitted = full;
+          onStream(full);
+        }
       }
     } finally {
       try { reader.cancel(); } catch (e) { /* 上游已断开则忽略 */ }
@@ -968,7 +980,8 @@
       aiStates = {};
       renderCols();
       selModels.forEach(function (m) {
-        colBody(m).innerHTML = '<div class="loading">推卦中…</div>';
+        const el = colBody(m);
+        if (el) el.innerHTML = '<div class="loading">推卦中…</div>';
       });
       await Promise.all(selModels.map(async function (m) {
         try {
@@ -977,12 +990,20 @@
             if (el) el.innerHTML = '<div class="loading">' + esc(msg) + '</div>';
           }, function (text) {
             const el = colBody(m);
-            if (el) el.innerHTML = '<div class="ai-block">' + mdLite(text) + '</div>';
+            if (el) {
+              el.innerHTML = '<div class="ai-block">' + mdLite(text) + '</div>';
+              scrollBody(el);
+            }
           });
           aiStates[m] = { history: [{ role: 'assistant', content: reply }] };
-          colBody(m).innerHTML = '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply);
+          const bodyEl = colBody(m);
+          if (bodyEl) {
+            bodyEl.innerHTML = '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply);
+            scrollBody(bodyEl);
+          }
         } catch (e) {
-          renderFailBox(colBody(m), m, [], e);
+          const el = colBody(m);
+          if (el) renderFailBox(el, m, [], e);
         }
       }));
       $('#chatBox').hidden = !Object.keys(aiStates).length;
@@ -993,6 +1014,10 @@
   };
 
   let chatBusy = false;
+  // 追问消息块 id 唯一序号：旧版每次追问都用同一个 chatload-<hash>，
+  // 而完成时只改 innerHTML 不移除 id，第二次起 getElementById 只会命中第一个，
+  // 后续追问全部渲染到第一轮的消息块里。加序号保证每轮独立。
+  let chatSeq = 0;
   async function sendChat() {
     const input = $('#chatInput');
     const q = input.value.trim();
@@ -1003,13 +1028,21 @@
     // 末行 chatBusy=false 不会执行，此后所有追问都会被 chatBusy 永久静默拦截。
     try {
       const active = Object.keys(aiStates);
+      // 每轮追问为每个模型分配独立 id，避免旧版共用一个 id 时
+      // getElementById 只命中第一个消息块（后续追问全部串到第一轮）。
+      const chatIds = {};
       active.forEach(function (m) {
         aiStates[m].history.push({ role: 'user', content: q });
-        colBody(m).insertAdjacentHTML('beforeend',
-          '<div class="msg user"><b>问：</b>' + mdLite(q) + '</div><div class="msg ai" id="chatload-' + midSafe(m) + '"><span class="loading">推敲中…</span></div>');
+        const el = colBody(m);
+        if (!el) return;
+        const chatId = 'chatload-' + midSafe(m) + '-' + (++chatSeq);
+        chatIds[m] = chatId;
+        el.insertAdjacentHTML('beforeend',
+          '<div class="msg user"><b>问：</b>' + mdLite(q) + '</div><div class="msg ai" id="' + chatId + '"><span class="loading">推敲中…</span></div>');
+        scrollBody(el);
       });
       await Promise.all(active.map(async function (m) {
-        const loadEl = document.getElementById('chatload-' + midSafe(m));
+        const loadEl = document.getElementById(chatIds[m]);
         // 本次追问已入栈，须整段送出：旧版 slice(0,-1) 把刚入栈的问题切掉，大模型收不到追问
         const historySnapshot = aiStates[m].history.slice();
         try {
@@ -1017,9 +1050,11 @@
             if (loadEl) loadEl.innerHTML = '<span class="loading">' + esc(msg) + '</span>';
           }, function (text) {
             if (loadEl) loadEl.innerHTML = mdLite(text);
+            scrollBody(colBody(m));
           });
           aiStates[m].history.push({ role: 'assistant', content: reply });
           if (loadEl) loadEl.innerHTML = mdLite(reply) + auditHTML(reply);
+          scrollBody(colBody(m));
         } catch (e) {
           if (loadEl) {
             const box = document.createElement('div');
