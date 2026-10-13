@@ -9,12 +9,13 @@
  *   #16 读路径口令收口（与写同源）+ DELETE 的 ID_RE 校验（第二十轮）
  *   #19 结果回执（M16）：sanitizeOutcome 白名单三态、回填端点三关拦截、主 POST 不触碰 outcome 列
  *   #20 gemini 跨模型降级：可恢复失败（429/5xx/网络错误）自动落同族备选，4xx 不降级（2026-10-12）
+ *   #21 SSE 透传剥离 reasoning_content：思考草稿不得下传，防 fact-audit 假阳性（2026-10-13）
  * 运行：npm run test:fn
  * ============================================================ */
 import { jsonWithin, safeEqual, onRequestGet, onRequestDelete, onRequestPost, sanitizeOutcome } from './functions/api/records.js';
 import { customProviders, gptModelList, isSafeModelId } from './functions/api/_lib.js';
 import { onRequestGet as modelsGet } from './functions/api/models.js';
-import { onRequestPost as interpretPost, isRateLimited, __rlState, SYSTEM_PROMPT } from './functions/api/interpret.js';
+import { onRequestPost as interpretPost, isRateLimited, __rlState, SYSTEM_PROMPT, deltaText, deltaReasoning } from './functions/api/interpret.js';
 import { readFileSync } from 'node:fs';
 
 let pass = 0, fail = 0;
@@ -254,32 +255,57 @@ eq('上游挂起 → 504', rTimeout.status, 504);
 eq('上游挂起 → 错误码 LLM_TIMEOUT', jTimeout.error, 'LLM_TIMEOUT');
 eq('超时文案含秒数、不暴露堆栈', /秒内未返回完整响应/.test(jTimeout.message), true);
 
+// 读取 SSE 响应体：跳过 : 注释行（心跳/ping），收集 data: 行的 JSON 事件。
+// 流式语义下 interpret 的响应恒为 200 text/event-stream，断流/截断信息以
+// 流内 data:{"error":...} 传达（客户端 readStreamSSE 据此 throw 走重试），
+// 不再有旧版「非流式缓冲后返回 JSON」的 502/EMPTY/truncated 形态。
+const readSSEEvents = async function (resp) {
+  const txt = await resp.text();
+  const events = [];
+  txt.split('\n').forEach(function (l) {
+    l = l.trim();
+    if (l.indexOf('data:') === 0) {
+      try { events.push(JSON.parse(l.slice(5).trim())); } catch (e) { /* 忽略 */ }
+    }
+  });
+  return events;
+};
+// 流内正文事件（t 字段）拼接为完整答复
+const sseText = function (events) {
+  return events.filter(function (e) { return typeof e.t === 'string'; })
+    .map(function (e) { return e.t; }).join('');
+};
+
 // B4 守卫①：上游持续发送不含 \n 的数据 → 行缓冲永不切分，撞上限即断开。
 // 构造要点：把一段 data: 行「掐掉换行」后接 1.2 MB 无换行垃圾，再接一条正常 data: 行。
-//   有守卫 → 在 1.2 MB 处断开，一条正文都没积出 → EMPTY
-//   无守卫 → 垃圾与首行被并成一行而丢弃，但它会继续处理到后面那条正常行 → reply='乙'
-// 两种结果不同，断言才有判别力（若只用「纯垃圾流」，有无守卫都会得到 EMPTY，等于没测）。
+//   有守卫 → 在 1.2 MB 处断开，一条正文都没积出
+//   无守卫 → 垃圾与首行被并成一行而丢弃，但它会继续处理到后面那条正常行 → 正文='乙'
+// 两种结果不同，断言才有判别力（若只用「纯垃圾流」，有无守卫都不积正文，等于没测）。
 fetchMode = 'sse';
 fetchChunks = [sseLine('佳').replace(/\n$/, '') + 'x'.repeat(1200000) + '\n' + sseLine('乙') + 'data: [DONE]\n'];
 const rLine = await post(ENV_GPT);
-eq('无换行的超长流被守卫断开（未积出正文 → EMPTY）', rLine.status, 502);
-eq('无换行的超长流 → 错误码 EMPTY', (await rLine.json()).error, 'EMPTY');
+const evLine = await readSSEEvents(rLine);
+eq('无换行的超长流被守卫断开（仍 200，断流走流内事件）', rLine.status, 200);
+eq('无换行的超长流 → 流内错误码 LINE_OVERFLOW', evLine.some(function (e) { return e.error === 'LINE_OVERFLOW'; }), true);
+eq('无换行的超长流 → 未积出任何正文（无 t 事件）', sseText(evLine), '');
 
-// B4 守卫②：上游发送超量 data: 行 → 累计正文封顶后断开，保留已收部分
+// B4 守卫②：上游发送超量 data: 行 → 累计正文封顶后断开，保留已收部分。
+// 封顶语义：按「先累计后写」逐行收口——第 67 行累计到 201000 > 200000 即断，
+// 该行不写出，故实收 66 行 × 3000 = 198000 字符（封顶是天花板，不是凑整目标）。
 fetchChunks = [sseLine('甲'.repeat(3000)).repeat(100)];  // 正文 30 万字符 > SSE_MAX_REPLY(20 万)
 const rFlood = await post(ENV_GPT);
-const jFlood = await rFlood.json();
+const evFlood = await readSSEEvents(rFlood);
 eq('超量流式正文 → 仍 200（保留已收部分，不整条丢弃）', rFlood.status, 200);
-eq('超量流式正文 → 标记 REPLY_OVERFLOW', jFlood.truncated, 'REPLY_OVERFLOW');
-eq('正文长度被封顶在 200000', jFlood.reply.length, 200000);
+eq('超量流式正文 → 流内标记 REPLY_OVERFLOW', evFlood.some(function (e) { return e.error === 'REPLY_OVERFLOW'; }), true);
+eq('正文长度被封顶在 200000 内', sseText(evFlood).length <= 200000, true);
+eq('正文长度实收 66 行（198000）', sseText(evFlood).length, 198000);
 
-// 反向：正常长度的流不受守卫影响，且不引入 truncated 字段（不污染正常响应）
+// 反向：正常长度的流不受守卫影响，无 error 事件（不污染正常响应）
 fetchChunks = [sseLine('吉'), sseLine('凶'), 'data: [DONE]\n'];
 const rOk = await post(ENV_GPT);
-const jOk = await rOk.json();
-eq('正常流式仍原样拼接', jOk.reply, '吉凶');
-eq('正常流不带 truncated 字段', 'truncated' in jOk, false);
-eq('正常流带 provider/model', [jOk.provider, jOk.model], ['gpt', 'gpt-6-luna']);
+const evOk = await readSSEEvents(rOk);
+eq('正常流式仍原样拼接', sseText(evOk), '吉凶');
+eq('正常流无 error 事件', evOk.some(function (e) { return e.error; }), false);
 
 // ---------- #18 限流滑动窗口：单 IP 计数必须有界（第二十一轮 C5） ----------
 // 旧版每次请求都 hits.push()，数组随请求数无界增长；且 RL_HITS.size 超限时 clear()
@@ -352,13 +378,16 @@ eq('4xx 不降级（仅一次调用）', gemCalls.length, 1);
 eq('4xx 原样 502 透出', r400.status, 502);
 eq('4xx 错误码 LLM_ERROR', (await r400.json()).error, 'LLM_ERROR');
 
-// 主备皆 503 → 保留**首次**错误返回（更贴近用户所选模型的真实状态）
-gemQueue = [new Response('主模型503', { status: 503 }), new Response('备选503', { status: 503 })];
+// 主备皆挂 → 保留**首次**错误返回（更贴近用户所选模型的真实状态）。
+// 注：上游原始错误体只进服务端日志、不回传客户端（防中转站经错误体回显 key），
+// 故用「主 503 / 备 429」让两次失败可区分：message 必须报首次的 503。
+gemQueue = [new Response('主模型503', { status: 503 }), new Response('备选429', { status: 429 })];
 gemCalls.length = 0;
 const rBoth = await postGem('gemini-3.8-flash');
 const jBoth = await rBoth.json();
 eq('主备皆挂 → 尝试两次后 502', [rBoth.status, gemCalls.length], [502, 2]);
-eq('主备皆挂 → detail 保留首次错误', jBoth.detail, '主模型503');
+eq('主备皆挂 → message 保留首次错误（503 而非备选 429）', jBoth.message, '大模型接口返回 503，请稍后重试');
+eq('主备皆挂 → 不回传上游错误体（detail 不在响应里）', 'detail' in jBoth, false);
 
 // 非 gemini 供应商不做跨模型降级（无同族备选语义，防误伤 gpt/deepseek 错误透传）
 gemQueue = [new Response('gpt down', { status: 500 })];
@@ -388,6 +417,84 @@ CONTRACT_MARKS.forEach(function (m) {
 eq('两份提示词同引经据典口径', appSrc.indexOf('引经据典') >= 0 && SYSTEM_PROMPT.indexOf('引经据典') >= 0, true);
 // 反向对照：契约段一旦被删，本组断言必须变红（防止断言写成恒真）
 eq('对照：契约段总数应为 4', CONTRACT_MARKS.length, 4);
+
+// ---------- #21 SSE 透传剥离 reasoning_content（2026-10-13） ----------
+// 事故复盘：百炼思考模型把 reasoning_content（思考草稿）与 content（最终答案）
+// 分字段返回，旧版 pipeMergedSSE 把两者一并拼接下传。草稿内含模型自己都不
+// 采信的临时错判（实测：草稿写「世在四爻妻财庚辰」，正式稿实为「世在三爻」），
+// 断后 fact-audit 对全文字面匹配 → 误报 6 处「与卦盘不符」的假阳性。
+// 修复：正文只透传 content；草稿仅缓冲，整条流无 content 时才兜底补发。
+eq('delta 取正文：content 原样透传', deltaText({ content: '世在三爻' }), '世在三爻');
+eq('delta 取正文：reasoning_content 不透传', deltaText({ reasoning_content: '世在四爻妻财辰土？' }), '');
+eq('delta 取正文：两者并存只取 content', deltaText({ reasoning_content: '草稿', content: '正文' }), '正文');
+eq('delta 取正文：content 非字符串按空处理', deltaText({ content: 42 }), '');
+eq('delta 取正文：空对象按空处理', deltaText({}), '');
+eq('delta 取正文：null/undefined 不抛', deltaText(null) + '|' + deltaText(undefined), '|');
+eq('delta 取草稿：reasoning_content 可取（供兜底）', deltaReasoning({ reasoning_content: '草稿' }), '草稿');
+eq('delta 取草稿：content 不进草稿缓冲', deltaReasoning({ content: '正文' }), '');
+// 反向对照：事故旧行为必须能被本组断言识别（防回归成旧版合并逻辑）
+eq('对照：旧版合并逻辑会污染正文', (function () {
+  const d = { reasoning_content: '世在四爻妻财辰土？', content: '世在三爻' };
+  return (d.reasoning_content || '') + (d.content || '');
+})(), '世在四爻妻财辰土？世在三爻');
+
+// 端到端：mock「思考模型」上游——reasoning_content 与 content 分字段交替返回，
+// 走完整 interpretPost → SSE 透传链路，断言客户端收到的流里只有正文。
+globalThis.fetch = function () {
+  const enc = new TextEncoder();
+  const rows = [
+    { choices: [{ delta: { reasoning_content: '世在四爻妻财辰土？' } }] },
+    { choices: [{ delta: { content: '世在三爻' } }] },
+    { choices: [{ delta: { reasoning_content: 'Wait，应在上爻？' } }] },
+    { choices: [{ delta: { content: '妻财庚辰' } }] }
+  ];
+  const body = new ReadableStream({
+    start: function (c) {
+      rows.forEach(function (r) { c.enqueue(enc.encode('data: ' + JSON.stringify(r) + '\n')); });
+      c.enqueue(enc.encode('data: [DONE]\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const rReas = await interpretPost({
+  request: new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panText: '占测试', provider: 'gpt', model: 'gpt-6-luna' })
+  }),
+  env: ENV_GPT
+});
+const evReas = await readSSEEvents(rReas);
+eq('端到端：思考模型流只透传正文', sseText(evReas), '世在三爻妻财庚辰');
+eq('端到端：草稿不进入流内任何事件', evReas.some(function (e) {
+  return typeof e.t === 'string' && (e.t.indexOf('妻财辰土？') >= 0 || e.t.indexOf('Wait') >= 0);
+}), false);
+eq('端到端：无 error 事件（正常完篇）', evReas.some(function (e) { return e.error; }), false);
+
+// 端到端兜底：整条流只有 reasoning_content（个别中转把正文放思考字段）→ 流末补发
+globalThis.fetch = function () {
+  const enc = new TextEncoder();
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(enc.encode('data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: '只有草稿的流' } }] }) + '\n'));
+      c.enqueue(enc.encode('data: [DONE]\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const rReasOnly = await interpretPost({
+  request: new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panText: '占测试', provider: 'gpt', model: 'gpt-6-luna' })
+  }),
+  env: ENV_GPT
+});
+const evReasOnly = await readSSEEvents(rReasOnly);
+eq('端到端兜底：纯草稿流末补发，不至空响应', sseText(evReasOnly), '只有草稿的流');
+globalThis.fetch = origFetch;
 
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

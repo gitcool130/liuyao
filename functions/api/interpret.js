@@ -38,6 +38,24 @@ const LIMITS = { panText: 4000, historyTurns: 8, perMessage: 2000 };
 const SSE_MAX_LINE = 1000000;
 const SSE_MAX_REPLY = 200000;
 
+// 从 OpenAI 兼容 SSE 的 delta 中取「应透传给客户端的最终答案文本」。
+// 导出供 test-functions.mjs 直接驱动（Pages Functions 只把 onRequest* 视作
+// 路由处理函数，其余导出不影响路由）。
+// reasoning_content 是模型的思考草稿：实测案例（2026-10-13，百炼思考模型）中，
+// 草稿先错判「世在四爻妻财庚辰」、正式稿已自我纠正为「世在三爻妻财庚辰」，
+// 旧版 pipeMergedSSE 把草稿一并拼接下传，导致断后 fact-audit 对全文字面
+// 匹配出 6 处「与卦盘不符」的假阳性。故正文只认 content，草稿另走缓冲兜底。
+export function deltaText(d) {
+  if (!d || typeof d !== 'object') return '';
+  return typeof d.content === 'string' ? d.content : '';
+}
+
+// 取思考草稿文本（仅用于「整条流无任何 content」时的兜底补发，见 pipeMergedSSE）。
+export function deltaReasoning(d) {
+  if (!d || typeof d !== 'object') return '';
+  return typeof d.reasoning_content === 'string' ? d.reasoning_content : '';
+}
+
 // 按 IP 的滑动窗口限流（默认关闭，仅在配置了 RATE_LIMIT_PER_MIN 时生效）。
 // 生产当前未设该变量 → 恒不触发；本函数保留为可随时启用的软开关。
 // 模块级 Map 在 CF Workers 中随 isolate 存活，跨 isolate 不共享，故只是成本抑制的兜底。
@@ -397,7 +415,7 @@ export async function onRequestPost(context) {
         const reader = upstream.body.getReader();
         const dec = new TextDecoder();
         const w = writable.getWriter();
-        let buf = '', outLen = 0, cut = null;
+        let buf = '', outLen = 0, cut = null, reasBuf = '';
         // 向客户端写终止/错误事件（客户端 readStreamSSE 据此 throw 触发重试）
         const writeErr = async function (code, msg) {
           try {
@@ -429,8 +447,20 @@ export async function onRequestPost(context) {
                 const c = j.choices && j.choices[0];
                 const d = c && c.delta;
                 if (d) {
-                  if (d.reasoning_content) chunk += d.reasoning_content;
-                  if (d.content) chunk += d.content;
+                  // 只透传最终答案（content）。reasoning_content 是模型的思考
+                  // 草稿：内含未经纠正的临时判断（实测：草稿写「世在四爻妻财」，
+                  // 正式稿实为「世在三爻」），旧版把草稿一并拼接下传，后果有三：
+                  // ① 断语正文被独白污染，用户先读一大段「我们需要回答用户……」；
+                  // ② 断后 fact-audit 对全文字面匹配，把草稿里的临时错判当真
+                  //    断语校对，误报 6 处「与卦盘不符」；
+                  // ③ 追问历史（records 落库）存进带草稿的版本，后续追问被污染。
+                  // 草稿仅缓冲不发送；仅当整条流没有任何 content 时，流末兜底
+                  // 补发（见下方 reasBuf 补发段）。
+                  chunk += deltaText(d);
+                  if (!chunk) {
+                    const rc = deltaReasoning(d);
+                    if (rc && reasBuf.length <= SSE_MAX_REPLY) reasBuf += rc;
+                  }
                 } else if (c && c.message && c.message.content) {
                   chunk = c.message.content;
                 }
@@ -447,6 +477,15 @@ export async function onRequestPost(context) {
               }
             }
             if (cut) break;
+          }
+          // 兜底补发：全程只有 reasoning_content、没有任何 content（个别中转/模型
+          // 把最终答案也放进思考字段）时，流末一次性补发，避免客户端按「空响应」
+          // 重试或报 EMPTY。走到这里只可能是 r.done 正常收流（撞守卫已 break 且被
+          // !cut 挡下），正常有 content 的流 outLen > 0 同样不触发。
+          if (!cut && outLen === 0 && reasBuf) {
+            try {
+              await w.write(enc.encode('data: ' + JSON.stringify({ t: reasBuf }) + '\n\n'));
+            } catch (e) { /* 客户端已断开则忽略 */ }
           }
         } catch (e) {
           // 上游断连 / abort（含超时）：告知客户端这是中断而非完篇

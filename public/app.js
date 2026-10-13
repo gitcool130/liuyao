@@ -836,8 +836,9 @@
     return false;
   }
 
-  // 读取服务端透传的 SSE 流。服务端已把上游 delta.content / reasoning_content
-  // 合并为简单 data: {"t":"..."} 行，客户端只需累加 t 字段。
+  // 读取服务端透传的 SSE 流。服务端已把上游 delta.content 归一为简单
+  // data: {"t":"..."} 行（reasoning_content 思考草稿在服务端剥离，不透传），
+  // 客户端只需累加 t 字段。
   async function readStreamSSE(res, onStream) {
     const reader = res.body.getReader();
     const dec = new TextDecoder();
