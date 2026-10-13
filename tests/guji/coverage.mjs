@@ -21,11 +21,20 @@ const ROOT = path.resolve(__dirname, '../..');
 /* ---- 分母：引擎声明的 rule 全集 ---- */
 const src = fs.readFileSync(path.join(ROOT, 'public/core/analyze.js'), 'utf8');
 const engine = new Map(); // rule -> tag（同一 rule 名可能出现在不同 tag 下）
-const re = /tag:\s*'([^']+)'\s*,\s*rule:\s*'([^']+)'/g;
+// 注意两个正则都要求 rule 字面量**终止取值**（后随 , 或 }）：`rule: '长生于' + who`
+// 这类运行时拼接名若按裸前缀捕入，会虚增三个永不命中的分母项（见下方展开）。
+const re = /tag:\s*'([^']+)'\s*,\s*rule:\s*'([^']+)'\s*[,\}]/g;
 let m;
 while ((m = re.exec(src))) engine.set(m[2], m[1]);
 // 补捕跨行的 tag/rule（个别 push 体量较大换行）
-src.replace(/rule:\s*'([^']+)'/g, (mm, r) => { if (!engine.has(r)) engine.set(r, '?'); return mm; });
+src.replace(/rule:\s*'([^']+)'\s*[,\}]/g, (mm, r) => { if (!engine.has(r)) engine.set(r, '?'); return mm; });
+// 运行时拼接名展开：`rule: '长生于' + who`（who ∈ {月建, 日辰}）——静态文本里没有
+// 完整字面量，按拼接口径展开计入分母，与用例期望值（如「长生于日辰」）对齐。
+['月建', '日辰'].forEach(function (who) {
+  ['长生于', '墓于', '绝于'].forEach(function (p) {
+    engine.set(p + who, '生旺墓绝');
+  });
+});
 
 /* ---- 分子：用例断言到的 rule ---- */
 const casesDir = path.join(__dirname, 'cases');

@@ -654,6 +654,185 @@ eq('临日辰路径仍生效', C.ruleDay(Lmu, mkPil({ monthZhi: 2, dayZhi: 2 }),
   eq('发动/化比和 仍为无方向的纯陈述（basis 空）', plain.every(function (j) { return j.basis === ''; }), true);
 })();
 
+
+// ---------- 21. M16-① 卦型（六冲/六合/游魂/归魂及其相变） ----------
+(function () {
+  // 本卦卦型：真实卦画驱动（paipan 的 isLiuChong/isLiuHe/soul 由 test-gua-types 锁定，此处测规则链）
+  const jOf = function (toss, target) {
+    const pan = C.paipan(toss, new Date(2024, 3, 16, 12));
+    return C.ruleGuaXing(pan).map(function (j) { return j.rule; });
+  };
+  // 六冲卦：八纯 + 无妄 + 大壮
+  ['[1,1,1,1,1,1]', '[0,1,0,0,1,0]', '[1,0,1,1,0,1]', '[1,0,0,1,0,0]'].forEach(function (t) {
+    eq('八纯六冲 ' + t, jOf(JSON.parse(t)).indexOf('六冲卦') >= 0, true);
+  });
+  eq('天雷无妄为六冲卦', jOf([1,0,0,1,1,1]).indexOf('六冲卦') >= 0, true);
+  eq('雷天大壮为六冲卦', jOf([1,1,1,1,0,0]).indexOf('六冲卦') >= 0, true);
+  // 六合卦：否泰困节旅贲豫复
+  eq('天地否为六合卦', jOf([0,0,0,1,1,1]).indexOf('六合卦') >= 0, true);
+  eq('地天泰为六合卦', jOf([1,1,1,0,0,0]).indexOf('六合卦') >= 0, true);
+  eq('泽水困为六合卦', jOf([0,1,0,1,1,0]).indexOf('六合卦') >= 0, true);
+  eq('水泽节为六合卦', jOf([1,1,0,0,1,0]).indexOf('六合卦') >= 0, true);
+  eq('火山旅为六合卦', jOf([0,0,1,1,0,1]).indexOf('六合卦') >= 0, true);
+  eq('山火贲为六合卦', jOf([1,0,1,0,0,1]).indexOf('六合卦') >= 0, true);
+  eq('雷地豫为六合卦', jOf([0,0,0,1,0,0]).indexOf('六合卦') >= 0, true);
+  eq('地雷复为六合卦', jOf([1,0,0,0,0,0]).indexOf('六合卦') >= 0, true);
+  // 游魂/归魂
+  eq('火地晋为游魂卦', jOf([0,0,0,1,0,1]).indexOf('游魂卦') >= 0, true);
+  eq('火天大有为归魂卦', jOf([1,1,1,1,0,1]).indexOf('归魂卦') >= 0, true);
+  // 非冲非合非游魂归魂：无任何卦型判定
+  eq('天泽履无卦型判定', jOf([1,1,0,1,1,1]), []);
+  // 相变四型（卦画均取自定本案例）
+  eq('离之旅＝六冲卦+六冲变六合', jOf([9,0,1,1,0,1]), ['六冲卦', '六冲变六合']);
+  eq('否之乾＝六合卦+六合变六冲', jOf([6,6,6,1,1,1]), ['六合卦', '六合变六冲']);
+  eq('困之节＝六合卦+六合变六合', jOf([6,1,0,9,1,0]), ['六合卦', '六合变六合']);
+  eq('离之震＝六冲卦+六冲变六冲', jOf([1,0,9,1,0,9]), ['六冲卦', '六冲变六冲']);
+  eq('大有之大壮＝卦变六冲（本卦归魂、非冲非合）', jOf([1,1,1,1,0,9]), ['归魂卦', '卦变六冲']);
+  // 静卦无相变判定（泰无动爻 → 只有六合卦）
+  eq('静卦只判本卦卦型', jOf([1,1,1,0,0,0]), ['六合卦']);
+  // 卦型全部只陈述、不入 trend
+  const gx = C.aggregateTrend({ hasYongshen: true, grade: '旺', daySupports: true, zhenKong: false, zhenYuePo: false, judgments: C.ruleGuaXing(C.paipan([1,0,9,1,0,9], new Date(2024, 3, 16, 12))) });
+  eq('卦型族不入 supports', gx.supports.length, 0);
+  eq('卦型族不入 harms', gx.harms.length, 0);
+  // 依据非空（每条都有定本引文）
+  const allGx = C.ruleGuaXing(C.paipan([9,0,1,1,0,1], new Date(2024, 3, 16, 12)));
+  eq('卦型每条 basis 非空', allGx.every(function (j) { return j.basis && j.basis.length > 10; }), true);
+})();
+
+// ---------- 22. M16-② 生旺墓绝（长生十二宫四正位 + 觉子曰三宽） ----------
+(function () {
+  const T = C.SHENGWANG_MUJUE;
+  // 章表：金巳酉丑寅 / 木亥卯未申 / 水土申子辰巳 / 火寅午戌亥
+  eq('章表·金（巳酉丑寅）', [T['金'].sheng, T['金'].wang, T['金'].mu, T['金'].jue], [5, 9, 1, 2]);
+  eq('章表·木（亥卯未申）', [T['木'].sheng, T['木'].wang, T['木'].mu, T['木'].jue], [11, 3, 7, 8]);
+  eq('章表·水（申子辰巳）', [T['水'].sheng, T['水'].wang, T['水'].mu, T['水'].jue], [8, 0, 4, 5]);
+  eq('章表·土（寄生申，与水同宫）', [T['土'].sheng, T['土'].wang, T['土'].mu, T['土'].jue], [8, 0, 4, 5]);
+  eq('章表·火（寅午戌亥）', [T['火'].sheng, T['火'].wang, T['火'].mu, T['火'].jue], [2, 6, 10, 11]);
+
+  // 直测生产者：pan 只需 lines（动变层与墓支冲开的输入），四柱用 mkPil
+  const I = {}; C.ZHI.forEach(function (z, i) { I[z] = i; });
+  const panOf = function (lines) { return { lines: lines }; };
+  const rulesOf = function (wx, zhi, grade, mz, dz, opts) {
+    opts = opts || {};
+    const L = mkLine({ zhi: zhi, zhiIdx: I[zhi], wx: wx, pos: 0,
+      moving: !!opts.moving, bian: opts.bian ? { gan: 'X', zhi: opts.bian, zhiIdx: I[opts.bian], wx: C.ZHI_WX[I[opts.bian]], lq: '官鬼' } : null });
+    const others = (opts.others || []).map(function (z) {
+      return mkLine({ zhi: z, zhiIdx: I[z], wx: C.ZHI_WX[I[z]], pos: 5, moving: true });
+    });
+    return C.ruleChangsheng(panOf([L].concat(others)), L, mkPil({ monthZhi: I[mz], dayZhi: I[dz] }), grade, !!opts.daySupports, '官鬼')
+      .map(function (j) { return j.rule; });
+  };
+  // 月日层四态
+  eq('亥水逢申日=长生于日辰', rulesOf('水', '亥', '相', '卯', '申').indexOf('长生于日辰') >= 0, true);
+  eq('子水逢申月=长生于月建', rulesOf('水', '子', '相', '申', '寅').indexOf('长生于月建') >= 0, true);
+  eq('亥水逢辰日=墓于日辰', rulesOf('水', '亥', '休', '申', '辰').indexOf('墓于日辰') >= 0, true);
+  eq('午火逢戌月=墓于月建', rulesOf('火', '午', '相', '戌', '寅').indexOf('墓于月建') >= 0, true);
+  eq('酉金逢寅日=绝于日辰', rulesOf('金', '酉', '旺', '申', '寅').indexOf('绝于日辰') >= 0, true);
+  eq('旺相亦谓之绝（文本含「虽旺」）', (function () {
+    const L = mkLine({ zhi: '酉', zhiIdx: I['酉'], wx: '金', pos: 0 });
+    const j = C.ruleChangsheng({ lines: [L] }, L, mkPil({ monthZhi: I['申'], dayZhi: I['寅'] }), '旺', false, '官鬼')
+      .filter(function (x) { return x.rule === '绝于日辰'; })[0];
+    return j.text.indexOf('虽旺') >= 0;
+  })(), true);
+  // 觉子曰三宽（月日层）
+  eq('烈火煎金：申金死于巳月=论克不论生', rulesOf('金', '申', '死', '巳', '午').indexOf('论克不论生') >= 0, true);
+  eq('烈火煎金反向：申金逢巳日而得生扶仍谓长生', rulesOf('金', '申', '旺', '寅', '巳').indexOf('长生于日辰') >= 0, true);
+  eq('论生不论墓（月建）：申金丑月逢未日冲开', rulesOf('金', '申', '相', '丑', '未').indexOf('论生不论墓') >= 0, true);
+  eq('论生不论墓反向：墓支不冲则仍判墓于月建', rulesOf('金', '申', '相', '丑', '寅').indexOf('墓于月建') >= 0, true);
+  eq('论生不论墓本限于金：亥水辰日虽逢戌冲仍判墓于日辰', rulesOf('水', '亥', '休', '戌', '辰').indexOf('墓于日辰') >= 0, true);
+  eq('论生不论绝（月建）：未土相于巳月', rulesOf('土', '未', '相', '巳', '午').indexOf('论生不论绝') >= 0, true);
+  eq('论生不论绝反向：休囚土逢巳仍谓之绝', rulesOf('土', '未', '死', '巳', '寅').indexOf('绝于月建') >= 0, true);
+  eq('论生不论绝惟土：酉金逢寅日（金绝在寅）不论生', rulesOf('金', '酉', '旺', '申', '寅').indexOf('论生不论绝'), -1);
+  // 动变四态
+  eq('巳火化寅=化长生', rulesOf('火', '巳', '旺', '寅', '午', { moving: true, bian: '寅' }).indexOf('化长生') >= 0, true);
+  eq('寅木化卯=化旺', rulesOf('木', '寅', '旺', '卯', '卯', { moving: true, bian: '卯' }).indexOf('化旺') >= 0, true);
+  eq('午火化戌=化墓', rulesOf('火', '午', '旺', '寅', '寅', { moving: true, bian: '戌' }).indexOf('化墓') >= 0, true);
+  eq('子水化巳=化绝', rulesOf('水', '子', '旺', '寅', '寅', { moving: true, bian: '巳' }).indexOf('化绝') >= 0, true);
+  // 动变层三宽（与觉子曰对称落地）
+  eq('烈火煎金及于动变：申金休囚化巳又逢巳午火多=论克不论生', rulesOf('金', '申', '死', '午', '午', { moving: true, bian: '巳' }).indexOf('论克不论生') >= 0, true);
+  eq('烈火煎金反向：申金休囚化巳而火不多=不判化长生（由主链化回头克覆盖）', rulesOf('金', '申', '死', '寅', '卯', { moving: true, bian: '巳' }).indexOf('化长生'), -1);
+  eq('烈火煎金不误伤旺金：申金旺相化巳=化长生', rulesOf('金', '申', '旺', '寅', '卯', { moving: true, bian: '巳' }).indexOf('化长生') >= 0, true);
+  eq('论生不论墓及于动变：酉金化丑逢未月冲开', rulesOf('金', '酉', '相', '未', '寅', { moving: true, bian: '丑' }).indexOf('论生不论墓') >= 0, true);
+  eq('论生不论墓（动变）本限于金：亥水化辰仍判化墓', rulesOf('水', '亥', '休', '寅', '寅', { moving: true, bian: '辰' }).indexOf('化墓') >= 0, true);
+  eq('论生不论绝及于动变：辰土相于午月化巳', rulesOf('土', '辰', '相', '午', '寅', { moving: true, bian: '巳' }).indexOf('论生不论绝') >= 0, true);
+  eq('论生不论绝（动变）惟土：子水化巳仍判化绝', rulesOf('水', '子', '旺', '午', '寅', { moving: true, bian: '巳' }).indexOf('化绝') >= 0, true);
+  // 全族只陈述、不入 trend
+  const L2 = mkLine({ zhi: '亥', zhiIdx: I['亥'], wx: '水', pos: 0, moving: true, bian: { gan: 'X', zhi: '申', zhiIdx: 8, wx: '金', lq: '父母' } });
+  const agg22 = C.aggregateTrend({ hasYongshen: true, grade: '旺', daySupports: true, zhenKong: false, zhenYuePo: false,
+    judgments: C.ruleChangsheng({ lines: [L2] }, L2, mkPil({ monthZhi: I['卯'], dayZhi: I['申'] }), '旺', true, '官鬼') });
+  eq('生旺墓绝族不入 supports', agg22.supports.length, 0);
+  eq('生旺墓绝族不入 harms', agg22.harms.length, 0);
+  // 每条 basis 引《生旺墓绝章》
+  const allSW = C.ruleChangsheng({ lines: [L2] }, L2, mkPil({ monthZhi: I['卯'], dayZhi: I['申'] }), '旺', true, '官鬼');
+  eq('生旺墓绝每条 basis 引章名', allSW.every(function (j) { return j.basis.indexOf('生旺墓绝章') >= 0; }), true);
+})();
+
+// ---------- 23. M16-③ 元神/忌神/仇神（三神识别与有力无力） ----------
+(function () {
+  const I = {}; C.ZHI.forEach(function (z, i) { I[z] = i; });
+  const mk = function (zhi, moving, bianZhi, pos) {
+    const idx = I[zhi];
+    return mkLine({ pos: pos, zhi: zhi, zhiIdx: idx, wx: C.ZHI_WX[idx], moving: !!moving,
+      bian: bianZhi ? { gan: 'X', zhi: bianZhi, zhiIdx: I[bianZhi], wx: C.ZHI_WX[I[bianZhi]], lq: '官鬼' } : null });
+  };
+  // pan 必须带 pillars（identifyYJC/ruleYJC 读月建日辰）
+  const panOf = function (lines, mz, dz) { return { lines: lines, pillars: mkPil({ monthZhi: I[mz], dayZhi: I[dz] }) }; };
+  const L = mk('寅', false, null, 0); // 用神寅木：元神=水、忌神=金、仇神=土（土克水而生金）
+  // 三神识别（月建午、日辰巳皆火，对寅木不生不克，不掺入候选）
+  const pan = panOf([mk('寅', false, null, 0), mk('子', false, null, 1), mk('酉', false, null, 2), mk('辰', false, null, 3)], '午', '巳');
+  const yjc = C.identifyYJC(pan, L);
+  eq('元神=子水（生木）', yjc.yuanshen.map(function (c) { return c.line.zhi; }), ['子']);
+  eq('忌神=酉金（克木）', yjc.jishen.map(function (c) { return c.line.zhi; }), ['酉']);
+  eq('仇神=辰土（克元神子水、生忌神酉金）', yjc.choushen.map(function (c) { return c.line.zhi; }), ['辰']);
+  // 仇神双条件：只克元神而不生忌神者不算仇神（午火克子水，但火不克金反克——不生忌神）
+  const pan2 = panOf([mk('寅', false, null, 0), mk('子', false, null, 1), mk('酉', false, null, 2), mk('午', false, null, 3)], '午', '巳');
+  eq('单条件（克元神不生忌神）不算仇神', C.identifyYJC(pan2, L).choushen.length, 0);
+  // 日月候选：结构内保留（仇神检测需要），isRiYue 标记（月建亥=元神、日辰申=忌神）
+  const pan3 = panOf([mk('寅', false, null, 0)], '亥', '申');
+  const yjc3 = C.identifyYJC(pan3, L);
+  eq('日月候选进入三神结构（月建亥=元神、日辰申=忌神）', [yjc3.yuanshen[0].from, yjc3.jishen[0].from], ['月建', '日辰']);
+  eq('日月候选带 isRiYue 标记', yjc3.yuanshen[0].isRiYue && yjc3.jishen[0].isRiYue, true);
+  // 判定输出：日月候选不进（其旺衰克生由主链月建/日辰族覆盖）
+  const js3 = C.ruleYJC(pan3, L, 'shi', yjc3);
+  eq('日月候选不产生判定输出（元神/忌神两条皆空）', js3.length, 0);
+  // 静元神：旺相或得日月生扶即可生用
+  const panYs = panOf([mk('寅', false, null, 0), mk('子', false, null, 1)], '申', '寅');
+  const ys = C.ruleYJC(panYs, L, 'shi', C.identifyYJC(panYs, L));
+  eq('静元神亦判（子水得月建申生扶）', ys[0].rule, '元神有力');
+  eq('元神有力理由含「得日月动爻生扶」', ys[0].text.indexOf('得日月动爻生扶') >= 0, true);
+  // 静元神休囚不动 → 无力（未月水死、寅日不生）
+  const panYs2 = panOf([mk('寅', false, null, 0), mk('子', false, null, 1)], '未', '寅');
+  const ys2 = C.ruleYJC(panYs2, L, 'shi', C.identifyYJC(panYs2, L));
+  eq('静元神休囚不动=元神无力', ys2[0].rule, '元神无力');
+  // 忌神宜静不宜兴：静忌神不判
+  const panJs = panOf([mk('寅', false, null, 0), mk('酉', false, null, 1)], '午', '巳');
+  eq('静忌神不判（忌神宜静不宜兴）', C.ruleYJC(panJs, L, 'shi', C.identifyYJC(panJs, L)).length, 0);
+  // 忌神发动临月建 → 有力
+  const panJs2 = panOf([mk('寅', false, null, 0), mk('酉', true, '申', 1)], '酉', '寅');
+  const js2 = C.ruleYJC(panJs2, L, 'shi', C.identifyYJC(panJs2, L));
+  eq('忌神发动临月建=忌神有力', js2[0].rule, '忌神有力');
+  // 贪生忘克：忌神与元神同动，忌神反生元神 → 无力（覆盖两侧「同动」条目）
+  const panTS = panOf([mk('寅', false, null, 0), mk('子', true, '亥', 1), mk('酉', true, '申', 2)], '午', '巳');
+  const ts = C.ruleYJC(panTS, L, 'shi', C.identifyYJC(panTS, L)).filter(function (j) { return j.tag === '忌神'; });
+  eq('贪生忘克=忌神无力', ts.length === 1 && ts[0].rule, '忌神无力');
+  eq('贪生忘克引《卜筮正宗·原忌仇神论第四》', ts[0].basis.indexOf('原忌仇神论') >= 0, true);
+  // 仇神只判动爻（其余静爻的元神/忌神判定不纳入本组断言）
+  const panCs = panOf([mk('寅', false, null, 0), mk('子', false, null, 1), mk('酉', false, null, 2), mk('辰', true, '丑', 3)], '午', '巳');
+  const cs = C.ruleYJC(panCs, L, 'shi', C.identifyYJC(panCs, L)).filter(function (j) { return j.tag === '仇神'; });
+  eq('仇神发动判出', cs.length, 1);
+  const panCsJ = panOf([mk('寅', false, null, 0), mk('子', false, null, 1), mk('酉', false, null, 2), mk('辰', false, null, 3)], '午', '巳');
+  eq('仇神不动不判', C.ruleYJC(panCsJ, L, 'shi', C.identifyYJC(panCsJ, L)).filter(function (j) { return j.tag === '仇神'; }).length, 0);
+  // 端到端：大过变鼎（巳月乙未日自占病）——元神有力 + 忌神无力（贪生忘克），日辰未土不重复判
+  const dg = C.paipan([0,1,1,1,9,6], new Date(2026, 4, 21, 12));
+  const dgRes = C.analyze(dg, 'shi');
+  const dgYjc = dgRes.judgments.filter(function (j) { return ['元神', '忌神', '仇神'].indexOf(j.tag) >= 0; });
+  eq('大过变鼎：元神有力（三爻、五爻两酉）', dgYjc.filter(function (j) { return j.rule === '元神有力'; }).length, 2);
+  eq('大过变鼎：忌神无力（贪生忘克）', dgYjc.filter(function (j) { return j.rule === '忌神无力'; }).length, 1);
+  eq('大过变鼎：日辰未土候选不产生第二条忌神判定', dgYjc.filter(function (j) { return j.tag === '忌神'; }).length, 1);
+  eq('大过变鼎：用神月破日克 → trend 凶', dgRes.trend, '凶');
+  eq('大过变鼎：日辰未土候选仍保留在三神结构中（from=日辰）', dgRes.yjs.jishen.some(function (c) { return c.from === '日辰'; }), true);
+})();
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);
 

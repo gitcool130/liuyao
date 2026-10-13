@@ -8,6 +8,8 @@
  *  - trend 由规则汇聚表驱动，非算术和
  *  - 暗动闭环：静爻被日冲，先查月令旺衰（旺相=暗动，休囚=日破）
  *  - 只出应期线索（yingqiClues），不下应期结论
+ * M16 新增三族陈述层规则（卦型 / 生旺墓绝 / 元神忌神仇神），均依定本回溯落地，
+ * 按纳入准则只陈述、不入 trend（吉凶随占类翻转或与既有五行判定维度重叠）。
  * ============================================================ */
 (function (root) {
   const LY = root.LY = root.LY || {};
@@ -551,6 +553,422 @@
     return js;
   }
 
+  // ---------- M16：卦型判定（六冲 / 六合 / 游魂归魂） ----------
+  // 依据《增删卜易·六冲章第二十》《六合章第十九》《归魂游魂章第又二十六》。
+  // 卦型的吉凶随占类翻转（「占凶事宜于冲散、占吉事而不宜」「宜合吉，不宜合凶」），
+  // 且野鹤老人明言游魂归魂「须以用神为主，然后以此参之，若舍用神执此而断者，谬也」——
+  // 按 aggregateTrend 的纳入准则（吉凶方向不依赖占类才入表），本组只陈述、不入 trend
+  // （与相刑/相害、世爻关系同处理）。
+  // 六冲卦十卦（八纯 + 无妄 + 大壮）与六合卦八卦的口径见 paipan.js chongGua/heGua，
+  // 已由 test-gua-types.js 按京房八宫卦次整表锁定；此处只作断卦层陈述。
+  function ruleGuaXing(pan) {
+    const js = [];
+    const benName = pan.benName;
+    if (pan.isLiuChong) {
+      js.push({
+        tag: '卦型', rule: '六冲卦',
+        text: '本卦' + benName + '为六冲卦（八纯加天雷无妄、雷天大壮共十卦）——冲者散也：占凶事宜冲散，占吉事不宜，必兼用神而言，用神旺虽冲不破，用神失陷凶而又凶。',
+        basis: '《增删卜易·六冲章第二十》：「六冲卦者乾为天、坎为水、艮为山、震为雷、巽为风、离为火、坤为地、兑为泽，此八宫第一卦皆是六冲卦，再者天雷无妄、雷天大壮也是六冲卦一共十卦」「冲者散也，凡占凶事宜于冲散、占吉事而不宜，必兼用神而言，用神旺虽冲不破，用神失陷凶而又凶」'
+      });
+    }
+    if (pan.isLiuHe) {
+      js.push({
+        tag: '卦型', rule: '六合卦',
+        text: '本卦' + benName + '为六合卦，内外六爻自相和合——诸占皆以为吉，然必用神有气相宜，用若失陷无益；惟占讼狱不利。',
+        basis: '《增删卜易·六合章第十九》：「卦逢六合者即如天地否卦内外六爻自相和合是也」「凡得诸合，诸占皆以为吉……然必用神有气相宜，用若失陷无益」「惟占讼狱不利」'
+      });
+    }
+    if (pan.soul === '游魂') {
+      js.push({
+        tag: '卦型', rule: '游魂卦',
+        text: '本卦' + benName + '为游魂卦（各宫第七卦）——古以游魂行千里，心无定向，迁改不常；野鹤老人谓须以用神为主，以此参之，不可舍用神而执此独断。',
+        basis: '《增删卜易·归魂游魂章第又二十六》：「游魂卦为各宫之第七卦，如乾宫中之火地晋」「古以游魂行千里，我行此事而欲久者，游魂而不能久，心无定向，迁改不常。野鹤曰：须以用神为主，然后以此参之，若舍用神执此而断者，谬也」'
+      });
+    }
+    if (pan.soul === '归魂') {
+      js.push({
+        tag: '卦型', rule: '归魂卦',
+        text: '本卦' + benName + '为归魂卦（各宫第八卦）——古以归魂不出疆，诸事拘泥不行；野鹤老人谓亦须以用神为主。',
+        basis: '《增删卜易·归魂游魂章第又二十六》：「归魂卦为各宫之第八卦，如乾宫中之火天大有」「古以归魂不出疆，诸事拘泥不行，与游魂卦相反而断之，可也。野鹤曰：亦须以用神为主」'
+      });
+    }
+    if (pan.hasBian) {
+      // 卦变关系（相冲六法之三/四、相合六法之五/六；「卦变六冲」见六合章「合而变冲，不久之兆」）
+      const bianLC = LY.chongGua(pan.bianBits), bianLH = LY.heGua(pan.bianBits);
+      if (pan.isLiuChong && bianLH) {
+        js.push({
+          tag: '卦型', rule: '六冲变六合',
+          text: '六冲卦变六合卦——散而复聚，离而必合：占婚姻先吴越而后朱陈，占功名始则艰阻终顷荣显，占求谋先难后易。',
+          basis: '《增删卜易·六合章第十九》：「屡验六冲变合，散而复聚，离而必合，此婚一定还成」「占婚姻先吴越而后朱陈，占夫妻先参商后必合好，占功名始则艰驻，终顷荣显。占求谋先难后易」'
+        });
+      } else if (pan.isLiuHe && bianLC) {
+        js.push({
+          tag: '卦型', rule: '六合变六冲',
+          text: '六合卦变六冲卦——诸占先合后离、先亲后疏、先浓后淡、始荣终悴、得而复失成而后败，惟占官非盗贼事者宜之。',
+          basis: '《增删卜易·六合章第十九》：「凡得六合变六冲者，诸占先合后离、先亲后疏、先浓后淡，始荣终悴，得而复失成而后败、惟占官非，盗贼事者宜之」'
+        });
+      } else if (pan.isLiuHe && bianLH) {
+        js.push({
+          tag: '卦型', rule: '六合变六合',
+          text: '六合卦变六合卦——爻逢六合已为吉兆，动而变六合谓始终而作合：占风水百代显荣，占婚姻白头相守；不宜合凶之事。',
+          basis: '《增删卜易·六合章第十九》：「六合卦变六合。爻逢六合已为吉兆，动而变六合谓始终而作合也。占风水百代显荣……占婚姻白头相守，宜合吉，不宜合凶」'
+        });
+      } else if (pan.isLiuChong && bianLC) {
+        js.push({
+          tag: '卦型', rule: '六冲变六冲',
+          text: '六冲卦变六冲卦——相冲六法之「冲变六冲」，冲而又冲，事体反复难留。',
+          basis: '《增删卜易·六冲章第二十》：「相冲之法有六。日月冲爻者一也，卦逢六冲二也，六合卦变六冲三也，冲变六冲四也。动爻变冲五也、爻与爻冲六也」'
+        });
+      } else if (bianLC) {
+        js.push({
+          tag: '卦型', rule: '卦变六冲',
+          text: '卦变六冲——合而变冲，不久之兆，图事难成，有始无终。',
+          basis: '《增删卜易·六合章第十九》：「独嫌卦变六冲，合而变冲，不久之兆」；《六冲章第二十》：「六合卦变六冲卦者，用神旺者始吉终凶，图事难成，有始无终也」'
+        });
+      }
+    }
+    return js;
+  }
+
+  // ---------- M16：生旺墓绝（长生十二宫四正位） ----------
+  // 依据《增删卜易·生旺墓绝章第又二十六》：
+  //   「且如主事爻属木，若在亥日占卦即主事爻长生于亥日。若在卯日占卦，木旺于卯。
+  //    若在未日占卦，木墓于未。若在申日占卦，木绝于申，其馀仿此。又如主事爻属木，
+  //    动而变出亥水者，谓之化长生，动而变出卯木者谓之化旺，动而变出未土者谓之化墓，
+  //    动而变出申金者谓之化绝，馀仿此。」
+  // 觉子曰三宽（旺衰守卫，本实现逐条落地）：
+  //   长生：「且宜金爻旺相，或日月动爻生扶，再遇巳日……皆谓长生。倘若金爻休囚无气，
+  //          再遇巳午火多者，烈火煎金，论克不论生也」（惟金之长生支巳火克金，故有此宽）；
+  //   墓  ：「金爻虽墓于丑土，若得未土冲动，或卦中土多生金，论生不论墓也」（取逢冲一支）；
+  //   绝  ：「土爻虽绝於巳，必须休囚无气，又逢巳爻谓之绝。若土爻旺相，或得日月动爻生扶，
+  //          再遇巳爻，巳火反能生土，论生不论绝也」（惟土之绝支巳火生土，故有此宽）。
+  // 本组皆只陈述、不入 trend：墓/绝的吉凶依赖占类与旺衰组合（如占病喜鬼入墓），
+  // 长生/帝旺在日月层与既有「临日月」「日月生扶」重复（帝旺支即当令支），
+  // 化旺/化墓与化比和/化耗气的五行判定是同一动变的两个维度，方向可能相反
+  // （如辰土化子水：十二宫谓化旺、五行谓化耗）——按纳入准则不作单向映射。
+  function ruleChangsheng(pan, L, pil, grade, daySupports, target) {
+    const js = [];
+    const T = LY.SHENGWANG_MUJUE[L.wx];
+    if (!T) return js;
+    const nm = nameOf(L, target);
+    // 旺衰守卫：旺相、得日辰生扶、或有动爻生扶，视为「有气」
+    const dongSheng = pan.lines.some(function (M) { return M.moving && sheng(M.wx, L.wx); });
+    const strong = STRONG.indexOf(grade) >= 0 || daySupports || dongSheng;
+    // 墓支逢冲（日辰/月建/动爻）则论生不论墓
+    const muOpeners = [pil.dayZhi, pil.monthZhi].concat(
+      pan.lines.filter(function (M) { return M.moving; }).map(function (M) { return M.zhiIdx; }));
+    const muOpened = function (muZhi) {
+      return muOpeners.some(function (z) { return z !== muZhi && chong(z, muZhi); });
+    };
+    [[pil.monthZhi, '月建'], [pil.dayZhi, '日辰']].forEach(function (o) {
+      const z = o[0], who = o[1];
+      if (z === T.sheng) {
+        if (strong || !ke(ZHI_WX[z], L.wx)) {
+          js.push({
+            tag: '生旺墓绝', rule: '长生于' + who,
+            text: nm + '长生于' + who + ZHI[z] + '，得生发之机。',
+            basis: '《增删卜易·生旺墓绝章第又二十六》「若在亥日占卦即主事爻长生于亥日」；〈各门类题头总注章〉「用爻遇长生逢帝旺，皆谓之旺」'
+          });
+        } else {
+          js.push({
+            tag: '生旺墓绝', rule: '论克不论生',
+            text: nm + '休囚无气，' + who + ZHI[z] + '虽为' + L.wx + '长生之地，然' + ZHI_WX[z] + '克' + L.wx + '，烈火煎金，论克不论生。',
+            basis: '《增删卜易·生旺墓绝章第又二十六》觉子曰：「倘若金爻休囚无气，再遇巳午火多者，烈火煎金，论克不论生也」'
+          });
+        }
+      }
+      if (z === T.mu) {
+        // 论生不论墓（觉子曰原文本限于金）：金墓于丑而丑土生金（土生金）——墓支与生支
+        // 同体，故逢冲（丑未相冲）或土多时论生不论墓。馀四行之墓支不生本行
+        // （辰土克水、未为木克、戌为火生、辰土比和），无「生」可论，不作此宽。
+        if (L.wx === '金' && muOpened(z)) {
+          js.push({
+            tag: '生旺墓绝', rule: '论生不论墓',
+            text: nm + '墓于' + who + ZHI[z] + '，然墓支被冲开，论生不论墓。',
+            basis: '《增删卜易·生旺墓绝章第又二十六》觉子曰：「金爻虽墓于丑土，若得未土冲动，或卦中土多生金，论生不论墓也」'
+          });
+        } else {
+          js.push({
+            tag: '生旺墓绝', rule: '墓于' + who,
+            text: nm + '入墓于' + who + ZHI[z] + '，用神入墓，事体拘滞难行。',
+            basis: '《增删卜易·生旺墓绝章第又二十六》「若在未日占卦，木墓于未」；〈各门类题头总注章〉总注「墓之、绝之者爻墓绝于日月也」'
+          });
+        }
+      }
+      if (z === T.jue) {
+        if (strong && sheng(ZHI_WX[z], L.wx)) {
+          // 惟土绝于巳：巳火生土，旺相得扶则论生不论绝（觉子之宽）
+          js.push({
+            tag: '生旺墓绝', rule: '论生不论绝',
+            text: nm + '逢' + who + ZHI[z] + '（' + L.wx + '绝地），然旺相得生扶，' + ZHI_WX[z] + '反能生' + L.wx + '，论生不论绝。',
+            basis: '《增删卜易·生旺墓绝章第又二十六》觉子曰：「若土爻旺相，或得日月动爻生扶，再遇巳爻，巳火反能生土，论生不论绝也」'
+          });
+        } else {
+          js.push({
+            tag: '生旺墓绝', rule: '绝于' + who,
+            text: nm + (strong ? '虽旺' : '休囚无气') + '，逢' + who + ZHI[z] + '为' + L.wx + '绝地，衰绝之象，须待冲绝之日。',
+            basis: '《增删卜易·生旺墓绝章第又二十六》「若在申日占卦，木绝于申」；〈反伏章第二十八〉实例「世爻绝于申日又化回头冲克」（旺相亦谓之绝，惟土绝于巳得生者不论）'
+          });
+        }
+      }
+    });
+    // 动变四态：化长生 / 化旺 / 化墓 / 化绝（帝旺支即当令支，月日层已由「临日月」覆盖，
+    // 故此处只判动变，不重复判月建/日辰之帝旺）
+    // 觉子曰三宽于动变层同样成立（原文逐字含动变）：
+    //   长生：「或是金爻动而化出巳火，皆谓长生。倘若金爻休囚无气，再遇巳午火多者，
+    //          烈火煎金，论克不论生也」——惟金长生支巳火克金，馀四行长生支皆生本行；
+    //   墓  ：「若得未土冲动……论生不论墓也」（墓支逢冲则不开墓，丑未、辰戌相冲）；
+    //   绝  ：「必须休囚无气，又逢巳爻谓之绝……巳火反能生土，论生不论绝也」（惟土绝巳）。
+    if (L.moving && L.bian) {
+      const b = L.bian, bz = ZHI.indexOf(b.zhi);
+      if (bz === T.sheng) {
+        if (L.wx === '金' && !strong) {
+          // 烈火煎金：休囚无气——巳午火多则论克不论生；火不甚多则本支巳火克金，
+          // 由主链「动变:化回头克」覆盖，此处不再判化长生（长生以旺相或生扶为前提）
+          const huo = [pil.monthZhi, pil.dayZhi]
+            .concat(pan.lines.map(function (M) { return M.zhiIdx; }))
+            .concat(pan.lines.filter(function (M) { return M.moving && M.bian; })
+              .map(function (M) { return ZHI.indexOf(M.bian.zhi); }));
+          const huoDuo = huo.filter(function (z) { return z === 5 || z === 6; }).length >= 2;
+          if (huoDuo) {
+            js.push({
+              tag: '生旺墓绝', rule: '论克不论生',
+              text: '　' + L.zhi + '化' + b.zhi + '，虽变出' + L.wx + '长生之地，然' + L.wx + '休囚无气，又逢巳午火多，烈火煎金，论克不论生。',
+              basis: '《增删卜易·生旺墓绝章第又二十六》觉子曰：「或是金爻动而化出巳火，皆谓长生。倘若金爻休囚无气，再遇巳午火多者，烈火煎金，论克不论生也」'
+            });
+          }
+        } else {
+          js.push({
+            tag: '生旺墓绝', rule: '化长生',
+            text: '　' + L.zhi + '化' + b.zhi + '，动而变出' + L.wx + '长生之地，谓之化长生。',
+            basis: '《增删卜易·生旺墓绝章第又二十六》「动而变出亥水者，谓之化长生」；觉子曰：「或是金爻动而化出巳火，皆谓长生」（以旺相或得生扶为前提）'
+          });
+        }
+      }
+      if (bz === T.wang) {
+        js.push({
+          tag: '生旺墓绝', rule: '化旺',
+          text: '　' + L.zhi + '化' + b.zhi + '，动而变出' + L.wx + '帝旺之地，谓之化旺，其气日盛。',
+          basis: '《增删卜易·生旺墓绝章第又二十六》「动而变出卯木者谓之化旺」；〈各门类题头总注章〉「用爻遇长生逢帝旺，皆谓之旺」'
+        });
+      }
+      if (bz === T.mu) {
+        // 同月日层：论生不论墓本限于金（丑墓生金，逢冲则论生不论墓）
+        if (L.wx === '金' && muOpened(bz)) {
+          // 觉子曰「若得未土冲动……论生不论墓也」——墓支被日月动爻冲开则不成墓
+          // （〈随鬼入墓章第三十〉实例：「丑墓月破，破罗破网，容易而出」）
+          js.push({
+            tag: '生旺墓绝', rule: '论生不论墓',
+            text: '　' + L.zhi + '化' + b.zhi + '，虽变出' + L.wx + '墓库，然墓支被冲开，破罗破网，论生不论墓。',
+            basis: '《增删卜易·生旺墓绝章第又二十六》觉子曰：「金爻虽墓于丑土，若得未土冲动，或卦中土多生金，论生不论墓也」；〈随鬼入墓章第三十〉「丑墓月破，破罗破网，容易而出」'
+          });
+        } else {
+          js.push({
+            tag: '生旺墓绝', rule: '化墓',
+            text: '　' + L.zhi + '化' + b.zhi + '，动而变出' + L.wx + '墓库，谓之化墓，事体入于收藏。',
+            basis: '《增删卜易·生旺墓绝章第又二十六》「动而变出未土者谓之化墓」；〈随鬼入墓章第三十〉「世爻随鬼入动墓，又动而化墓」'
+          });
+        }
+      }
+      if (bz === T.jue) {
+        if (L.wx === '土' && strong) {
+          // 惟土绝于巳（巳火生土）：旺相得扶则论生不论绝（觉子之宽）
+          js.push({
+            tag: '生旺墓绝', rule: '论生不论绝',
+            text: '　' + L.zhi + '化' + b.zhi + '，虽变出' + L.wx + '绝地，然旺相得生扶，' + ZHI_WX[bz] + '反能生' + L.wx + '，论生不论绝。',
+            basis: '《增删卜易·生旺墓绝章第又二十六》觉子曰：「若土爻旺相，或得日月动爻生扶，再遇巳爻，巳火反能生土，论生不论绝也」'
+          });
+        } else {
+          js.push({
+            tag: '生旺墓绝', rule: '化绝',
+            text: '　' + L.zhi + '化' + b.zhi + '，动而变出' + L.wx + '绝地，谓之化绝，气尽之象。',
+            basis: '《增删卜易·生旺墓绝章第又二十六》「动而变出申金者谓之化绝」'
+          });
+        }
+      }
+    }
+    return js;
+  }
+
+  // ---------- M16：元神 / 忌神 / 仇神 ----------
+  // 《增删卜易·用神元神忌神仇神章第九》：「元神，生用神之神即为元神。忌神克用神之爻也。
+  //   仇神者克元神而生忌神也。」
+  // 《卜筮正宗·原忌仇神论第四》：「生用神之爻即是原神也」「克用神之爻即是忌神也」
+  //   「先看制克原神生扶忌神者，即是仇神也」。
+  // 候选源：本卦六爻 + 月建 + 日辰（《卜筮正宗》「得原神动来生之，或日辰月建作原神生之」）。
+  // 有力/无力判定依《增删卜易·元神忌神衰旺章第十》两侧清单（元神五条有力/六条无力、
+  // 忌神五条有力/七条无力）与《卜筮正宗·原忌仇神论第四》（贪生忘克、贼先受害）。
+  // ★已登记口径存疑：该章忌神有力第二条原文作「忌神动化回头生扶退神者二也」，
+  //   与同章无力第四条「忌神衰动化退神四也」及元神有力第二条「元神动化回头生及化进神者
+  //   二也」对照——若按字面「退神」解，则衰忌神化退神同时命中有力/无力两侧，自相矛盾；
+  //   本实现取对称解（化回头生 / 化进神），并按旺衰与无力④各自归位。详见 README。
+  function identifyYJC(pan, L) {
+    const out = { yuanshen: [], jishen: [], choushen: [] };
+    if (!L) return out;
+    const cands = [];
+    pan.lines.forEach(function (M) {
+      if (M.pos === L.pos) return; // 用神自身不计入三神
+      cands.push({ line: M, from: '卦中' + LINE_NAMES[M.pos], wx: M.wx, moving: M.moving, zhiIdx: M.zhiIdx });
+    });
+    [['月建', pan.pillars.monthZhi], ['日辰', pan.pillars.dayZhi]].forEach(function (o) {
+      cands.push({ line: null, from: o[0], wx: ZHI_WX[o[1]], moving: false, zhiIdx: o[1], isRiYue: true });
+    });
+    cands.forEach(function (c) {
+      if (sheng(c.wx, L.wx)) out.yuanshen.push(c);
+      else if (ke(c.wx, L.wx)) out.jishen.push(c);
+    });
+    // 仇神须同时满足「克某个元神」与「生某个忌神」（两书定义皆含两个条件）
+    cands.forEach(function (c) {
+      const keYS = out.yuanshen.some(function (y) { return ke(c.wx, y.wx); });
+      const shengJS = out.jishen.some(function (j) { return sheng(c.wx, j.wx); });
+      if (keYS && shengJS) out.choushen.push(c);
+    });
+    return out;
+  }
+
+  // 候选神的状态快照（旺衰/临日月/生扶/空破/动变），供 ruleYJC 判定有力无力
+  function yjcState(pan, pil, c) {
+    const mz = pil.monthZhi, dz = pil.dayZhi;
+    const st = {
+      grade: c.isRiYue ? '旺' : wangXiangXiuQiuSi(c.wx, mz),
+      linYue: c.zhiIdx === mz, linRi: c.zhiIdx === dz,
+      kong: pil.kong.indexOf(c.zhiIdx) >= 0,
+      po: chong(c.zhiIdx, mz),
+      moving: !!c.moving,
+      bianKind: null, huiTouHe: false, huaJue: false
+    };
+    const mWx = ZHI_WX[mz], dWx = ZHI_WX[dz];
+    st.riSheng = relation5(c.wx, dWx) === '得生' || relation5(c.wx, dWx) === '比和';
+    st.yueSheng = relation5(c.wx, mWx) === '得生' || relation5(c.wx, mWx) === '比和';
+    st.dongSheng = pan.lines.some(function (M) {
+      return M.moving && M.pos !== (c.line ? c.line.pos : -1) && sheng(M.wx, c.wx);
+    });
+    const T = LY.SHENGWANG_MUJUE[c.wx];
+    if (T) {
+      st.shengwangYuRi = dz === T.sheng || dz === T.wang; // 长生帝旺于日辰
+      st.jueYuRi = dz === T.jue;
+      st.muYuRiYue = dz === T.mu || mz === T.mu;          // 入三墓（简化：日月之墓）
+    }
+    if (c.line && c.line.moving && c.line.bian) {
+      st.bianKind = ruleDongBian(c.line, '官鬼').kind;
+      const bz = ZHI.indexOf(c.line.bian.zhi);
+      st.huiTouHe = liuhe(c.line.zhiIdx, bz);
+      st.huaJue = !!T && bz === T.jue;
+      st.huaPo = chong(bz, mz);
+      st.huaSan = st.bianKind === '回克'; // 化克（回头克）
+    }
+    st.strong = STRONG.indexOf(st.grade) >= 0 || st.linYue || st.linRi || st.riSheng || st.yueSheng || st.dongSheng;
+    return st;
+  }
+
+  function ruleYJC(pan, L, target, yjc) {
+    const js = [];
+    if (!L || (!yjc.yuanshen.length && !yjc.jishen.length && !yjc.choushen.length)) return js;
+    const pil = pan.pillars;
+    const jsMoving = yjc.jishen.filter(function (c) { return c.line && c.line.moving; });
+    const ysMoving = yjc.yuanshen.filter(function (c) { return c.line && c.line.moving; });
+
+    // —— 元神：有力五条 / 无力六条（静元神亦判：旺相或得日月生扶即可生用） ——
+    // 月建/日辰候选不进判定输出：其旺衰克生已由主链「月建」「日辰」两族规则完整
+    // 覆盖，在此复述会造成同一事实两条断语；identifyYJC 结构中仍保留（仇神检测需要）。
+    yjc.yuanshen.forEach(function (c) {
+      if (c.isRiYue) return;
+      const st = yjcState(pan, pil, c);
+      const who = c.from + (c.line ? c.line.lq + c.line.zhi : ZHI[c.zhiIdx]) + c.wx;
+      const reasons = [];
+      if (STRONG.indexOf(st.grade) >= 0 || st.linYue || st.linRi) reasons.push('旺相或临日月');
+      if (st.riSheng || st.yueSheng || st.dongSheng) reasons.push('得日月动爻生扶');
+      if (st.moving && (st.bianKind === '回生' || st.bianKind === '进神')) reasons.push('动化回头生或化进神');
+      if (st.shengwangYuRi) reasons.push('长生帝旺于日辰');
+      if (st.moving && jsMoving.length) reasons.push('与忌神同动（忌神反生元神）');
+      if (st.moving && STRONG.indexOf(st.grade) >= 0 && st.kong) reasons.push('旺动临空化空');
+      if (reasons.length) {
+        js.push({
+          tag: '元神', rule: '元神有力',
+          text: '元神' + who + '生用神——' + reasons.join('、') + '，元神有力，事有可图。',
+          basis: '《增删卜易·元神忌神衰旺章第十》：「元神能生用神者有五：元神旺相或临日月或日月动爻生扶者一也。元神动化回头生及化进神者二也。元神长生帝旺于日辰三也。元神与忌神同动四也。元神旺动临空化空五也」'
+        });
+      } else {
+        const bad = [];
+        if (STRONG.indexOf(st.grade) < 0 && !st.moving) bad.push('休囚不动');
+        if (st.moving && STRONG.indexOf(st.grade) < 0) bad.push('动而休囚');
+        if (STRONG.indexOf(st.grade) < 0 && (st.kong || st.po)) bad.push('休囚又逢空破');
+        if (st.moving && STRONG.indexOf(st.grade) < 0 && st.bianKind === '退神') bad.push('休囚动化退神');
+        if (st.jueYuRi) bad.push('衰而又绝');
+        if (st.muYuRiYue) bad.push('入三墓');
+        if (st.moving && STRONG.indexOf(st.grade) < 0 && (st.huaJue || st.huaSan || st.huaPo)) bad.push('休囚动而化绝化克化破');
+        js.push({
+          tag: '元神', rule: '元神无力',
+          text: '元神' + who + '生用神，然' + (bad.length ? bad.join('、') : '休囚无气') + '，无力生用，虽有如无。',
+          basis: '《增删卜易·元神忌神衰旺章第十》：「元神虽现又有不能生用神者有六：元神休囚，不动或动而休囚又被伤克者一也。元神休囚又逢自空、月破二也。元神休囚动化退神三也。元神衰而又绝四也。元神入三墓五也。元神休囚动而化绝、化克、化破、化散六也。以上元神无力生用神，无用之元神也，虽有如无」'
+        });
+      }
+    });
+
+    // —— 忌神：只判发动之爻（「忌神宜静不宜兴」）与日月忌神；有力五条 / 无力七条 ——
+    // 贪生忘克（《卜筮正宗·原忌仇神论第四》）：忌神动而生元神——五行中克用神者必然
+    // 生元神（克X者生「生X者」：金克木而生水、水生木……五循环皆然），故忌神与元神
+    // 同动时贪生忘克恒成立，本实现以此覆盖有力/无力两侧的「同动」条目。
+    const tanSheng = jsMoving.length > 0 && ysMoving.length > 0 &&
+      jsMoving.some(function (j) { return ysMoving.some(function (y) { return sheng(j.wx, y.wx); }); });
+    yjc.jishen.forEach(function (c) {
+      if (c.isRiYue) return; // 日月忌神由主链「日辰:日辰克伤」覆盖，见元神处同注
+      const st = yjcState(pan, pil, c);
+      const who = c.from + (c.line ? c.line.lq + c.line.zhi : ZHI[c.zhiIdx]) + c.wx;
+      if (!c.line || !c.line.moving) return; // 静爻不判（忌神宜静不宜兴）
+      if (tanSheng && c.line && c.line.moving) {
+        js.push({
+          tag: '忌神', rule: '忌神无力',
+          text: '忌神' + who + '发动克用神，然与元神同动，忌神反生元神，谓之贪生忘克——用神根蒂深固，化凶而为吉。',
+          basis: '《卜筮正宗·原忌仇神论第四》：「倘卦中又动出一爻原神生用，则忌神反生原神，是名贪生忘克，则用神根蒂深固矣，其吉更倍矣」；《增删卜易·元神忌神衰旺章第十》：「忌神与元神同动七也。此忌神者乃无力之忌神也，诸占化凶为吉」'
+        });
+        return;
+      }
+      const reasons = [];
+      if (STRONG.indexOf(st.grade) >= 0 || st.linYue || st.linRi) reasons.push('旺相或临日月');
+      if (st.riSheng || st.yueSheng || st.dongSheng) reasons.push('得日月动爻生扶');
+      if (st.moving && st.bianKind === '回生') reasons.push('动化回头生');
+      if (st.moving && st.bianKind === '进神') reasons.push('动化进神');
+      if (st.moving && STRONG.indexOf(st.grade) >= 0 && st.kong) reasons.push('旺动临空化空');
+      if (st.shengwangYuRi) reasons.push('长生帝旺与日辰');
+      const chouDong = yjc.choushen.some(function (x) { return x.line && x.line.moving; });
+      if (chouDong) reasons.push('与仇神同动');
+      if (reasons.length) {
+        js.push({
+          tag: '忌神', rule: '忌神有力',
+          text: '忌神' + who + '克用神——' + reasons.join('、') + '，忌神当道，诸占大凶。',
+          basis: '《增删卜易·元神忌神衰旺章第十》：「忌神动而克害用神者有五……以上之忌神者如斧戟之忌神，诸占大凶」；《卜筮正宗·忌神歌》「看卦先须看忌神，忌神宜静不宜兴，忌神急要逢伤克，若遇生扶用受刑」'
+        });
+      } else {
+        const bad = [];
+        if (STRONG.indexOf(st.grade) < 0 && !st.moving) bad.push('休囚不动');
+        if (st.moving && STRONG.indexOf(st.grade) < 0) bad.push('动而休囚');
+        if (st.kong || st.po) bad.push('临空破');
+        if (st.muYuRiYue) bad.push('入三墓');
+        if (st.moving && STRONG.indexOf(st.grade) < 0 && st.bianKind === '退神') bad.push('衰动化退神');
+        if (st.jueYuRi) bad.push('衰而又绝');
+        if (st.moving && (st.huaJue || st.huaSan || st.huaPo)) bad.push('动化绝化破化克');
+        js.push({
+          tag: '忌神', rule: '忌神无力',
+          text: '忌神' + who + '虽现，然' + (bad.length ? bad.join('、') : '休囚无气') + '，无力克用，诸占化凶为吉。',
+          basis: '《增删卜易·元神忌神衰旺章第十》：「忌神虽动，不能克用神者有七……此忌神者乃无力之忌神也，诸占化凶为吉」'
+        });
+      }
+    });
+
+    // —— 仇神发动：原神被伤，用神无根，忌神倍力 ——
+    yjc.choushen.forEach(function (c) {
+      if (!c.line || !c.line.moving) return; // 「如卦中仇神发动」——只判动爻
+      const who = c.from + c.line.lq + c.line.zhi + c.wx;
+      js.push({
+        tag: '仇神', rule: '仇神发动',
+        text: '仇神' + who + '发动——仇神克元神而生忌神：原神被伤，用神无根，忌神倍力，其祸可胜道耶。',
+        basis: '《增删卜易·用神元神忌神仇神章第九》「仇神者克元神而生忌神也」；《卜筮正宗·原忌仇神论第四》「如卦中仇神发动，则原神被伤，用神无根，忌神倍力，其祸可胜道耶」'
+      });
+    });
+    return js;
+  }
+
   // ---------- 汇聚：trend 由规则表驱动 ----------
   // supports/harms 为规则标签集合，非数值
   //
@@ -657,6 +1075,11 @@
     ruleFu(pan, L, pil, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
     ruleSanHe(pan, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
     ruleXingHai(L, pil, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
+    // M16 三族：卦型（盘级）/ 生旺墓绝 / 元神忌神仇神——均为陈述层，不入 trend（理由见各函数注释）
+    ruleGuaXing(pan).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
+    ruleChangsheng(pan, L, pil, month.grade, day.supports, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
+    const yjc = identifyYJC(pan, L);
+    ruleYJC(pan, L, target, yjc).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
 
     // 应期线索（只出线索，不下结论）
     // 分层口径：主应期 = 用神解除受制的直接窗口（出空、出月）；
@@ -706,6 +1129,17 @@
         source: pick.source,
         wang: month.grade
       },
+      yjs: {
+        yuanshen: yjc.yuanshen.map(function (c) {
+          return { from: c.from, lq: c.line ? c.line.lq : c.wx, zhi: c.line ? c.line.zhi : ZHI[c.zhiIdx], wx: c.wx, moving: !!c.moving };
+        }),
+        jishen: yjc.jishen.map(function (c) {
+          return { from: c.from, lq: c.line ? c.line.lq : c.wx, zhi: c.line ? c.line.zhi : ZHI[c.zhiIdx], wx: c.wx, moving: !!c.moving };
+        }),
+        choushen: yjc.choushen.map(function (c) {
+          return { from: c.from, lq: c.line ? c.line.lq : c.wx, zhi: c.line ? c.line.zhi : ZHI[c.zhiIdx], wx: c.wx, moving: !!c.moving };
+        })
+      },
       judgments: judgments,
       trend: agg.trend,
       supports: agg.supports,
@@ -733,6 +1167,11 @@
   LY.ruleFu = ruleFu;
   LY.ruleSanHe = ruleSanHe;
   LY.ruleXingHai = ruleXingHai;
+  LY.ruleGuaXing = ruleGuaXing;
+  LY.ruleChangsheng = ruleChangsheng;
+  LY.identifyYJC = identifyYJC;
+  LY.yjcState = yjcState;
+  LY.ruleYJC = ruleYJC;
   LY.aggregateTrend = aggregateTrend;
   LY.analyze = analyze;
 
