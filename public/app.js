@@ -665,6 +665,7 @@
 
   let selModels = loadSelModels();
   let aiStates = {};   // { modelId: { history: [] } }
+  let lastVerify = ''; // 本轮断语给出的「验证标志」；重新起卦时清空
   let castId = null;
   // AI 请求代际管理：每次「开始断卦」递增代数并新建 AbortController；
   // resetAIState（重新起卦/撤销）时 abort 在途请求并递增代数，
@@ -729,7 +730,7 @@
     aiGen++;
     if (aiAbort) { try { aiAbort.abort(); } catch (e) { /* 已 abort 则忽略 */ } }
     aiAbort = null;
-    aiStates = {}; castId = null;
+    aiStates = {}; castId = null; lastVerify = '';
     $('#aiReply').innerHTML = '';
     const cs = $('#aiConsensus'); if (cs) { cs.hidden = true; cs.innerHTML = ''; }
     const box = $('#chatBox'); if (box) box.hidden = true;
@@ -819,9 +820,10 @@
     '确需另取时，须先说明理由，并保留原用神作对照，不得静默改取。',
     '【结论须带依据】每条吉凶与应期结论后，用括号注明所依据的盘面要素（用神／世应／月建／日辰／动爻／旬空）；' +
     '找不到盘面依据的推断只能标为存疑，不得写成结论。',
-    '【结构化结论】正文写完后另起三行，单独成行、不加粗、不编号、不加解释：',
+    '【结构化结论】正文写完后另起四行，单独成行、不加粗、不编号、不加解释：',
     '结论：吉｜凶｜平（只填一个词）',
-    '应期：一句话，含时间尺度',
+    '应期：<干支日或节气节点>（约 <公历区间，形如 10月20日—10月26日>）',
+    '验证标志：一句话，须外部可观察、可判定真假（如「对方主动来电给出明确答复」）；不得写「有转机」「看后续」这类无法核对的话，也不得把结论换个说法再写一遍',
     '用神：六亲＋地支＋卦位',
 
   ].join('\n');
@@ -882,7 +884,15 @@
     if (trend === '中') trend = '平';
     return {
       trend: trend,
-      yingqi: last(/应期\s*[:：]\s*([^\n]{1,80})/),
+      yingqi: last(/应期\s*[:：]\s*([^\n]{1,90})/),
+      // 验证标志：模型须给可观察事实。缺失或含糊（「看后续」「有转机」）时置空，
+      // 前端据此提示「此卦无法回填」——这是回填率的地基，不是装饰。
+      verify: (function (v) {
+        const t = String(v || '').trim();
+        if (!t) return '';
+        if (/看后续|有转机|待观察|视情况|自行判断|难以判断|无法判断|顺其自然/.test(t)) return '';
+        return t;
+      })(last(/验证标志\s*[:：]\s*([^\n]{1,100})/)),
       yongshen: last(/用神\s*[:：]\s*([^\n]{1,60})/)
     };
   }
@@ -920,6 +930,7 @@
     const main = (lay.main || [])[0] || '';
     const aux = (lay.auxiliary || [])[0] || '';
     const items = [];
+    if (lastVerify) items.push('验证标志：' + lastVerify);
     if (main) items.push('应期：' + main + (aux ? '（辅助：' + aux + '）' : ''));
     else if (aux) items.push('应期：' + aux);
     if (y && y.line) {
@@ -1262,6 +1273,7 @@
           if (myGen !== aiGen) return;
 
           const cc = parseConclusion(reply);
+          if (cc.verify) lastVerify = cc.verify;
           concl[m] = cc;
           aiStates[m] = { history: [{ role: 'assistant', content: reply }] };
           const bodyEl = colBody(m);
@@ -1269,7 +1281,10 @@
             const card = cc.trend
               ? '<div class="verdict" style="font-size:13px;margin-bottom:6px">结论 <b>' + esc(cc.trend) + '</b>' +
                 (cc.yingqi ? ' ｜ 应期 ' + esc(cc.yingqi) : '') +
-                (cc.yongshen ? ' ｜ 用神 ' + esc(cc.yongshen) : '') + '</div>'
+                (cc.yongshen ? ' ｜ 用神 ' + esc(cc.yongshen) : '') +
+                (cc.verify ? '<div style="margin-top:4px">验证 <b>' + esc(cc.verify) + '</b></div>'
+                  : '<div class="muted" style="margin-top:4px;font-size:12px">此卦未给出可核对标志，事后无法回填</div>') +
+                '</div>'
               : '';
             bodyEl.innerHTML = card + '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply) + checklistHTML() +
               (corrected ? '<div class="muted" style="margin-top:6px;font-size:12px">已按盘面校正 1 次</div>' : '');
