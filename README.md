@@ -24,11 +24,12 @@
 - **卦型判定**：六冲卦 10（八纯卦 + 天雷无妄 + 雷天大壮）、六合卦 8（泰否复豫节困贲旅）、游魂/归魂各 8——六冲/六合由六爻**纳甲地支**直推（不查卦名表），游魂/归魂由八宫变爻次序定；`paipan()` 直接给出 `isLiuChong / isLiuHe / soul`
 - **节气精确到分钟**：十二节交节时刻查表（1900–2100 共 2412 项，由 lunar-javascript 离线生成差分压缩表，运行时零计算只查表）——替换旧版通用公式（临界日 ±1 日误差，月建一错全盘错）
 - **夜子时流派显式声明**：`LY.nightZiMode`（默认 `'day'`：日柱归当日、时干按**次日**日干五鼠遁起子时——夜子时正法，najia/lunar-javascript 两库实证一致；`'next'`：日柱时柱整体归次日，换日说，iching-shifa 从之）
+- **占时口径固定北京时（UTC+8）**：节气表本身就是北京时，`app.js` 的 `beijingNow()` 让现场摇卦取北京墙上时刻，补录输入也按北京时间解释，UI 与发给模型的排盘文本均标注「北京时间」——旧版直接 `new Date()` 读本机时区，海外或系统时区设错的用户会排出不同年月柱（实测同一 UTC 时刻：上海得丙午年庚寅月，纽约得乙巳年己丑月）
 - **断卦符号化（无评分制）**：废弃旧版 +2.5/-2 算术评分，改为规则判定链——每条规则独立函数、可单测，输出 `judgments[]`（tag/rule/text/basis 典据）+ `trend`（吉/凶/平/待审，规则汇聚表驱动）+ `yingqiClues`（应期线索，只出线索不下结论）
 - **暗动闭环**：静爻被日冲，先查月令旺衰（旺相=暗动，休囚=日破）——修复旧版「文字说了一套、代码没做」
 - **规则覆盖**：月建档（旺相休囚死）、真假月破、日辰生克拱扶、冲散/暗动/日破、合起合绊、静空/动空/真空（**真空以「安静」为前提，动爻永不真空**）、回头生克冲合、进神退神、三合局、相刑相害、飞伏生克、用神两现取舍、伏神引拔、伏神伏世下（不误报用神持世）；**M16 新增三族**：卦型（六冲/六合/游魂/归魂及相变五型，只陈述不入 trend）、生旺墓绝（长生十二宫四正位 + 觉子曰三宽：烈火煎金/论生不论墓/论生不论绝）、元神/忌神/仇神（三神识别、有力无力、贪生忘克）
-- **上层契约层（M15）**：`sensitive.js` / `domain-methods.js` / `fact-audit.js` / `coverage-audit.js` 四个**不参与排盘**的模块——分别负责「敏感问题确定性分流」「所测之事的分析方法与误判清单注入」「断语与卦盘的事实一致性审计」「断语推理一致性审查」。详见下节；自检见 `test-absorb.js`（128 项）
-- **质量保障**：`test-core.js` 89 项基础自检（含入参校验、非法日期文案、`bian` 语义契约锁定） + `test-rules.js` 265 项规则链单测（含直测 `ruleXingHai` 的三刑全覆盖、M16 三族卦型/生旺墓绝/三神的正反用例） + `test-gua-types.js` 卦型判定回归（64 卦全枚举 + 京房八宫卦次整表 + 10 类变异自检） + `test-functions.mjs` 117 项 Functions 层（含上游超时、流式缓冲守卫、限流窗口有界、结果回执白名单与回填端点） + `test-shake.js` 49 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（10 万+字段）+ `tests/guji` 古籍卦例回归（《增删卜易》《卜筮正宗》404 条卦例 + 68 条断语用例 / 12144 断言，断卦规则覆盖 64/78，另附 41 类变异自检）+ `tests/verify` 外部验证集三方对账与零依赖金标准回归；CI 另有「部署隔离断言」守住 `public/` 边界
+- **上层契约层（M15）**：`sensitive.js` / `domain-methods.js` / `fact-audit.js` / `coverage-audit.js` 四个**不参与排盘**的模块——分别负责「敏感问题确定性分流」「所测之事的分析方法与误判清单注入」「断语与卦盘的事实一致性审计」「断语推理一致性审查」。详见下节；自检见 `test-absorb.js`（135 项）
+- **质量保障**：`test-core.js` 89 项基础自检（含入参校验、非法日期文案、`bian` 语义契约锁定） + `test-rules.js` 265 项规则链单测（含直测 `ruleXingHai` 的三刑全覆盖、M16 三族卦型/生旺墓绝/三神的正反用例） + `test-gua-types.js` 卦型判定回归（64 卦全枚举 + 京房八宫卦次整表 + 10 类变异自检） + `test-functions.mjs` 125 项 Functions 层（含上游超时、流式缓冲守卫、限流窗口有界、结果回执白名单与回填端点） + `test-shake.js` 49 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（10 万+字段）+ `tests/guji` 古籍卦例回归（《增删卜易》《卜筮正宗》404 条卦例 + 68 条断语用例 / 12144 断言，断卦规则覆盖 64/78，另附 41 类变异自检）+ `tests/verify` 外部验证集三方对账与零依赖金标准回归；CI 另有「部署隔离断言」守住 `public/` 边界
 
 ### 三库交叉差分（test-diff.mjs，devDependencies 不进生产）
 
@@ -107,7 +108,7 @@
 | M12 CI 门禁 | push/PR 触发：单测 + 差分 + 语法检查 + 脚本加载顺序，只验证不部署 | `.github/workflows/ci.yml`、`npm run test:all` |
 | M13 卦例回归 | 古籍 golden test：《增删卜易》207 条六行卦体（纳甲/六亲/世应/变卦）+《卜筮正宗》197 条表格卦例（另覆盖**六神/伏神**）+ 68 条**断语用例**（覆盖 64/78 条断卦规则），合计断言 12144 项；期望取自定本印刷内容（卦画作输入、装卦作期望），另有 41 类变异自检保证非空转；31 处文本缺陷逐条回溯原文登记（非静默跳过），5 处口径分歧锁定在案；**并已由用例反向修正引擎 1 处**（`ruleXunKong` 真空守卫） | `tests/guji/`（run.mjs / selftest.mjs / coverage.mjs / README.md / known-text-issues.json）、`tools/guji-import.mjs`、`tools/guji-import-bszz.mjs` |
 | M14 卦型判定与外部验证集对账 | ① 三项卦型判定落地引擎（六冲卦 10 / 六合卦 8 / 游魂归魂各 8），期望取自**京房八宫卦次整表**（64 卦全枚举）而非实现自身输出，另附 10 类变异自检，断言 91 项（81 项金标准 + 10 项变异）；② 外部验证集三方对账：引擎侧被裁判库判负 **0 项**，52 项分歧逐条归责于用例（三病因全解释）；③ 裁决基线由**零依赖**回归（173 断言）在日常守护，不需要裁判库在场 | `public/core/paipan.js`、`test-gua-types.js`、`tests/verify/`（run.mjs 判责 / regress.mjs 断言 / README.md / 原始件 v1 / 裁决件 v1.1） |
-| M15 上层契约（分流 / 方法注入 / 断后审计） | ① 敏感分流三档：`block` 五类（自伤暴力、孕产胎儿、确诊类医疗、失踪刑案、重大财法）各有用例，`advisory` 一档（一般健康），且有**反向对照**断言「生产项目」「新的生产项目能不能上马」不得误伤；② 领域方法：`DOMAIN_METHODS` 覆盖 `useSelect` 全部 7 个取值，生成的文本块**必须含「非古籍引文」声明**（防被包装成古籍原文）；③ 断后审计：逐爻六亲 / 世应位置 / 本卦变卦名 / 动爻四类断言各配「写对 → 不报」与「写错 → 报」双向用例，静卦不比对变卦名（防漏判误报），缺参不抛；④ 应期三层：6 组卦 × 6 类用神共 36 案断言「三层并集 === `yingqiClues`（含顺序）」，待审分支同形返回；⑤ 两份 `SYSTEM_PROMPT`（`app.js` 与 `interpret.js`）的四段契约标记逐段比对一致；⑥ 推理审查：真空/动空/待时、真破/假破、暗动/日破/冲散三组成对概念各配「说对 → 放行」「说反 → 告警」双向用例，另有无此结构而断言、用神取错、漏审只作软提示不染红、空输入不炸 | `test-absorb.js`（128 项）、`test-functions.mjs` absorb 组（10 项）、`public/core/sensitive.js`、`public/core/domain-methods.js`、`public/core/fact-audit.js`、`public/core/coverage-audit.js` |
+| M15 上层契约（分流 / 方法注入 / 断后审计） | ① 敏感分流三档：`block` 五类（自伤暴力、孕产胎儿、确诊类医疗、失踪刑案、重大财法）各有用例，`advisory` 一档（一般健康），且有**反向对照**断言「生产项目」「新的生产项目能不能上马」不得误伤；② 领域方法：`DOMAIN_METHODS` 覆盖 `useSelect` 全部 7 个取值，生成的文本块**必须含「非古籍引文」声明**（防被包装成古籍原文）；③ 断后审计：逐爻六亲 / 世应位置 / 本卦变卦名 / 动爻四类断言各配「写对 → 不报」与「写错 → 报」双向用例，静卦不比对变卦名（防漏判误报），缺参不抛；④ 应期三层：6 组卦 × 6 类用神共 36 案断言「三层并集 === `yingqiClues`（含顺序）」，待审分支同形返回；⑤ 两份 `SYSTEM_PROMPT`（`app.js` 与 `interpret.js`）的四段契约标记逐段比对一致；⑥ 推理审查：真空/动空/待时、真破/假破、暗动/日破/冲散三组成对概念各配「说对 → 放行」「说反 → 告警」双向用例，另有无此结构而断言、用神取错、漏审只作软提示不染红、空输入不炸 | `test-absorb.js`（135 项）、`test-functions.mjs` absorb 组（10 项）、`public/core/sensitive.js`、`public/core/domain-methods.js`、`public/core/fact-audit.js`、`public/core/coverage-audit.js` |
 | M16 结果回执与命中率统计 | ① D1 增 `outcome` 列（result/yingqi 枚举 + note + updated_at），既有库 `ALTER TABLE` 迁移；② 回填端点只写 `outcome` 列，`sanitizeOutcome` 白名单三态（合法/清除/非法），口令与读写同源，非法输入不下探数据库，不存在返 404；③ 主 POST（断卦自动保存）的 INSERT 与 ON CONFLICT **不含** `outcome`——回执不被后续保存冲掉（反向锁定断言）；④ 列表下发 `outcome`，前端徽标 + 详情回填表单 + 命中率统计（unclear/pending 不进分母，明示样本不足不构成预测效力证据） | `schema.sql`、`functions/api/records.js`、`public/app.js`、`test-functions.mjs` M16 组（18 项） |
 | M16 断卦三族（卦型 / 生旺墓绝 / 元神忌神仇神） | ① **卦型**：六冲卦 10（八纯+无妄+大壮）、六合卦 8、游魂/归魂各 8 的断卦层陈述 + 相变五型（冲变合/合变冲/合变合/冲变冲/卦变六冲），`ruleGuaXing` 只陈述**不入 trend**（吉凶随占类翻转 + 野鹤「须以用神为主」）；② **生旺墓绝**：长生十二宫四正位（金巳酉丑寅/木亥卯未申/水土申子辰巳/火寅午戌亥），觉子曰三宽逐条落地——烈火煎金（惟金，长生支巳火克金，火多≥2 才论克）、论生不论墓（惟金，丑墓生金、墓支与生支同体，逢冲则宽）、论生不论绝（惟土，绝支巳火生土）；③ **三神**：元神=生用神者、忌神=克用神者、仇神=克元神**且**生忌神（双条件），日月候选进结构（`isRiYue`）但**不进判定输出**（由主链月建/日辰族覆盖，防同一事实两条断语），贪生忘克以五行定理覆盖两侧「同动」条目；④ `buildPanText` 增「卦型」行，两份 `SYSTEM_PROMPT` 同步「以用神—元神—忌神—仇神为主线」 | `public/core/analyze.js`（ruleGuaXing / ruleChangsheng / identifyYJC / ruleYJC）、`test-rules.js` §21-23（80 项）、`tests/guji/cases/zengshan-boyi.json`（+28 条断语用例）、`public/app.js`、`functions/api/interpret.js` |
 
@@ -303,6 +304,26 @@ git status -sb                    # 若显示 ahead，先推送再审计
 
 **验证**：全量回归实跑 EXIT=0——core 89 / rules 265 / absorb 128 / gua-types 91 / guji 12144（含 5 处分歧锁定、31 处文本缺陷登记）/ selftest 41 / coverage 64/78 / functions 117 / diff 104,780 字段零 BUG / verify 173 + 162 / shake 49。三族规则在 `analyze()` 判定链中的接入点、两份 SYSTEM_PROMPT 的同源契约标记均逐处读过，非仅看提交信息。
 
+### 第二十三轮台账（2026-10-17：SSE 心跳 / 审计误报 / 占时口径）
+
+**输入**：DeepSeek V4.1-Flash-1017 发布后的一轮全量复审。基线 `40b2850`，以「读代码 + 实跑实验」为准，不采信注释与既有结论。
+
+| # | 问题 | 核实与修法 | 落点 |
+|---|---|---|---|
+| ① | **SSE 心跳从未发出**（P0） | 双层失效：心跳闭包引用的是 `releaseLock()` 之后的 writer，`write()` 返回 rejected promise 被 `.catch` 吞掉；即便 writer 有效，外层 `finally` 也会在 `return Response` 时立刻 `clearInterval`（只有 timer 做了 `timerHandedOff` 托管，心跳漏了）。修法：全流共用一个 writer；心跳与 timer 一并在 `pipeMergedSSE.finally` 清理 | `functions/api/interpret.js` |
+| ② | 客户端断开不掐上游 | 旧版自建 `AbortController` 只接 `setTimeout`，未接 `request.signal`；前端 abort 后下游背压挂住，上游仍跑到 300s。修法：`request.signal` → `ctrl.abort()`，并置 `clientGone` 跳过降级重试，返回 499 | 同上 |
+| ③ | fact-audit 变卦语境误报 | 「变卦三爻为子孙」被判成「本卦三爻实为兄弟」。修法：按断言前最近出现的「变卦/之卦」与「本卦」判定语境，变卦侧比对 `L.bian`（伏神豁免只对本卦成立） | `public/core/fact-audit.js` |
+| ④ | fact-audit 书名号误报 | `sameGuaName` 只剥尾字「卦」，`《泽天夬》` 被判不符。修法：先剥 `《》「」『』【】` 等成对符号再比对；写错卦名仍报 | 同上 |
+| ⑤ | 占时随本机时区漂移 | 节气表是 UTC+8，`fourPillars` 读本机 getters。实测同一 UTC 时刻：上海得「丙午年庚寅月己酉日庚午时」，纽约得「乙巳年己丑月戊申日甲子时」。修法：`beijingNow()` 让现场占时按北京墙上时间取值，补录输入同口径，UI/panText 标注「北京时间」；core 不动，测试基线不受影响 | `public/app.js` |
+| ⑥ | Gemini 走非流式 | `generateContent` 要等整篇生成完，期间边缘无字节下发且前端无渐进渲染。改 `streamGenerateContent?alt=sse`，`pipeMergedSSE` 增 `candidates[].content.parts[].text` 解析（JSON 回包仍兼容） | `interpret.js` |
+| ⑦ | `panText` 静默截断 | 旧版 `slice(0,4000)` 会砍掉伏神/变爻/契约段且无痕迹。改为超限 413 `PAN_TOO_LONG` | 同上 |
+| ⑧ | 生成上限与心跳不可调 | 新增 `LLM_MAX_TOKENS`（不设则不传，避免写死截断）与 `SSE_HEARTBEAT_MS`（默认 15000，下限 1000） | 同上 |
+| ⑨ | 流式渲染每 chunk 重建 DOM | 1017 输出更快，长答复每秒数十次 `innerHTML`。改为 60ms 合并窗口 + 收尾补发（不丢末段） | `public/app.js` |
+| ⑩ | 模型清单遗留 v4-pro | 官方自 2026-09-14 起把 `deepseek-v4-pro` 重定向到 Flash 并按 Flash 计费。从白名单与芯片下架；`deepseek-flash` 标注「V4.1 · 1017」 | `_lib.js` / `models.js` / `app.js` |
+| ⑪ | 文档默认值漂移 | `LLM_TIMEOUT_MS` 文件头与 README 表格写 90000，代码实为 300000。三处统一为 300000 | `interpret.js` / `README.md` |
+
+**验证**：`core 89 / rules 265 / gua-types 91 / absorb 135 / functions 125` 全绿（本轮 +7 absorb、+8 functions，均含反向对照：变卦语境写错仍报、书名号内写错仍报、旧版心跳只有 1 次 `: ping`、客户端不断开则流不提前结束）。
+
 ### 已知口径分歧（**非** Bug，勿再重报）
 
 以下各项均**非**缺陷，口径均已定，后续审计请勿重报。前两项属**流派门户之别**，本实现已选定其一；涉三合／刑害／世爻覆盖者曾为待定项，已于第六轮依经典定论。改动其一，须同步改 `aggregateTrend` 的 supports/harms 名单或判定门并补断言。列表中的删除线项为**已修项**，保留记录备查（旧版行为与修法一并留档，便于回溯）：
@@ -420,7 +441,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | 文件 | 说明 |
 |------|------|
 | `core.js` | Node 聚合入口（浏览器请按序加载 `public/core/` 八个文件，见 `public/index.html`；后三个为不参与排盘的上层契约层，须排在 `analyze.js` 之后） |
-| `test-absorb.js` | 上层契约层 128 项自检（敏感分流三档 + 误伤白名单、领域方法的非古籍声明、断后审计四类断言双向用例、推理审查三组成对概念双向用例、应期三层 36 案并集不变量） |
+| `test-absorb.js` | 上层契约层 135 项自检（敏感分流三档 + 误伤白名单、领域方法的非古籍声明、断后审计四类断言双向用例、推理审查三组成对概念双向用例、应期三层 36 案并集不变量） |
 | `test-core.js` | 排盘引擎 89 项基础自检（历法锚点、节气边界、表外降级不中断、夜子时、纳甲六亲、卦序、六神起法；另含 `paipan` 入参校验、非法日期文案、`bian` 语义契约锁定） |
 | `test-rules.js` | 断卦规则链 265 项单测（暗动闭环、进退神、三合、夜子时正法、伏神伏世下、两现取舍、交节边界；§21-23 为 M16 三族卦型/生旺墓绝/三神的正反用例共 80 项） |
 | `test-diff.mjs` | 三库交叉差分（4096 组合 + 历法时点 + 夜子时双流派 + 节气全量，10 万+字段） |
@@ -465,7 +486,9 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | `GPT_BASE_URL` | 接口地址，默认官方（中转站改这里） |
 | `GPT_MODELS` | 逗号分隔模型清单，如 `gpt-6-luna,gpt-6-sol`（`gpt-5.2` 类签到送流量但请求不到模型的中转站已被代码层禁用） |
 | `GPT_EFFORT` | 选填，gpt-5/o 系推理强度（minimal/low/medium/high），默认 low |
-| `LLM_TIMEOUT_MS` | 选填，上游大模型请求硬超时（毫秒），默认 `90000`。覆盖「建连 + 读完整流」，防上游挂起时请求悬置；超时返回 `504 LLM_TIMEOUT` |
+| `LLM_TIMEOUT_MS` | 选填，上游大模型请求硬超时（毫秒），默认 `300000`。覆盖「建连 + 读完整流」，防上游挂起时请求悬置；超时返回 `504 LLM_TIMEOUT` |
+| `LLM_MAX_TOKENS` | 选填，单次生成上限。未设置则不传，由上游按自身默认值裁定（避免写死导致长断语被截断或短答复浪费配额） |
+| `SSE_HEARTBEAT_MS` | 选填，SSE 空闲心跳间隔（毫秒），默认 `15000`，下限 `1000`。上游思考期无输出时靠注释行保活，防 CF 边缘 ~100s 无数据 524 |
 
 **自定义供应商（任意 OpenAI 兼容接口，无需改代码）**
 
@@ -497,8 +520,8 @@ git status -sb                    # 若显示 ahead，先推送再审计
 ```bash
 npm install                       # 安装测试裁判库（devDependencies）
 npx wrangler pages dev public     # 本地起 Pages（部署根为 public/，需先在 wrangler.toml 绑定 D1）
-npm test                          # 快速环：基础自检 89 项 + 规则链单测 265 项 + 卦型判定回归 91 项 + 上层契约 128 项（均无需裁判库）
-npm run test:fn                   # Functions 层单测 117 项（jsonWithin 合法性/常量时间口令/模型名白名单/去重与读鉴权/结果回执/gemini 跨模型降级）
+npm test                          # 快速环：基础自检 89 项 + 规则链单测 265 项 + 卦型判定回归 91 项 + 上层契约 135 项（均无需裁判库）
+npm run test:fn                   # Functions 层单测 125 项（jsonWithin 合法性/常量时间口令/模型名白名单/去重与读鉴权/结果回执/gemini 跨模型降级）
 npm run test:paipan               # 排盘金标准回归 173 项（零依赖，只加载 core.js）
 npm run test:ui                   # UI 冒烟 49 断言（Playwright + Edge 通道，需先起本地静态服务）
 npm run test:guji                 # 古籍卦例回归 12144 项断言（《增删卜易》207 +《卜筮正宗》197 + 断语用例 68）

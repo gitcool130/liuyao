@@ -17,8 +17,7 @@ export async function onRequestGet(context) {
   const all = [
     { id: 'gemini-3.6-flash', pv: 'Google', configured: !!env.GEMINI_API_KEY },
     { id: 'gemini-3.8-flash', pv: 'Google', configured: !!env.GEMINI_API_KEY },
-    { id: 'deepseek-flash', pv: 'DeepSeek', configured: !!env.DEEPSEEK_API_KEY },
-    { id: 'deepseek-v4-pro', pv: 'DeepSeek', configured: !!env.DEEPSEEK_API_KEY }
+    { id: 'deepseek-flash', pv: 'DeepSeek', configured: !!env.DEEPSEEK_API_KEY }
   ].concat(gptModels.map(function (id) {
     return { id: id, pv: 'OpenAI', configured: gptKeyed };
   }));

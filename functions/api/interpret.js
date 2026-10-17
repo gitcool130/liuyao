@@ -19,8 +19,11 @@
  *   RATE_LIMIT_PER_MIN 选填，按访客 IP 的每分钟请求上限（**未设置则不限流**）。
  *                      仅本 isolate 内计数，属「降低」而非「根治」。
  *                      **生产当前未设 → 实际不限流**（2026-09-28 曾设 =20，同日按用户要求撤销）。
- *   LLM_TIMEOUT_MS    选填，上游大模型请求的硬超时（毫秒），默认 90000。
+ *   LLM_TIMEOUT_MS    选填，上游大模型请求的硬超时（毫秒），默认 300000（5 分钟）。
  *                      覆盖「建立连接 + 读完整个流」，防止上游挂起（不返回也不断开）时请求悬置。
+ *   SSE_HEARTBEAT_MS  选填，SSE 空闲心跳间隔（毫秒），默认 15000，下限 1000（测试用）。
+ *                      上游思考期可能数十秒无输出，CF 边缘约 100s 无数据即 524。
+ *   LLM_MAX_TOKENS    选填，单次生成上限；未设置则不传（由上游按自身默认值裁定）。
  */
 
 // 供应商解析共享层（白名单 / 自定义供应商 / json 响应 / 常量时间口令比较），与 models.js 同一口径
@@ -183,8 +186,14 @@ export async function onRequestPost(context) {
     return json({ error: 'BAD_JSON', message: '请求体应为 JSON 对象' }, 400);
   }
 
-  const panText = (body.panText || '').toString().slice(0, LIMITS.panText);
-  if (!panText) return json({ error: 'NO_PAN', message: '缺少排盘文本' }, 400);
+  const panTextRaw = (body.panText || '').toString();
+  if (!panTextRaw) return json({ error: 'NO_PAN', message: '缺少排盘文本' }, 400);
+  // 超限显式拒绝，不静默 slice：旧版硬切 4000 字符会把盘面尾巴（伏神/变爻/契约段）
+  // 悄无声息地砍掉，模型仍会照着残缺文本断卦，且服务端无任何痕迹。
+  if (panTextRaw.length > LIMITS.panText) {
+    return json({ error: 'PAN_TOO_LONG', message: '排盘文本超长（上限 ' + LIMITS.panText + ' 字符）' }, 413);
+  }
+  const panText = panTextRaw;
   const history = Array.isArray(body.messages) ? body.messages.slice(-LIMITS.historyTurns) : [];
 
   const model = (body.model || '').toString();
@@ -204,7 +213,7 @@ export async function onRequestPost(context) {
   if (!cfg.key) return json({ error: 'NO_KEY', message: '服务端未配置 ' + provider.toUpperCase() + '_API_KEY 环境变量' }, 500);
 
   // Google 原生接口（generativelanguage.googleapis.com 或 AI Gateway 的 google-ai-studio 原生路径）
-  // 走 generateContent + x-goog-api-key，并关闭 thinking（思考路径常因 high demand 503）；
+  // 走 streamGenerateContent?alt=sse + x-goog-api-key，并关闭 thinking（思考路径常因 high demand 503）；
   // 其余（含 Gateway 的 /openai 兼容路径、DeepSeek 等）按 OpenAI 兼容接口处理
   const isGoogle = cfg.base.indexOf('generativelanguage.googleapis.com') !== -1 ||
     (cfg.base.indexOf('google-ai-studio') !== -1 && cfg.base.slice(-7) !== '/openai');
@@ -233,15 +242,19 @@ export async function onRequestPost(context) {
     return h;
   }
 
-  // 按模型组装一次上游调用（Google 原生 generateContent；其余 OpenAI 兼容流式）。
+  // 按模型组装一次上游调用（Google 原生 SSE；其余 OpenAI 兼容流式）。
   // 抽成函数是为了「跨模型降级」：备选模型要用同一套参数构造规则再发一次。
   function buildCall(modelId) {
     if (isGoogle) {
       const contents = messages.filter(function (m) { return m.role !== 'system'; }).map(function (m) {
         return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] };
       });
+      const genCfg = { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } };
+      if (maxTokens > 0) genCfg.maxOutputTokens = maxTokens;
       return {
-        url: cfg.base + '/models/' + encodeURIComponent(modelId) + ':generateContent',
+        // 原生接口也走流式（alt=sse）：非流式要在服务端等整篇生成完，
+        // 期间 CF 边缘无任何字节下发，长答复会撞 ~100s 的 524；流式还能让前端逐段渲染。
+        url: cfg.base + '/models/' + encodeURIComponent(modelId) + ':streamGenerateContent?alt=sse',
         headers: Object.assign(
           { 'x-goog-api-key': cfg.key, 'Content-Type': 'application/json' },
           gatewayHeaders(cfg.base)
@@ -249,12 +262,13 @@ export async function onRequestPost(context) {
         payload: {
           systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
           contents: contents,
-          generationConfig: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } }
+          generationConfig: genCfg
         }
       };
     }
     // 统一走流式（服务端拼接完整文本后返回），避免中转站网关的 60s 整响应硬超时
     const payload = { model: modelId, messages: messages, stream: true };
+    if (maxTokens > 0) payload.max_tokens = maxTokens;
     if (/^(gpt-5|o[134])/.test(modelId)) {
       // gpt-5 / o 系思考模型：不支持 temperature；推理强度可用环境变量 GPT_EFFORT 调（minimal/low/medium/high），默认 low 防超时
       const effort = (env.GPT_EFFORT || 'low').trim();
@@ -315,9 +329,22 @@ export async function onRequestPost(context) {
   // （可用 LLM_TIMEOUT_MS 调）。
   // 计时器覆盖主调用与降级重试的总时长，超时任一环节都会被 abort 并落入下方 504 分支。
   const timeoutMs = Math.max(1000, parseInt(env.LLM_TIMEOUT_MS || '300000', 10) || 300000);
+  // 生成上限：未配置则不传，避免把上游默认值写死；配置后 Google/OpenAI 两条路径同口径。
+  const maxTokens = Math.max(0, parseInt(env.LLM_MAX_TOKENS || '0', 10) || 0);
+  // 心跳间隔：默认 15s，下限 1s（留 (SSE_HEARTBEAT_MS) 给测试压到 1s 验证「心跳真的发出去了」）。
+  const hbMs = Math.max(1000, parseInt(env.SSE_HEARTBEAT_MS || '15000', 10) || 15000);
   const ctrl = new AbortController();
   let timedOut = false;
+  // 客户端断开（关标签页 / 前端 abort）与「上游超时」必须区分：
+  // 前者应立即掐断上游（否则 stream 写入触发背压挂住，白烧 token 到 300s），
+  // 且不得触发跨模型降级重试——没人接收的第二次调用纯属浪费。
+  let clientGone = false;
   const timer = setTimeout(function () { timedOut = true; ctrl.abort(); }, timeoutMs);
+  if (request.signal) {
+    const onClientAbort = function () { clientGone = true; ctrl.abort(); };
+    if (request.signal.aborted) onClientAbort();
+    else request.signal.addEventListener('abort', onClientAbort, { once: true });
+  }
   // 流式透传路径的超时保护必须延续到「读完整条流」全程。
   // return new Response(readable) 会同步触发下方 finally，若在 finally 里无条件
   // clearTimeout，计时器在流还没开始读时就已注销，上游挂起将导致请求无限悬挂。
@@ -340,7 +367,7 @@ export async function onRequestPost(context) {
         signal: ctrl.signal
       });
     } catch (e) {
-      if (timedOut) throw e;   // 硬超时交由外层统一返回 504
+      if (timedOut || clientGone) throw e;   // 硬超时 / 客户端断开交由外层统一处理
       return { fail: { status: 0, detail: e.message, retryable: true } };
     }
     if (!resp.ok) {
@@ -349,7 +376,9 @@ export async function onRequestPost(context) {
       return { fail: { status: st, detail: t.slice(0, 500), retryable: st === 429 || st >= 500 } };
     }
     const ct = (resp.headers.get('content-type') || '').toLowerCase();
-    if (!isGoogle && call.payload.stream && ct.indexOf('text/event-stream') !== -1) {
+    // 两条路径现在都走流式：OpenAI 兼容（stream:true）与 Google 原生（alt=sse）。
+    // 上游若忽略 stream 参数回 JSON，仍走下面的非流式解析（兼容老中转）。
+    if (ct.indexOf('text/event-stream') !== -1 && (isGoogle || call.payload.stream)) {
       // 上游返回 SSE 时，直接透传给客户端，避免服务端缓冲导致 CF 边缘 524 超时。
       // 服务端拼接完整文本的旧路径已弃用：DeepSeek v4-pro 整体响应可超 120s，
       // CF 边缘约 100s 无数据即断连；透传流式后首字节一到即开始向下发送。
@@ -408,13 +437,17 @@ export async function onRequestPost(context) {
       const { readable, writable } = new TransformStream();
       const enc = new TextEncoder();
       const writer = writable.getWriter();
-      writer.write(enc.encode(': ping\n\n'));
-      writer.releaseLock();
+      // 初始 ping 与下方心跳同源；写入失败（客户端已断开/流已 error）必须就地吞掉，
+      // 未接 catch 的 promise 会在 Workers 里冒成未处理拒绝。
+      writer.write(enc.encode(': ping\n\n')).catch(function () { /* 客户端断开则忽略 */ });
 
       async function pipeMergedSSE(upstream) {
         const reader = upstream.body.getReader();
         const dec = new TextDecoder();
-        const w = writable.getWriter();
+        // 与心跳共用同一个 writer。旧版在这里另取一个 getWriter()，心跳却挂在
+        // 已被 releaseLock() 的旧 writer 上——write() 返回 rejected promise 被
+        // .catch 静默吞掉，15s 心跳从未真正写出，思考期的 524 防护形同虚设。
+        const w = writer;
         let buf = '', outLen = 0, cut = null, reasBuf = '';
         // 向客户端写终止/错误事件（客户端 readStreamSSE 据此 throw 触发重试）
         const writeErr = async function (code, msg) {
@@ -463,6 +496,13 @@ export async function onRequestPost(context) {
                   }
                 } else if (c && c.message && c.message.content) {
                   chunk = c.message.content;
+                } else if (j.candidates) {
+                  // Google 原生 SSE（streamGenerateContent?alt=sse）：
+                  // { candidates:[{ content:{ parts:[{ text:"…" }] } }] }
+                  // thinkingBudget 已关闭，parts 里只有正文；仍按 text 逐段拼接以防多段。
+                  const cand = j.candidates[0];
+                  const parts = cand && cand.content && cand.content.parts;
+                  if (parts) chunk = parts.map(function (p) { return (p && p.text) || ''; }).join('');
                 }
               } catch (e) { /* 忽略无法解析的分片 */ }
               if (chunk) {
@@ -494,15 +534,18 @@ export async function onRequestPost(context) {
         } finally {
           if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
           clearTimeout(timer);
-          try { reader.cancel(); } catch (e) { /* 上游已断开则忽略 */ }
-          try { w.close(); } catch (e) { /* 已关闭则忽略 */ }
+          // cancel()/close() 返回 promise：流已 error 时 cancel 会以存储的错误拒绝，
+          // 同步 try/catch 接不住，必须挂 .catch，否则变成未处理拒绝冒到 isolate 外。
+          try { reader.cancel().catch(function () { /* 上游已断开则忽略 */ }); } catch (e) { /* 已释放 */ }
+          try { w.close().catch(function () { /* 已关闭则忽略 */ }); } catch (e) { /* 已释放 */ }
         }
       }
 
-      // 周期心跳：每 15s 写一次注释行。SSE 注释行以 : 开头，客户端解析器跳过。
+      // 周期心跳：每 hbMs（默认 15s）写一次注释行。SSE 注释行以 : 开头，客户端解析器跳过。
+      // 与正文共用同一 writer：写入按调用顺序排队，每个 ping 都是完整 SSE 帧，不会与其他帧撕裂。
       heartbeat = setInterval(function () {
         writer.write(enc.encode(': ping\n\n')).catch(function () { /* 客户端断开则停 */ });
-      }, 15000);
+      }, hbMs);
       pipeMergedSSE(r.stream).catch(function () { /* 错误已在 pipeMergedSSE 内处理并写终止事件 */ });
       return new Response(readable, {
         headers: {
@@ -517,15 +560,22 @@ export async function onRequestPost(context) {
     // 发生降级时 fallback 标出实际兜底模型（未降级则不出现该字段）
     return json({ reply: r.reply, provider: provider, model: usedModel, truncated: r.cut || undefined, fallback: fellBackTo || undefined });
   } catch (e) {
+    // 客户端已断开：上游已随 ctrl 一并 abort，此处只需安静收尾（响应无人接收）。
+    if (clientGone) {
+      return json({ error: 'CLIENT_ABORTED', message: '客户端已断开' }, 499);
+    }
     if (timedOut) {
       return json({ error: 'LLM_TIMEOUT', message: '大模型 ' + Math.round(timeoutMs / 1000) + ' 秒内未返回完整响应，请重试或改用更快的模型' }, 504);
     }
     return json({ error: 'NET_ERROR', message: '无法连接大模型服务：' + e.message }, 502);
   } finally {
-    // 流式路径的计时器已托管给 pipeMergedSSE（其 finally 负责 clearTimeout），
-    // 此处跳过；否则 return Response 时会提前注销超时保护。
-    if (!timerHandedOff) clearTimeout(timer);
-    if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+    // 流式路径的计时器与心跳都已托管给 pipeMergedSSE（其 finally 负责清除），
+    // 此处必须跳过——否则 return Response 时外层 finally 会立刻清掉刚建好的
+    // setInterval，心跳一次都发不出（与 writer 释放叠加，构成双重失效）。
+    if (!timerHandedOff) {
+      clearTimeout(timer);
+      if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+    }
   }
 }
 

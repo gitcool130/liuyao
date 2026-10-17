@@ -170,6 +170,33 @@ if (fuLine >= 0) {
   eq('伏神同位不误报：' + fuTxt, C.auditFactClaims(fuTxt + '，伏而待引。', panZZ).accepted, true);
 } else { ok('伏神同位用例跳过（本盘无伏神）', true); }
 
+// 变卦语境：模型描述「变卦三爻为子孙」时比的是变卦同位爻，不得拿本卦六亲判成写错。
+const P6 = ['初', '二', '三', '四', '五', '上'];
+const bianLine = panZZ.lines.findIndex(function (l) { return l.bian && l.bian.lq !== l.lq; });
+ok('样本盘存在六亲不同的变爻位（否则本组无判别力）', bianLine >= 0);
+if (bianLine >= 0) {
+  const bLq = panZZ.lines[bianLine].bian.lq;
+  const nLq = panZZ.lines[bianLine].lq;
+  eq('变卦六亲不误报：' + P6[bianLine] + '爻为' + bLq,
+    C.auditFactClaims('变卦' + P6[bianLine] + '爻为' + bLq + '。', panZZ).accepted, true);
+  // 反向对照：变卦语境下写成第三种六亲，仍须报冲突——豁免不能变成整段放行。
+  const other = ['父母', '兄弟', '子孙', '妻财', '官鬼'].filter(function (x) { return x !== bLq; })[0];
+  eq('变卦语境仍审六亲：' + P6[bianLine] + '爻为' + other + '→报冲突',
+    C.auditFactClaims('变卦' + P6[bianLine] + '爻为' + other + '。', panZZ).accepted, false);
+  // 同句并列时各归各：前句说变卦、后句说本卦，不能被前一句的语境带偏。
+  eq('同句本卦/变卦各归各',
+    C.auditFactClaims('变卦' + P6[bianLine] + '爻为' + bLq + '，本卦' + P6[bianLine] + '爻为' + nLq + '。', panZZ).accepted, true);
+}
+
+// 书名号/引号：模型引经据典时普遍写成《泽天夬》，旧版把每个正确卦名都判成不符。
+eq('卦名带书名号不误报',
+  C.auditFactClaims('本卦为《' + panZZ.benName + '》，变卦为《' + panZZ.bianName + '》。', panZZ).accepted, true);
+eq('卦名带直角引号不误报',
+  C.auditFactClaims('本卦为「' + panZZ.benName + '」。', panZZ).accepted, true);
+// 反向对照：书名号里写错卦名，仍须报冲突。
+eq('书名号内卦名写错仍报冲突',
+  C.auditFactClaims('本卦为《火地晋》。', panZZ).accepted, false);
+
 // ---------- 6. 自定义事由的用神建议 ----------
 ok('求财事由推妻财', C.domainBlock('__custom__', '这笔投资能不能回款').indexOf('妻财') >= 0);
 ok('考试事由推父母', C.domainBlock('__custom__', '这次考试能不能录取').indexOf('父母') >= 0);

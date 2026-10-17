@@ -28,8 +28,26 @@
    */
   function sameGuaName(claimed, actual) {
     if (!actual) return false;
-    const c = String(claimed).replace(/卦$/, '');
+    // 先剥掉书名号/引号：模型引经据典时会把卦名写成《泽天夬》，
+    // 旧版只剥尾字「卦」，于是每一个带书名号的正确卦名都被判成「与卦盘不符」。
+    const c = String(claimed)
+      .trim()
+      .replace(/^[《〈「『【(“‘"']+/, '')
+      .replace(/[》〉」』】)”’"']+$/, '')
+      .replace(/卦$/, '');
     return c === actual || (c.length >= 2 && actual.indexOf(c) === 0);
+  }
+
+  /**
+   * 判断某个「N爻」断言说的是不是变卦。
+   * 只看该断言之前最近一次出现的「变卦/之卦/变体」与「本卦/原卦」谁更近：
+   * 「变卦三爻为子孙，本卦三爻为兄弟」两句各归各，不会被前一句带偏。
+   */
+  function inBianContext(src, idx) {
+    const back = src.slice(Math.max(0, idx - 12), idx);
+    const bian = Math.max(back.lastIndexOf('变卦'), back.lastIndexOf('之卦'), back.lastIndexOf('变体'));
+    const ben = Math.max(back.lastIndexOf('本卦'), back.lastIndexOf('原卦'));
+    return bian >= 0 && bian > ben;
   }
 
   function relPattern() {
@@ -63,11 +81,14 @@
     while ((m = reRel.exec(src)) !== null) {
       const pos = POS[m[1]];
       const L = pan.lines[pos];
-      const actual = L.lq;
-      // 伏神同位也作数：断语说「三爻为妻财」时，若妻财正伏在该爻之下，
-      // 说的是飞伏之伏神，不是写错六亲——不报冲突。
-      if (actual !== m[2] && !(L.fu && L.fu.lq === m[2])) {
-        errors.push({ type: '六亲', at: POS_CN[pos], claimed: m[2], actual: actual });
+      // 变卦语境：「变卦三爻为子孙」说的是变卦同位爻（L.bian），不是本卦。
+      // 旧版一律取本卦，模型只要描述变卦六亲就会被判成盘面写反。
+      const bianSide = !!L.bian && inBianContext(src, m.index);
+      const actual = bianSide ? L.bian.lq : L.lq;
+      const at = POS_CN[pos] + (bianSide ? '（变卦）' : '');
+      // 伏神同位只对本卦成立：变卦无伏神。
+      if (actual !== m[2] && !(!bianSide && L.fu && L.fu.lq === m[2])) {
+        errors.push({ type: '六亲', at: at, claimed: m[2], actual: actual });
       }
     }
     checked.push('逐爻六亲');

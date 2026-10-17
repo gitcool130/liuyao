@@ -10,6 +10,8 @@
  *   #19 结果回执（M16）：sanitizeOutcome 白名单三态、回填端点三关拦截、主 POST 不触碰 outcome 列
  *   #20 gemini 跨模型降级：可恢复失败（429/5xx/网络错误）自动落同族备选，4xx 不降级（2026-10-12）
  *   #21 SSE 透传剥离 reasoning_content：思考草稿不得下传，防 fact-audit 假阳性（2026-10-13）
+ *   #22 SSE 心跳必须真实写出（writer 释放后不可再写）+ Google 原生 alt=sse 解析（2026-10-17）
+ *   #23 排盘文本超限显式 413 + 客户端断开即掐断上游（2026-10-17）
  * 运行：npm run test:fn
  * ============================================================ */
 import { jsonWithin, safeEqual, onRequestGet, onRequestDelete, onRequestPost, sanitizeOutcome } from './functions/api/records.js';
@@ -494,6 +496,93 @@ const rReasOnly = await interpretPost({
 });
 const evReasOnly = await readSSEEvents(rReasOnly);
 eq('端到端兜底：纯草稿流末补发，不至空响应', sseText(evReasOnly), '只有草稿的流');
+globalThis.fetch = origFetch;
+
+// ---------- #22 Google 原生流式（alt=sse）与 SSE 心跳（2026-10-17） ----------
+// 事故复盘一：心跳写的是 releaseLock() 之后的 writer，write() 返回 rejected promise
+// 被 .catch 静默吞掉 —— 15s 心跳从未发出，思考期的 524 防护等于不存在。
+// 判别方式：原始响应里 ': ping' 的出现次数。旧版只有开头那一次（1），新版应 ≥2。
+const encG = new TextEncoder();
+let gemSseCalls = [];
+globalThis.fetch = function (url) {
+  gemSseCalls.push(url);
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(encG.encode('data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ text: '水雷' }] } }] }) + '\n\n'));
+      c.enqueue(encG.encode('data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ text: '屯' }] } }] }) + '\n\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const rGs = await postGem('gemini-3.6-flash');
+const evGs = await readSSEEvents(rGs);
+eq('Google 原生流式：正文逐段拼接', sseText(evGs), '水雷屯');
+eq('Google 原生流式：走 streamGenerateContent?alt=sse',
+  gemSseCalls[0].indexOf(':streamGenerateContent?alt=sse') >= 0, true);
+eq('Google 原生流式：无 error 事件（正常完篇）', evGs.some(function (e) { return e.error; }), false);
+
+// 心跳：上游首块后静默 1.4s，心跳间隔压到 1s（SSE_HEARTBEAT_MS 下限）。
+globalThis.fetch = function () {
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(encG.encode(sseLine('甲')));
+      setTimeout(function () { c.enqueue(encG.encode(sseLine('乙'))); c.close(); }, 1400);
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const rPing = await post(Object.assign({ SSE_HEARTBEAT_MS: '1000' }, ENV_GPT));
+const rawPing = await rPing.text();
+const pingCount = rawPing.split(': ping').length - 1;
+eq('心跳真实写出：初始 ping + 周期 ping ≥ 2（旧版只有 1）', pingCount >= 2, true);
+eq('心跳不影响正文完整性', rawPing.indexOf('甲') >= 0 && rawPing.indexOf('乙') >= 0, true);
+
+// ---------- #23 排盘超限 413 与客户端断开（2026-10-17） ----------
+// 旧版对 panText 静默 slice(0, 4000)，盘面尾巴被砍掉而模型照断、服务端无痕迹。
+globalThis.fetch = origFetch;
+const rLong = await interpretPost({
+  request: new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panText: '甲'.repeat(4001), provider: 'gpt', model: 'gpt-6-luna' })
+  }),
+  env: ENV_GPT
+});
+eq('排盘文本超限 → 413（不再静默截断）', rLong.status, 413);
+eq('排盘文本超限 → PAN_TOO_LONG', (await rLong.json()).error, 'PAN_TOO_LONG');
+
+// 客户端断开：request.signal 必须传导到上游 fetch。
+// 判别方式：断开后响应流应「立刻」收尾；旧版不监听 request.signal，流会挂到 300s 硬超时。
+let upstreamCtl = null;
+globalThis.fetch = function (url, opts) {
+  const body = new ReadableStream({
+    start: function (c) { upstreamCtl = c; c.enqueue(encG.encode(sseLine('甲'))); }
+  });
+  if (opts && opts.signal) {
+    opts.signal.addEventListener('abort', function () {
+      try { upstreamCtl.error(new Error('aborted by client')); } catch (e) { /* 已关闭 */ }
+    });
+  }
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const ac = new AbortController();
+const rAbort = await interpretPost({
+  request: new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panText: '占测试', provider: 'gpt', model: 'gpt-6-luna' }),
+    signal: ac.signal
+  }),
+  env: ENV_GPT
+});
+const abortTextP = rAbort.text();
+setTimeout(function () { ac.abort(); }, 60);
+const raced = await Promise.race([
+  abortTextP,
+  new Promise(function (res) { setTimeout(function () { res('__HANG__'); }, 2000); })
+]);
+eq('客户端断开 → 流立即收尾（旧版会挂到 300s）', raced !== '__HANG__', true);
 globalThis.fetch = origFetch;
 
 console.log('PASS:', pass, ' FAIL:', fail);

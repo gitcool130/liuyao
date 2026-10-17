@@ -145,7 +145,10 @@ export function customKeyEnv(id) { return id.toUpperCase().replace(/[^A-Z0-9]/g,
 export function modelWhitelist(env) {
   const wl = {
     gemini: ['gemini-3.6-flash', 'gemini-3.8-flash'],
-    deepseek: ['deepseek-flash', 'deepseek-v4-pro'],
+    // deepseek-flash 现指向 V4.1-Flash-1017（官方原地替换快照，模型名不变）。
+    // deepseek-v4-pro 自 2026-09-14 起已被官方重定向到 Flash 并按 Flash 计费，
+    // 继续挂在清单里会让用户误以为在跑 Pro，故从白名单移除。
+    deepseek: ['deepseek-flash'],
     gpt: gptModelList(env)
   };
   customProviders(env).forEach(function (p) { wl[p.id] = p.models.slice(0, 8); });

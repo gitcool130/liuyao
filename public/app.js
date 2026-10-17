@@ -40,7 +40,20 @@
   // 手动录入标记：初始三背不可直接当作「已定结果」展示（未点任何东西即显示「重·老阳·发动」会误导）
   let manualTouched = false;
 
-  let selectedDate = new Date();
+  // 占时口径固定为北京时间（UTC+8），与 core/data-jieqi.js 的节气时刻表同源。
+  // 旧版直接用 new Date()：本机时区不是 UTC+8 时，同一瞬间会排出不同的年月柱
+  // （实测同一 UTC 时刻，上海得「丙午年庚寅月」，纽约得「乙巳年己丑月」）。
+  // 返回的 Date 在「本机 getters」上恰好呈现北京墙上时间——四柱计算、#dtInput、
+  // fmtDT 读的是同一组 getters，因此三者天然同源，core 无需改动。
+  // 补录模式输入的字符串按「北京墙上时间」解释（new Date('...') 在任意时区下
+  // 本机 getters 都等于用户输入值），与现场模式口径一致。
+  function beijingNow() {
+    const b = new Date(Date.now() + 8 * 3600 * 1000);
+    return new Date(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate(),
+      b.getUTCHours(), b.getUTCMinutes(), b.getUTCSeconds());
+  }
+
+  let selectedDate = beijingNow();
   let records = [];            // 已定之爻 {coins, backs, val, mode}
   let curCoins = ['背', '背', '背'];
   let pan = null;
@@ -86,7 +99,7 @@
   function renderTime() {
     const pil = C.fourPillars(selectedDate);
     $('#timeInfo').innerHTML =
-      '<div class="muted">公历 ' + fmtDT(selectedDate) +
+      '<div class="muted">公历 ' + fmtDT(selectedDate) + '（北京时间）' +
       (timeMode === 'live' ? '（现场摇卦 · ' + (timeLocked ? '已锁定于首摇' : '开摇即锁定') + '）' : '（补录模式 · 时间可改）') + '</div>' +
       '<div class="gz">' + pil.yearGZ + '年 · ' + pil.monthGZ + '月 · <b>' + pil.dayGZ + '日</b> · ' + pil.hourGZ + '时</div>' +
       '<div class="muted">月建 <b class="gz-hi">' + C.ZHI[pil.monthZhi] + '</b> ｜ 日辰 <b class="gz-hi">' + C.ZHI[pil.dayZhi] + '</b> ｜ 旬空 <b class="kong">' + pil.kongStr + '</b></div>' +
@@ -186,7 +199,7 @@
     revealed = null; // 清除上一爻的揭晓态，进入新一轮盲摆
     // 现场模式：首摇瞬间锁定占时（M7）
     if (timeMode === 'live' && !timeLocked) {
-      selectedDate = new Date();
+      selectedDate = beijingNow();
       timeLocked = true;
       lockedDate = selectedDate; // 记忆锁定时刻，供模式往返后恢复
       renderTime();
@@ -236,7 +249,7 @@
     resetTossState();
     timeLocked = false;           // 重新起卦解锁时间，等待新的首摇
     lockedDate = null;
-    if (timeMode === 'live') selectedDate = new Date();
+    if (timeMode === 'live') selectedDate = beijingNow();
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
     $('#useSelect').value = '';
     const uc = $('#useCustom'); if (uc) { uc.value = ''; uc.hidden = true; }
@@ -260,12 +273,12 @@
         if (lockedDate) selectedDate = new Date(lockedDate.getTime());
       } else {
         lockedDate = null; // 尚未开摇：解除记忆，取当前时刻
-        selectedDate = new Date();
+        selectedDate = beijingNow();
       }
     }
     this.textContent = (timeMode === 'live') ? '切换补录模式' : '切回现场摇卦';
     const lbl = $('#dtLabel');
-    if (lbl) lbl.textContent = timeMode === 'live' ? '占问时刻（现场摇卦 · 首摇锁定）：' : '占问时刻（补录模式 · 可改）：';
+    if (lbl) lbl.textContent = timeMode === 'live' ? '占问时刻（北京时间 · 现场摇卦 · 首摇锁定）：' : '占问时刻（北京时间 · 补录模式 · 可改）：';
     renderTime();
     // 六爻已成时：时刻变了必须重排盘，否则 #timeInfo 显示锁定时刻而 pan.pillars 仍是补录时刻
     if (records.length === 6) computePan();
@@ -380,7 +393,7 @@
     resetTossState();
     // 现场模式下首摇会锁时刻；按卦名起卦不经过首摇，故补一次锁定，保持口径一致
     if (timeMode === 'live' && !timeLocked) {
-      selectedDate = new Date(); timeLocked = true; lockedDate = selectedDate; renderTime();
+      selectedDate = beijingNow(); timeLocked = true; lockedDate = selectedDate; renderTime();
     }
     // 三件套必须重渲染：resetTossState 已把 curCoins 重置为背背背、revealed 置空，
     // 但 DOM 仍是上一轮状态——爻位堆叠显示旧卦爻值（与排盘表矛盾）、
@@ -483,7 +496,7 @@
   function buildPanText(forAI) {
     const pil = pan.pillars;
     let txt = '【六爻排盘】\n';
-    txt += '时间：' + fmtDT(selectedDate) + '（' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时，旬空' + pil.kongStr + '）\n';
+    txt += '时间：' + fmtDT(selectedDate) + '（北京时间；' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时，旬空' + pil.kongStr + '）\n';
     if (pil.outOfTable) txt += '注：该年超出节气时刻表覆盖范围（1900–2100），月柱与年柱按典型交节日近似（±2 日以内），日柱与时柱为精确值。\n';
     const q = currentQuestion();
     if (q) txt += '所测：' + q + '\n';
@@ -551,8 +564,7 @@
   let MODELS = [
     { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', pv: 'Google', tip: '快' },
     { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', pv: 'Google', tip: '高峰期易过载' },
-    { id: 'deepseek-flash', label: 'DeepSeek Flash', pv: 'DeepSeek', tip: '快' },
-    { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro', pv: 'DeepSeek', tip: '深推理 · 慢' }
+    { id: 'deepseek-flash', label: 'DeepSeek V4.1 Flash', pv: 'DeepSeek', tip: '1017 快照' }
   ];
   const DEFAULT_MODELS = ['gemini-3.6-flash', 'deepseek-flash'];
 
@@ -560,8 +572,7 @@
   const MODEL_TIPS = {
     'gemini-3.6-flash': '快',
     'gemini-3.8-flash': '高峰期易过载',
-    'deepseek-flash': '快',
-    'deepseek-v4-pro': '深推理 · 慢',
+    'deepseek-flash': 'V4.1 · 1017',
     'gpt-6-luna': '便宜 · 快',
     'gpt-6-sol': '均衡',
     'gpt-6-astra': '最强 · 贵'
@@ -842,10 +853,13 @@
   // 读取服务端透传的 SSE 流。服务端已把上游 delta.content 归一为简单
   // data: {"t":"..."} 行（reasoning_content 思考草稿在服务端剥离，不透传），
   // 客户端只需累加 t 字段。
+  // 流式渲染合并窗口：60ms ≈ 16 帧/秒，肉眼仍是连续的，但 innerHTML 重建次数降一个量级。
+  const STREAM_RENDER_MS = 60;
   async function readStreamSSE(res, onStream) {
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = '', full = '', emitted = '';
+    let lastEmit = 0, flushTimer = null;
     try {
       while (true) {
         const r = await reader.read();
@@ -872,16 +886,29 @@
             /* 其余无法解析的分片忽略 */
           }
         }
-        // 仅在内容有增长时回调：SSE 心跳/注释行也会触发 read() 返回，
-        // 无条件回调会让长文本每秒重建多次 innerHTML，导致闪烁与选中丢失。
+        // 仅在内容有增长时回调；并按 STREAM_RENDER_MS 合并渲染：
+        // 旧版只做了「文本没变就不回调」，流一快仍是每 chunk 重建一次 innerHTML
+        // （1017 输出更短更快，长答复可达数十帧/秒），移动端会抖且选中易丢。
         if (onStream && full && full !== emitted) {
-          emitted = full;
-          onStream(full);
+          const now = Date.now();
+          if (now - lastEmit >= STREAM_RENDER_MS) {
+            if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+            lastEmit = now; emitted = full; onStream(full);
+          } else if (!flushTimer) {
+            flushTimer = setTimeout(function () {
+              flushTimer = null;
+              if (full !== emitted) { lastEmit = Date.now(); emitted = full; onStream(full); }
+            }, STREAM_RENDER_MS);
+          }
         }
       }
     } finally {
-      try { reader.cancel(); } catch (e) { /* 上游已断开则忽略 */ }
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      // cancel() 返回 promise：流已被上游 error 时以存储错误拒绝，需就地吞掉
+      try { reader.cancel().catch(function () { /* 上游已断开则忽略 */ }); } catch (e) { /* 已释放 */ }
     }
+    // 收尾补发：被合并窗口压在手里的最后一小段必须落地，否则正文末尾会缺字。
+    if (onStream && full && full !== emitted) { emitted = full; onStream(full); }
     return full;
   }
 
