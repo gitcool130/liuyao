@@ -351,5 +351,36 @@ eq('审计覆盖项含旬空',
 eq('「用神旬空」不在本层审（需 analyze，防越界）',
   C.auditFactClaims('用神旬空，须待出空。', panDaNew).accepted, true);
 
+// ---------- 「用神克世」按占类分流（2026-10-17）----------
+// 《黄金策》「用克世勿作凶看……占求财财爻克世者必得；占行人即归；占医药子孙克世者即愈……
+// 若占功名，官鬼克世，非祸即灾」。旧版文案固定为「事与己有碍，宜谨慎」，模型据此
+// 一概断凶——guji 用例 zsby-1406（求财，书断「许之必得」）即因此被判反。
+const panKS = C.paipan([1, 1, 1, 0, 1, 1], D0);   // 风天小畜，妻财克世
+const ksJ = function (target, opts) {
+  return (C.analyze(panKS, target, opts).judgments || []).filter(function (j) { return j.rule === '用神克世'; })[0];
+};
+eq('克世样本：确有用神克世判语', !!ksJ('妻财'), true);
+ok('无 topic → 给出四类书证并禁止一概断凶',
+  /随占类翻转/.test(ksJ('妻财').text) && /不得一概断凶/.test(ksJ('妻财').text));
+ok('求财 → 明言「财爻克世者必得」',
+  /必得/.test(ksJ('妻财', { topic: '这笔投资能不能回款' }).text) &&
+  !/有碍/.test(ksJ('妻财', { topic: '这笔投资能不能回款' }).text));
+ok('行人 → 明言「即归」', /即归/.test(ksJ('妻财', { topic: '他什么时候回来' }).text));
+const ksBing = ksJ('妻财', { topic: '这个病什么时候好' });
+ok('占病取错用神 → 提示复核取用，不套用鬼克世',
+  /复核取用/.test(ksBing.text) && !/官鬼克世/.test(ksBing.text));
+ok('旧文案「事与己有碍」已不再出现',
+  C.analyze(panKS, '妻财').bullets.join('').indexOf('事与己有碍') < 0);
+
+const panGG = C.paipan([1, 1, 1, 0, 0, 0], D0);   // 地天泰，官鬼克世
+const ggJ = function (opts) {
+  return (C.analyze(panGG, '官鬼', opts).judgments || []).filter(function (j) { return j.rule === '用神克世'; })[0];
+};
+eq('官鬼克世样本：成立', !!ggJ(), true);
+ok('功名 + 官鬼 → 明言「非祸即灾」', /非祸即灾/.test(ggJ({ topic: '这次考试能不能过' }).text));
+ok('占病 + 官鬼 → 明言「缠绵」，不套功名口径',
+  /缠绵/.test(ggJ({ topic: '这个病什么时候好' }).text) &&
+  !/非祸即灾/.test(ggJ({ topic: '这个病什么时候好' }).text));
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

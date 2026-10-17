@@ -404,7 +404,45 @@
   }
 
   // ---------- 规则 9：与世爻关系 ----------
-  function ruleShi(pan, L, target) {
+  /**
+   * 「用神克世」的文案须随占类翻转。
+   * 《黄金策》《增删卜易》：「用克世勿作凶看……如占求财，财爻克世者必得；占行人，
+   * 用神克世者即归；占医药，子孙克世者即愈。外此数占，俱不宜用神而克世也。
+   * 若占功名，官鬼克世，非祸即灾。」
+   *
+   * 旧版把这条压成固定一句「事与己有碍，宜谨慎」：trend 层本已不纳入（口径正确），
+   * 但文案层仍是单一方向，模型读到就当凶判——guji 用例 zsby-1406（求财，书断
+   * 「应临月建之财以克世，许之必得」）即因此被判成凶。
+   *
+   * topic 缺省（只选了宽泛类别）时不猜：把四类书证一并给出，由模型按所问自取，
+   * 避免用「官鬼」这个含功名/官司/疾病三类的大类去做错误分流。
+   */
+  function keShiText(target, topic) {
+    const t = String(topic || '').trim();
+    const general = '用神克世爻，吉凶随占类翻转（《黄金策》）：占求财「财爻克世者必得」、' +
+      '占行人「用神克世者即归」、占医药「子孙克世者即愈」；占功名则「官鬼克世，非祸即灾」；' +
+      '其余占类方作有碍看。须按所问之事择一，不得一概断凶。';
+    if (!t) return general;
+    if (/病|疾|医|药|健康|就诊|手术/.test(t)) {
+      if (target === '子孙') return '用神（子孙）克世爻，占医药者「子孙克世者即愈」，主药力及身、病可解。';
+      // 占病正取官鬼（病神）；若取到别的六亲，说明取用有误，不可硬套「鬼克世」文案
+      if (target === '官鬼') return '用神（官鬼）克世爻，占病者鬼来克世，病势切身，主缠绵难退；须并看用神旺衰与日月生扶。';
+      return '用神（' + target + '）克世爻，占病者用神来克世，病势切身；占病正取官鬼为病神、子孙为医药，' +
+        '今取' + target + '，须先复核取用是否得当。';
+    }
+    if (/求财|财运|生意|投资|回款|买卖|借贷|讨债|营收/.test(t)) {
+      if (target === '妻财') return '用神（妻财）克世爻，占求财者「财爻克世者必得」——财来就我，主可得，惟得之须费些心力。';
+      return general;
+    }
+    if (/行人|寻人|走失|失联|外出|归来|回来|回程|返程|到家/.test(t)) return '用神克世爻，占行人者「用神克世者即归」——主其人自回。';
+    if (/功名|求官|升迁|仕途|科举|应试|考试|录取/.test(t)) {
+      if (target === '官鬼') return '用神（官鬼）克世爻，占功名者「官鬼克世，非祸即灾」，主求名反受其累。';
+      return general;
+    }
+    return general;
+  }
+
+  function ruleShi(pan, L, target, topic) {
     const js = [];
     if (target === 'shi') return js;
     const S = pan.lines[pan.shi];
@@ -422,7 +460,7 @@
     } else if (sheng(L.wx, S.wx)) {
       js.push({ tag: '世爻', rule: '用神生世', text: '用神生世爻（' + S.lq + S.zhi + '），事来就我。', basis: '' });
     } else if (ke(L.wx, S.wx)) {
-      js.push({ tag: '世爻', rule: '用神克世', text: '用神克世爻，事与己有碍，宜谨慎。', basis: '' });
+      js.push({ tag: '世爻', rule: '用神克世', text: keShiText(target, topic), basis: '' });
     } else if (sheng(S.wx, L.wx)) {
       js.push({ tag: '世爻', rule: '世生用神', text: '世爻生用神，我求于事，须费力。', basis: '' });
     } else if (ke(S.wx, L.wx)) {
@@ -1040,7 +1078,8 @@
   // ---------- 主函数 ----------
   // target: '妻财'|'官鬼'|'父母'|'子孙'|'兄弟'|'shi'
   // 返回 { yongshen, judgments, trend, yingqiClues, bullets, verdict }
-  function analyze(pan, target) {
+  function analyze(pan, target, opts) {
+    const topic = (opts && opts.topic) || '';
     const pil = pan.pillars;
     const pick = pickYongshen(pan, target);
     const judgments = [];
@@ -1071,7 +1110,7 @@
       xunkong.judgments, dongbian.judgments, others].forEach(function (arr) {
       arr.forEach(function (j) { judgments.push(j); bullets.push(j.text); });
     });
-    ruleShi(pan, L, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
+    ruleShi(pan, L, target, topic).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
     ruleFu(pan, L, pil, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
     ruleSanHe(pan, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
     ruleXingHai(L, pil, target).forEach(function (j) { judgments.push(j); bullets.push(j.text); });
