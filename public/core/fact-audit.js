@@ -83,7 +83,15 @@
       const L = pan.lines[pos];
       // 变卦语境：「变卦三爻为子孙」说的是变卦同位爻（L.bian），不是本卦。
       // 旧版一律取本卦，模型只要描述变卦六亲就会被判成盘面写反。
-      const bianSide = !!L.bian && inBianContext(src, m.index);
+      const bianCtx = inBianContext(src, m.index);
+      // 静卦（无动爻）根本没有变卦：断语提「变卦」属凭空造盘，须明确报「无变卦」，
+      // 不能退化成「拿本卦六亲去比」——那样会把「无中生有」误报成「六亲写反」，
+      // 用户看到的 actual 是本卦六亲，完全误导。
+      if (bianCtx && !L.bian) {
+        errors.push({ type: '变卦', at: POS_CN[pos], claimed: m[2], actual: '此卦六爻皆静，无变卦' });
+        continue;
+      }
+      const bianSide = !!L.bian && bianCtx;
       const actual = bianSide ? L.bian.lq : L.lq;
       const at = POS_CN[pos] + (bianSide ? '（变卦）' : '');
       // 伏神同位只对本卦成立：变卦无伏神。
@@ -108,13 +116,20 @@
 
     // 3. 本卦 / 变卦卦名：「本卦为水雷屯」「变卦：泽雷随」
     [['本卦', pan.benName], ['变卦', pan.bianName]].forEach(function (pair) {
-      if (!pair[1]) return; // 静卦无变卦，不比对
       const re = new RegExp(pair[0] + '(?:为|是|：|:)\\s*([^\\s，。；、（）()"\']+)', 'g');
       let mm;
       while ((mm = re.exec(src)) !== null) {
         const claimed = mm[1];
         // 只比对「确实像卦名」的片段：卦名 3–5 字，过长的多半是「本卦为X之Y」这类连写
         if (claimed.length < 3 || claimed.length > 6) continue;
+        // 静卦说「变卦为X」同样是凭空造盘：原实现遇 bianName 为空直接 return，
+        // 整段跳过——模型可以随口编一个变卦而无人拦。含「无/静/不变」的是在
+        // 陈述「没有变卦」，不算错，跳过以免误报。
+        if (!pair[1]) {
+          if (/无|静|不变/.test(claimed)) continue;
+          errors.push({ type: pair[0] + '卦名', claimed: claimed, actual: '此卦六爻皆静，无变卦' });
+          continue;
+        }
         if (!sameGuaName(claimed, pair[1])) {
           errors.push({ type: pair[0] + '卦名', claimed: claimed, actual: pair[1] });
         }
@@ -131,6 +146,43 @@
       }
     }
     checked.push('动爻位置');
+
+    // 5. 旬空：「世爻旬空」「三爻空亡」「四爻不空」
+    // 此前审计器完全不看旬空——而「父母持世空亡」这类判断恰恰是断语里最常见的
+    // 定性依据之一，模型说空就空、说不空就不空，无人对撞。只校验显式挂在
+    // 世/应/具体爻位上的表述；「用神旬空」需 analyze() 结果，此处不涉。
+    const pil = pan.pillars || {};
+    if (Array.isArray(pil.kong)) {
+      const kongStr = pil.kongStr || pil.kong.map(function (i) { return (LY.ZHI || [])[i]; }).join('');
+      const lineOf = function (tag) {
+        if (tag === '世') return pan.lines[pan.shi];
+        if (tag === '应') return pan.lines[pan.ying];
+        return pan.lines[POS[tag]];
+      };
+      const atOf = function (tag) {
+        if (tag === '世' || tag === '应') return tag + '爻';
+        return POS_CN[POS[tag]];
+      };
+      // 肯定式在前、否定式单独一条，避免「不空亡」被「空亡」截断
+      [{ re: '(世|应|[初二三四五上])爻(?:值|临|逢|落|亦|又|已)?\\s*(?:旬空|空亡)', claimKong: true },
+       { re: '(世|应|[初二三四五上])爻(?:值|临|逢|落|亦|又|已)?\\s*(?:不空亡|不空)', claimKong: false }
+      ].forEach(function (pat) {
+        const re = new RegExp(pat.re, 'g');
+        let mm;
+        while ((mm = re.exec(src)) !== null) {
+          const L = lineOf(mm[1]);
+          if (!L || typeof L.zhiIdx !== 'number') continue;
+          const actualKong = pil.kong.indexOf(L.zhiIdx) >= 0;
+          if (actualKong === pat.claimKong) continue;
+          errors.push({
+            type: '旬空', at: atOf(mm[1]),
+            claimed: pat.claimKong ? '旬空' : '不空',
+            actual: actualKong ? ('旬空（' + kongStr + '空）') : '不空'
+          });
+        }
+      });
+      checked.push('旬空');
+    }
 
     return {
       accepted: errors.length === 0,

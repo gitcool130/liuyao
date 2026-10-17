@@ -308,5 +308,48 @@ eq('「以官鬼为忌神」→不审用神', C.auditCoverage('以官鬼为忌�
 eq('「取父母为原神」→不审用神', C.auditCoverage('取父母为原神，原神有力。', ripo).yongshen, null);
 eq('正常取用仍审（防豁免过头）', C.auditCoverage('以妻财为用神观之。', ripo).accepted, false);
 
+// ---------- 静卦路径（2026-10-17）----------
+// 静卦（六爻皆静）没有变卦。旧版两处退化：
+//   ①「变卦三爻为X」因 L.bian 为空而回落到本卦，报出「实为<本卦六亲>」——把
+//      「凭空造盘」误报成「六亲写反」，用户读到的 actual 完全误导；
+//   ②「变卦为X」因 bianName 为空被 `if (!pair[1]) return` 整段跳过，静默放行。
+const panJingNew = C.paipan([1, 1, 0, 0, 1, 0], new Date(2026, 9, 17, 22, 30));
+eq('静卦样本：无变卦', panJingNew.hasBian, false);
+eq('静卦样本：卦名', panJingNew.benName, '水泽节');
+
+const j1 = C.auditFactClaims('变卦三爻为兄弟。', panJingNew);
+eq('静卦提变卦六亲→报冲突', j1.accepted, false);
+ok('静卦提变卦六亲→提示「无变卦」而非本卦六亲',
+  j1.errors.length > 0 && j1.errors[0].actual.indexOf('无变卦') >= 0);
+
+const j2 = C.auditFactClaims('变卦为天风姤。', panJingNew);
+eq('静卦凭空给变卦名→报冲突', j2.accepted, false);
+ok('静卦凭空给变卦名→提示「无变卦」',
+  j2.errors.length > 0 && j2.errors[0].actual.indexOf('无变卦') >= 0);
+
+eq('静卦说「变卦无」→不误报',
+  C.auditFactClaims('此卦六爻皆静，变卦无。', panJingNew).accepted, true);
+eq('动卦提变卦六亲仍照常比对（防修过头）',
+  C.auditFactClaims('变卦三爻为兄弟。', panZZ).accepted, false);
+
+// ---------- 旬空校验（2026-10-17）----------
+// 此前审计器完全不看旬空：模型说「父母持世空亡」或「世爻不空」都无人对撞。
+const panDaNew = C.paipan([0, 1, 1, 1, 1, 0], new Date(2026, 9, 17, 22, 30)); // 泽风大过，世四爻亥，戌亥空
+eq('大过样本：卦名', panDaNew.benName, '泽风大过');
+eq('大过样本：世在四爻', C.LINE_NAMES[panDaNew.shi], '四爻');
+eq('大过样本：世爻亥值旬空', panDaNew.pillars.kong.indexOf(panDaNew.lines[panDaNew.shi].zhiIdx) >= 0, true);
+
+eq('世爻实空，断语作旬空→放行',
+  C.auditFactClaims('父母持世，世爻旬空，出空之日应。', panDaNew).accepted, true);
+const k1 = C.auditFactClaims('世爻不空，旺而可用。', panDaNew);
+eq('世爻实空，断语作不空→报冲突', k1.accepted, false);
+ok('旬空冲突带出空亡地支', k1.errors.length > 0 && k1.errors[0].actual.indexOf('戌亥') >= 0);
+eq('初爻不空，断语作旬空→报冲突',
+  C.auditFactClaims('初爻旬空，无力。', panDaNew).accepted, false);
+eq('审计覆盖项含旬空',
+  C.auditFactClaims('', panDaNew).checked.indexOf('旬空') >= 0, true);
+eq('「用神旬空」不在本层审（需 analyze，防越界）',
+  C.auditFactClaims('用神旬空，须待出空。', panDaNew).accepted, true);
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);
