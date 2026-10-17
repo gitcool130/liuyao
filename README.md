@@ -322,6 +322,11 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | ⑩ | 模型清单遗留已停用的 DeepSeek 深推理型号 | 官方自 2026-09-14 起把该型号重定向到 Flash 并按 Flash 费率计费。从白名单与芯片下架；`deepseek-flash` 标注「V4.1 · 1017」 | `_lib.js` / `models.js` / `app.js` |
 | ⑪ | 文档默认值漂移 | `LLM_TIMEOUT_MS` 文件头与 README 表格写 90000，代码实为 300000。三处统一为 300000 | `interpret.js` / `README.md` |
 
+| ⑫ | 用神未锁定 | 盘面文本新增「用神：六亲+地支+卦位+旺衰」，两份 `SYSTEM_PROMPT` 同步加【用神既定】契约——模型不得静默改取，确需另取须说明理由并保留原用神对照 | `app.js` / `interpret.js` |
+| ⑬ | 盘面冲突只提示不改稿 | 断后 `fact-audit` 检出冲突时，把冲突点回灌模型重写**一次**（失败保留首稿）；仅首轮断卦触发，追问不重复计费 | `public/app.js` |
+| ⑭ | 断语无法验证 | 断语下方新增「验证清单」：应期线索、用神位置与旺衰、结果回填指引；只读规则链结果，不新增判断 | 同上 |
+| ⑮ | 同盘结论漂移 | 服务端断卦 `temperature` 0.3 → 0.2 | `functions/api/interpret.js` |
+
 **验证**：`core 89 / rules 265 / gua-types 91 / absorb 135 / functions 125` 全绿（本轮 +7 absorb、+8 functions，均含反向对照：变卦语境写错仍报、书名号内写错仍报、旧版心跳只有 1 次 `: ping`、客户端不断开则流不提前结束）。
 
 ### 已知口径分歧（**非** Bug，勿再重报）

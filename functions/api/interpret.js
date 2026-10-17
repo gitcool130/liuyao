@@ -114,7 +114,11 @@ export const SYSTEM_PROMPT = [
   '不重新起卦、不因当前日期变化而重算原盘、不事后改写首次结论；' +
   '只有当事项、对象、目标或时间范围发生实质变化时才说明需另起一卦。',
   '【现实边界】健康、生死、失踪、胎儿性别、重大财法决策不得由卦象替代现实判断；' +
-  '涉及此类内容须明确提示就医、报警或咨询专业人士，不得写成医学诊断或法律意见。'
+  '涉及此类内容须明确提示就医、报警或咨询专业人士，不得写成医学诊断或法律意见。',
+  '【用神既定】排盘文本已由规则引擎给出用神（六亲＋地支＋卦位）。断卦须沿用该用神；' +
+  '确需另取时，须先说明理由，并保留原用神作对照，不得静默改取。',
+  '【结论须带依据】每条吉凶与应期结论后，用括号注明所依据的盘面要素（用神／世应／月建／日辰／动爻／旬空）；' +
+  '找不到盘面依据的推断只能标为存疑，不得写成结论。'
 ].join('\n');
 
 function providerConfig(env, provider) {
@@ -249,7 +253,7 @@ export async function onRequestPost(context) {
       const contents = messages.filter(function (m) { return m.role !== 'system'; }).map(function (m) {
         return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] };
       });
-      const genCfg = { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } };
+      const genCfg = { temperature: 0.2, thinkingConfig: { thinkingBudget: 0 } };
       if (maxTokens > 0) genCfg.maxOutputTokens = maxTokens;
       return {
         // 原生接口也走流式（alt=sse）：非流式要在服务端等整篇生成完，
@@ -274,7 +278,7 @@ export async function onRequestPost(context) {
       const effort = (env.GPT_EFFORT || 'low').trim();
       if (effort && effort !== 'none') payload.reasoning_effort = effort;
     } else {
-      payload.temperature = 0.3;
+      payload.temperature = 0.2;
     }
     const headers = Object.assign(
       { 'Authorization': 'Bearer ' + cfg.key, 'Content-Type': 'application/json' },

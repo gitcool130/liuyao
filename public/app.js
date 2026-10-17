@@ -502,6 +502,12 @@
     if (q) txt += '所测：' + q + '\n';
     txt += '本卦：' + pan.benName + '（' + pan.palace + '宫·' + pan.palaceWx + '）' +
       (pan.hasBian ? ' 之 ' + pan.bianName + '（' + pan.bianPalace + '宫）' : '（静卦）') + '\n';
+    // 用神由规则链先定，明确写进盘面文本：模型自取用神是断错整盘的首要来源。
+    if (lastAnalysis && lastAnalysis.yongshen) {
+      const y = lastAnalysis.yongshen, yl = y.line;
+      txt += '用神：' + y.type + ' ' + yl.lq + yl.zhi + '（' + LINE_NAMES[yl.pos] + '，' + yl.wx +
+        '，' + y.wang + '，' + (yl.moving ? '发动' : '安静') + (yl.isFu ? '，伏神' : '') + '）\n';
+    }
     // 卦型行：六冲/六合/游魂/归魂/相变——确定性陈述（与 ruleGuaXing 同一判定，非推断）
     const gxRules = C.ruleGuaXing(pan).map(function (j) { return j.rule; });
     if (gxRules.length) txt += '卦型：' + gxRules.join('、') + '\n';
@@ -782,7 +788,11 @@
     '不重新起卦、不因当前日期变化而重算原盘、不事后改写首次结论；' +
     '只有当事项、对象、目标或时间范围发生实质变化时才说明需另起一卦。',
     '【现实边界】健康、生死、失踪、胎儿性别、重大财法决策不得由卦象替代现实判断；' +
-    '涉及此类内容须明确提示就医、报警或咨询专业人士，不得写成医学诊断或法律意见。'
+    '涉及此类内容须明确提示就医、报警或咨询专业人士，不得写成医学诊断或法律意见。',
+    '【用神既定】排盘文本已由规则引擎给出用神（六亲＋地支＋卦位）。断卦须沿用该用神；' +
+    '确需另取时，须先说明理由，并保留原用神作对照，不得静默改取。',
+    '【结论须带依据】每条吉凶与应期结论后，用括号注明所依据的盘面要素（用神／世应／月建／日辰／动爻／旬空）；' +
+    '找不到盘面依据的推断只能标为存疑，不得写成结论。'
   ].join('\n');
 
   // 拼装发给大模型的完整请求文本（失败/无输出时可复制到任意对话窗口手动断卦）
@@ -825,6 +835,28 @@
         (cv.accepted ? '· ' : '⚠ ') + esc(txt) + '</div>';
     } catch (e) { /* 同上 */ }
     return out;
+  }
+
+  // 验证清单：把「怎么算应验」写成可核对的三条，逼出可回填的样本。
+  // 只读规则链已给出的用神/应期，不新增判断，也不改断语。
+  function checklistHTML() {
+    if (!pan || !lastAnalysis) return '';
+    const y = lastAnalysis.yongshen;
+    const lay = lastAnalysis.yingqiLayers || {};
+    const main = (lay.main || [])[0] || '';
+    const aux = (lay.auxiliary || [])[0] || '';
+    const items = [];
+    if (main) items.push('应期：' + main + (aux ? '（辅助：' + aux + '）' : ''));
+    else if (aux) items.push('应期：' + aux);
+    if (y && y.line) {
+      items.push('用神：' + y.type + ' ' + y.line.lq + y.line.zhi + ' 在' + LINE_NAMES[y.line.pos] +
+        '，' + y.wang + (y.line.moving ? '，发动' : '，安静') + (y.line.isFu ? '，伏神' : ''));
+    }
+    items.push('结果：事之成败、应期是否按时——事后在「卦例库」回填，样本够了才能统计命中率');
+    return '<div class="verdict" style="margin-top:8px;font-size:13px;line-height:1.8">' +
+      '<b>验证清单</b><ol style="margin:6px 0 0 18px;padding:0">' +
+      items.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') +
+      '</ol></div>';
   }
 
   // AI 请求重试/超时策略：180 秒截止、指数退避、按返回类型决定是否重试。
@@ -1113,23 +1145,50 @@
       });
       await Promise.all(selModels.map(async function (m) {
         try {
-          const reply = await callInterpret(m, [], function (msg) {
+          const onStatus = function (msg) {
             if (myGen !== aiGen) return;   // 已进入新一轮，丢弃旧状态回调
             const el = colBody(m);
             if (el) el.innerHTML = '<div class="loading">' + esc(msg) + '</div>';
-          }, function (text) {
+          };
+          const onStream = function (text) {
             if (myGen !== aiGen) return;
             const el = colBody(m);
             if (el) {
               el.innerHTML = '<div class="ai-block">' + mdLite(text) + '</div>';
               scrollBody(el);
             }
-          }, { gen: myGen, signal: mySignal });
+          };
+          let reply = await callInterpret(m, [], onStatus, onStream, { gen: myGen, signal: mySignal });
           if (myGen !== aiGen) return;     // 旧代响应：不写入状态、不渲染
+
+          /* 盘面事实冲突 → 把冲突点回灌给模型，只重写一次。
+             旧版只在断语下方提示，用户拿到的仍是写错的正文；重写一次能消掉
+             大半「世应写反／卦名写错」且不会无限循环（仅一次机会）。 */
+          let corrected = false;
+          if (HAS_ABSORB) {
+            try {
+              const fa = C.auditFactClaims(reply, pan);
+              if (fa && !fa.accepted && fa.errors.length) {
+                const list = fa.errors.slice(0, 6).map(function (e) {
+                  return (e.at ? e.at + '：' : e.type + '：') + '断语作「' + e.claimed + '」，卦盘实为「' + e.actual + '」';
+                }).join('；');
+                onStatus('发现 ' + fa.errors.length + ' 处与卦盘不符，按盘面校正中…');
+                reply = await callInterpret(m, [
+                  { role: 'assistant', content: reply },
+                  { role: 'user', content: '上一稿有 ' + fa.errors.length + ' 处与卦盘不符：' + list +
+                    '。请严格对照盘面全文重写，保持原有结构，不得保留上述错误表述，也不要解释修改过程。' }
+                ], onStatus, onStream, { gen: myGen, signal: mySignal });
+                corrected = true;
+              }
+            } catch (e) { /* 审计或重写失败：保留首稿，不打断 */ }
+          }
+          if (myGen !== aiGen) return;
+
           aiStates[m] = { history: [{ role: 'assistant', content: reply }] };
           const bodyEl = colBody(m);
           if (bodyEl) {
-            bodyEl.innerHTML = '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply);
+            bodyEl.innerHTML = '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply) + checklistHTML() +
+              (corrected ? '<div class="muted" style="margin-top:6px;font-size:12px">已按盘面校正 1 次</div>' : '');
             scrollBody(bodyEl);
           }
         } catch (e) {
