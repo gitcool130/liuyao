@@ -706,6 +706,7 @@
     aiAbort = null;
     aiStates = {}; castId = null;
     $('#aiReply').innerHTML = '';
+    const cs = $('#aiConsensus'); if (cs) { cs.hidden = true; cs.innerHTML = ''; }
     const box = $('#chatBox'); if (box) box.hidden = true;
     const btn = $('#btnSave'); if (btn) btn.textContent = '存入卦例库';
     const btnAI = $('#btnAI'); if (btnAI) { btnAI.disabled = false; btnAI.textContent = '开始断卦'; }
@@ -792,7 +793,12 @@
     '【用神既定】排盘文本已由规则引擎给出用神（六亲＋地支＋卦位）。断卦须沿用该用神；' +
     '确需另取时，须先说明理由，并保留原用神作对照，不得静默改取。',
     '【结论须带依据】每条吉凶与应期结论后，用括号注明所依据的盘面要素（用神／世应／月建／日辰／动爻／旬空）；' +
-    '找不到盘面依据的推断只能标为存疑，不得写成结论。'
+    '找不到盘面依据的推断只能标为存疑，不得写成结论。',
+    '【结构化结论】正文写完后另起三行，单独成行、不加粗、不编号、不加解释：',
+    '结论：吉｜凶｜平（只填一个词）',
+    '应期：一句话，含时间尺度',
+    '用神：六亲＋地支＋卦位',
+
   ].join('\n');
 
   // 拼装发给大模型的完整请求文本（失败/无输出时可复制到任意对话窗口手动断卦）
@@ -835,6 +841,49 @@
         (cv.accepted ? '· ' : '⚠ ') + esc(txt) + '</div>';
     } catch (e) { /* 同上 */ }
     return out;
+  }
+
+  // 结构化结论行解析：模型按提示词末尾输出「结论/应期/用神」三行。
+  // 取最后一次出现（正文里也可能提到这些词），失败返回空字段，不抛错。
+  function parseConclusion(text) {
+    const src = String(text || '');
+    const last = function (re) {
+      const g = new RegExp(re.source, 'g');
+      let m, out = '';
+      while ((m = g.exec(src)) !== null) out = m[1];
+      return String(out || '').replace(/^\*+|\*+$/g, '').trim();
+    };
+    let trend = last(/结论\s*[:：]\s*[\[【]?\s*(吉|凶|平|中|待审)/);
+    if (trend === '中') trend = '平';
+    return {
+      trend: trend,
+      yingqi: last(/应期\s*[:：]\s*([^\n]{1,80})/),
+      yongshen: last(/用神\s*[:：]\s*([^\n]{1,60})/)
+    };
+  }
+
+  // 双模型互证：只比对各自「结论」行，不一致就明说存疑；不做新的判断。
+  function renderConsensus(map) {
+    const el = $('#aiConsensus');
+    if (!el) return;
+    const items = Object.keys(map).filter(function (k) { return map[k] && map[k].trend; })
+      .map(function (k) { return { id: k, trend: map[k].trend }; });
+    if (items.length < 2) { el.hidden = true; el.innerHTML = ''; return; }
+    const uniq = [];
+    items.forEach(function (x) { if (uniq.indexOf(x.trend) < 0) uniq.push(x.trend); });
+    const label = function (id) {
+      const cfg = MODELS.filter(function (x) { return x.id === id; })[0] || {};
+      return cfg.label || id;
+    };
+    el.hidden = false;
+    if (uniq.length > 1) {
+      el.className = 'warn';
+      el.innerHTML = '⚠ 模型结论不一致：' + items.map(function (x) { return esc(label(x.id)) + '＝' + esc(x.trend); }).join('，') +
+        '。此卦存疑——宜补问关键细节，或另择时再起一卦；不要只看其中一列。';
+    } else {
+      el.className = 'verdict';
+      el.innerHTML = '· 模型结论一致（' + esc(items[0].trend) + '）：一致只说明解读口径相近，不等于应验；仍以事后回填为准。';
+    }
   }
 
   // 验证清单：把「怎么算应验」写成可核对的三条，逼出可回填的样本。
@@ -1115,6 +1164,8 @@
   function colBody(id) { return document.getElementById('col-' + midSafe(id)); }
 
   function renderCols() {
+    const cs = $('#aiConsensus');
+    if (cs) { cs.hidden = true; cs.innerHTML = ''; }
     $('#aiReply').innerHTML = selModels.map(function (m, i) {
       const cfg = MODELS.filter(function (x) { return x.id === m; })[0] || {};
       return '<div class="ai-col">' +
@@ -1143,6 +1194,7 @@
         const el = colBody(m);
         if (el) el.innerHTML = '<div class="loading">推卦中…</div>';
       });
+      const concl = {};
       await Promise.all(selModels.map(async function (m) {
         try {
           const onStatus = function (msg) {
@@ -1184,10 +1236,17 @@
           }
           if (myGen !== aiGen) return;
 
+          const cc = parseConclusion(reply);
+          concl[m] = cc;
           aiStates[m] = { history: [{ role: 'assistant', content: reply }] };
           const bodyEl = colBody(m);
           if (bodyEl) {
-            bodyEl.innerHTML = '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply) + checklistHTML() +
+            const card = cc.trend
+              ? '<div class="verdict" style="font-size:13px;margin-bottom:6px">结论 <b>' + esc(cc.trend) + '</b>' +
+                (cc.yingqi ? ' ｜ 应期 ' + esc(cc.yingqi) : '') +
+                (cc.yongshen ? ' ｜ 用神 ' + esc(cc.yongshen) : '') + '</div>'
+              : '';
+            bodyEl.innerHTML = card + '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply) + checklistHTML() +
               (corrected ? '<div class="muted" style="margin-top:6px;font-size:12px">已按盘面校正 1 次</div>' : '');
             scrollBody(bodyEl);
           }
@@ -1198,6 +1257,7 @@
           if (el) renderFailBox(el, m, [], e);
         }
       }));
+      renderConsensus(concl);
       $('#chatBox').hidden = !Object.keys(aiStates).length;
       autoSaveCast();
     } finally {
