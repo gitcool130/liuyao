@@ -454,17 +454,36 @@
     const customInput = $('#useCustom');
     customInput.hidden = (target !== '__custom__');
     renderSensitive();     // 每次改选事类都重算分流（含把拦截态解除）
-    if (!target || target === '__custom__') {
-      // 空选与自定义：无固定用神可取，旺衰硬规则不适用，给出通用次第
+
+    /* 自定义事由：先按关键词推出用神（复用 domain-methods 的 INTENT_YONGSHEN），
+       再走与固定事类完全相同的规则链。推不出关键词才退回通用次第。
+       此前自定义一律 lastAnalysis=null，用神只能由模型自取，盘面也没有「用神：」行。 */
+    let effTarget = target, customKw = '';
+    if (target === '__custom__') {
+      const sug = (pan && typeof C.suggestYongshen === 'function') ? C.suggestYongshen(currentQuestion()) : null;
+      if (sug) { effTarget = sug.rel; customKw = sug.kw; }
+    }
+
+    if (!target || (target === '__custom__' && !customKw)) {
+      // 空选 / 自定义但无关键词可推：无固定用神可取，给出通用次第
       list.innerHTML = '<li>选择所测之事，先观用神旺衰。通用次第：一观世爻旺衰，二观用神与世应，三审动爻生克，四定旬空月破与应期。</li>' +
-        (target === '__custom__' ? '<li>自定义所测不作旺衰粗判，所测事项将写入排盘文本交由大模型细断。</li>' : '');
+        (target === '__custom__' ? '<li>自定义未能从描述中推定用神，可补写事由（如「求财」「考试」「官司」），或改选上方对应类别。</li>' : '');
       vBox.hidden = true; lastBullets = [];
       // 清空旧分析：否则断后审查会拿「上一次所选事类」的 judgments
       // 去撞自定义事由的断语，必然误报（如旧选妻财、新问跳槽取官鬼）。
       lastAnalysis = null;
       return;
     }
-    const res = C.analyze(pan, target);
+    if (!pan) {
+      list.innerHTML = '<li>先完成起卦，再选所测之事。</li>';
+      vBox.hidden = true; lastBullets = []; lastAnalysis = null;
+      return;
+    }
+    const res = C.analyze(pan, effTarget);
+    if (customKw) {
+      res.bullets.unshift('自定义事由按关键词「' + customKw + '」推定为「' + (res.yongshen ? res.yongshen.type : effTarget) +
+        '」用神（规则链已按此取用；若卦理显见他亲更切，可在追问中说明理由）');
+    }
     lastBullets = res.bullets;
     lastAnalysis = res;
     list.innerHTML = res.bullets.map(function (b) {
@@ -490,7 +509,13 @@
   $('#useSelect').onchange = function () { renderAnalysis(); if ($('#useCustom').hidden === false) $('#useCustom').focus(); };
   // 自定义事由逐字输入即重算分流：写到「能不能活多久」这类词时立刻拦截，
   // 不必等点击断卦才提示（粗判不重算——自定义本就不作旺衰粗判）。
-  $('#useCustom').oninput = function () { renderSensitive(); };
+  // 自定义事由逐字输入：立刻重算分流；用神推断加 250ms 防抖，避免每敲一个字重排规则链
+  let customTimer = null;
+  $('#useCustom').oninput = function () {
+    renderSensitive();
+    clearTimeout(customTimer);
+    customTimer = setTimeout(renderAnalysis, 250);
+  };
 
   // ---------- 排盘文本（复制与 AI 共用） ----------
   function buildPanText(forAI) {

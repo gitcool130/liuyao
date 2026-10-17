@@ -155,8 +155,8 @@
     if (key === '__custom__') {
       const s = suggestYongshen(question);
       if (s) {
-        out += '用神建议：据事由中的「' + s.kw + '」，先取' + (s.rel === 'shi' ? '世爻（自身）' : s.rel) +
-          '为用；须说明理由，若卦理显见他六亲更切，可改取并说明。\n';
+        out += '用神建议：据事由中的「' + s.kw + '」，规则链已取' + (s.rel === 'shi' ? '世爻（自身）' : s.rel) +
+          '为用；如卦理显见他六亲更切，可在断语中说明理由后改取。\n';
       }
     }
     out += '重点：' + m.focus.join(' / ') + '\n';
@@ -168,4 +168,5 @@
   LY.DOMAIN_METHODS = DOMAIN_METHODS;
   LY.INTENT_YONGSHEN = INTENT_YONGSHEN;
   LY.domainBlock = domainBlock;
+  LY.suggestYongshen = suggestYongshen;
 })(typeof window !== 'undefined' ? window : globalThis);

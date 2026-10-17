@@ -328,6 +328,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | ⑮ | 同盘结论漂移 | 服务端断卦 `temperature` 0.3 → 0.2 | `functions/api/interpret.js` |
 | ⑯ | 结论无法机器核对 | 提示词末段要求三行结构化输出（`结论：吉/凶/平`、`应期：…`、`用神：…`）；前端容错解析后渲染结论卡，解析失败只显示原文、不报错 | 两份 `SYSTEM_PROMPT` / `public/app.js` |
 | ⑰ | 单模型结论无从校验 | 多选模型时比对各自结论行：不一致显示「此卦存疑」告警，一致提示「一致≠应验」。只比对既有输出，不新增模型调用 | `public/app.js` |
+| ⑱ | 自定义事由没有用神 | 复用 `domain-methods.suggestYongshen()` 按关键词推出用神，再走与固定事类相同的 `analyze()` 规则链：自定义也能锁用神、出旺衰/应期/验证清单；推不出关键词才退回通用次第 | `public/core/domain-methods.js` / `public/app.js` |
 
 **验证**：`core 89 / rules 265 / gua-types 91 / absorb 135 / functions 125` 全绿（本轮 +7 absorb、+8 functions，均含反向对照：变卦语境写错仍报、书名号内写错仍报、旧版心跳只有 1 次 `: ping`、客户端不断开则流不提前结束）。
 
