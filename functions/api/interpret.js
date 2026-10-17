@@ -380,7 +380,7 @@ export async function onRequestPost(context) {
     // 上游若忽略 stream 参数回 JSON，仍走下面的非流式解析（兼容老中转）。
     if (ct.indexOf('text/event-stream') !== -1 && (isGoogle || call.payload.stream)) {
       // 上游返回 SSE 时，直接透传给客户端，避免服务端缓冲导致 CF 边缘 524 超时。
-      // 服务端拼接完整文本的旧路径已弃用：DeepSeek v4-pro 整体响应可超 120s，
+      // 服务端拼接完整文本的旧路径已弃用：深推理模型的整体响应可超 120s，
       // CF 边缘约 100s 无数据即断连；透传流式后首字节一到即开始向下发送。
       return { stream: resp };
     }

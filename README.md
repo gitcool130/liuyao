@@ -319,7 +319,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | ⑦ | `panText` 静默截断 | 旧版 `slice(0,4000)` 会砍掉伏神/变爻/契约段且无痕迹。改为超限 413 `PAN_TOO_LONG` | 同上 |
 | ⑧ | 生成上限与心跳不可调 | 新增 `LLM_MAX_TOKENS`（不设则不传，避免写死截断）与 `SSE_HEARTBEAT_MS`（默认 15000，下限 1000） | 同上 |
 | ⑨ | 流式渲染每 chunk 重建 DOM | 1017 输出更快，长答复每秒数十次 `innerHTML`。改为 60ms 合并窗口 + 收尾补发（不丢末段） | `public/app.js` |
-| ⑩ | 模型清单遗留 v4-pro | 官方自 2026-09-14 起把 `deepseek-v4-pro` 重定向到 Flash 并按 Flash 计费。从白名单与芯片下架；`deepseek-flash` 标注「V4.1 · 1017」 | `_lib.js` / `models.js` / `app.js` |
+| ⑩ | 模型清单遗留已停用的 DeepSeek 深推理型号 | 官方自 2026-09-14 起把该型号重定向到 Flash 并按 Flash 费率计费。从白名单与芯片下架；`deepseek-flash` 标注「V4.1 · 1017」 | `_lib.js` / `models.js` / `app.js` |
 | ⑪ | 文档默认值漂移 | `LLM_TIMEOUT_MS` 文件头与 README 表格写 90000，代码实为 300000。三处统一为 300000 | `interpret.js` / `README.md` |
 
 **验证**：`core 89 / rules 265 / gua-types 91 / absorb 135 / functions 125` 全绿（本轮 +7 absorb、+8 functions，均含反向对照：变卦语境写错仍报、书名号内写错仍报、旧版心跳只有 1 次 `: ping`、客户端不断开则流不提前结束）。
