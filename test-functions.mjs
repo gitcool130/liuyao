@@ -213,6 +213,27 @@ eq('换 IP 不受影响（仍是 401）',
 eq('正确口令不受计数影响',
   (await get('', { 'X-Access-Code': 'k', 'CF-Connecting-IP': '203.0.113.9' }, bruteCode)).status, 200);
 
+// interpret 的 ACCESS_CODE 分支与 records 共用同一份计数（_lib.js requireCode）：
+// 旧版这里只有 safeEqual，没有失败计数——单独启用 ACCESS_CODE 时是无限速爆破口。
+const acEnv = { ACCESS_CODE: 'a' };
+const acReq = function (ip, code) {
+  return new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'CF-Connecting-IP': ip, 'X-Access-Code': code },
+    body: '{}'
+  });
+};
+let acStatus = 0;
+for (let i = 0; i < 21; i++) {
+  acStatus = (await interpretPost({ request: acReq('198.51.100.5', 'bad'), env: acEnv })).status;
+}
+eq('interpret 错口令第 21 次 → 429', acStatus, 429);
+eq('interpret 换 IP 仍只 401',
+  (await interpretPost({ request: acReq('198.51.100.6', 'bad'), env: acEnv })).status, 401);
+// 越过口令闸后落到「缺排盘文本」，用 400 证明闸门确实放行
+eq('interpret 正确口令放行（→400 NO_PAN）',
+  (await interpretPost({ request: acReq('198.51.100.7', 'a'), env: acEnv })).status, 400);
+
 // ---------- #19 结果回执（M16）：白名单校验 + 只写 outcome 列 + 不被自动保存冲掉 ----------
 // sanitizeOutcome 三态：object = 合法；null = 显式清除；undefined = 非法
 eq('回执 null → 清除', sanitizeOutcome(null), null);

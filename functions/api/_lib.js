@@ -52,6 +52,48 @@ export async function safeEqual(input, expected) {
   return diff === 0;
 }
 
+// 口令闸（读/写/断卦共用）：常量时间比较 + 同 IP 失败计数。
+// 为什么要统一：records.js 有失败计数而 interpret.js 只有 safeEqual——两端点姿态不一致，
+// 一旦单独启用 ACCESS_CODE（且未设 RATE_LIMIT_PER_MIN），断卦端点就成了无限速爆破口，
+// 而 ACCESS_CODE 与 LIB_CODE 同源时可被用来换取卦例库读权限。
+//
+// safeEqual 只保证单次比较不泄露时序，不防高频试错。同 IP 10 分钟内错 20 次 → 429，
+// 成功一次立即清零。计数在模块级 Map 中，跨 isolate 不共享，与 interpret 的限流同属
+// 「成本抑制」而非安全边界。
+const AUTH_FAILS = new Map();      // ip → { n, until }
+const AUTH_MAX_FAILS = 20;
+const AUTH_WINDOW_MS = 10 * 60 * 1000;
+const AUTH_MAX_IPS = 5000;
+
+function authKey(request) {
+  // CF-Connecting-IP 由边缘写入、客户端伪造会被剥离；X-Forwarded-For 仅非 CF 部署回退
+  return request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
+}
+
+// 返回 null 表示放行；否则返回应直接下发的 Response（401 / 429）
+export async function requireCode(request, expected, message) {
+  if (!expected) return null;   // 未配置口令：保持开放（向后兼容本地/测试环境）
+  const key = authKey(request);
+  const now = Date.now();
+  let rec = AUTH_FAILS.get(key);
+  if (rec && now >= rec.until) { AUTH_FAILS.delete(key); rec = undefined; }
+  if (rec && rec.n >= AUTH_MAX_FAILS) {
+    return json({ error: 'TOO_MANY_ATTEMPTS', message: '口令错误次数过多，请 10 分钟后再试' }, 429);
+  }
+  const given = request.headers.get('X-Access-Code') || '';
+  if (await safeEqual(given, expected)) {
+    if (rec) AUTH_FAILS.delete(key);
+    return null;
+  }
+  if (!rec) rec = { n: 0, until: now + AUTH_WINDOW_MS };
+  rec.n++;
+  AUTH_FAILS.set(key, rec);
+  if (AUTH_FAILS.size > AUTH_MAX_IPS) {
+    AUTH_FAILS.forEach(function (v, k) { if (now >= v.until) AUTH_FAILS.delete(k); });
+  }
+  return json({ error: 'ACCESS_REQUIRED', message: message }, 401);
+}
+
 // 模型 id 字符集白名单：模型名会进入前端 DOM（芯片 data-m / 文本）与上游请求体，
 // 只允许字母数字与 . _ - / : ，从源头杜绝引号/尖括号等注入字符
 const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$/;

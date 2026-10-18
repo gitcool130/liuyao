@@ -27,7 +27,7 @@
  */
 
 // 供应商解析共享层（白名单 / 自定义供应商 / json 响应 / 常量时间口令比较），与 models.js 同一口径
-import { customProviders, customKeyEnv, modelWhitelist, json, safeEqual, bodyTooLarge, payloadTooLarge } from './_lib.js';
+import { customProviders, customKeyEnv, modelWhitelist, json, bodyTooLarge, payloadTooLarge, requireCode as requireCodeGate } from './_lib.js';
 
 // 入模规模上限：单请求最多 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符。
 // 旧值 8,000 + 20×4,000 ≈ 88,000，在未设 ACCESS_CODE 时是可直接放大的费用敞口。
@@ -184,11 +184,11 @@ export async function onRequestPost(context) {
     return json({ error: 'RATE_LIMITED', message: '请求过于频繁，请稍后重试' }, 429);
   }
 
-  if (env.ACCESS_CODE) {
-    const code = request.headers.get('X-Access-Code') || '';
-    // 与 records.js 共用同一常量时间实现（旧版此处是明文 !==，属同类修复未收口）
-    if (!(await safeEqual(code, env.ACCESS_CODE))) return json({ error: 'ACCESS_REQUIRED', message: '需要访问口令' }, 401);
-  }
+  // 口令闸走 _lib.js 的共享实现：常量时间比较 + 同 IP 失败计数（20 次/10 分钟 → 429）。
+  // 旧版此处只有 safeEqual，没有计数——一旦单独启用 ACCESS_CODE（且未设限流），
+  // 断卦端点就是无限速的爆破口；而 ACCESS_CODE 与 LIB_CODE 同源时可换取卦例库读权限。
+  const denied = await requireCodeGate(request, env.ACCESS_CODE, '需要访问口令');
+  if (denied) return denied;
 
   // 请求体总大小闸门（L1）：早于 request.json()，避免超大 body 先全量入内存
   if (bodyTooLarge(request)) return payloadTooLarge();

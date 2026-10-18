@@ -49,7 +49,8 @@ database_id = "42279a23-7032-42bb-b675-bb7a2015fcc0"
 #   LIB_CODE      卦例库口令（**读 + 写**：浏览/装入/删除）。生产已设；只管卦例库，断卦不受限。
 #   ACCESS_CODE   全站口令（断卦 + 卦例库读写）。生产曾于 2026-09-28 启用，同日撤销，**当前未设**。
 #   设置：wrangler pages secret put LIB_CODE --project-name=liuyao
-# 页面首次调用收 401 时弹框要求输入口令，存入 localStorage（键名 ly_access_code），
+# 页面首次调用收 401 时弹框要求输入口令，存入 sessionStorage（键名 ly_access_code，
+# 关标签页即失效；旧版 localStorage 中的明文会在首次载入时自动迁移并删除），
 # 后续请求带 X-Access-Code 头。
 # ⚠️ 实测：secret 变更后**线上 Functions 仍持旧环境快照**，必须重新部署一次才生效
 #    （只删 secret 不部署，401 会持续 3 分钟以上）。此前"改完无需重新部署、即时生效"
