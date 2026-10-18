@@ -166,5 +166,24 @@ eq('9（老阳）仍按阳爻起卦', C.paipan([9, 1, 1, 1, 1, 1], D).benName, '
   eq('全静卦 → 六爻 bian 皆为 null', p0.lines.every(function (l) { return l.bian === null; }), true);
 }
 
+// ---------- 21. 墙上时间锚点 __wall（DST 修正） ----------
+// beijingNow() 把北京墙上时间喂给本机时区构造函数；DST 春令切换日的 02:00–02:59
+// 会被归一化成 03:xx。此时 getters 已不是真实墙上时间，fourPillars 须优先读 __wall。
+{
+  const d = new Date(2026, 2, 8, 12, 0, 0);
+  d.__wall = { y: 2026, m: 3, d: 8, h: 23, min: 30 };
+  const withWall = C.fourPillars(d);
+  const ref = C.fourPillars(new Date(2026, 2, 8, 23, 30, 0));
+  const byGetters = C.fourPillars(new Date(2026, 2, 8, 12, 0, 0));
+  eq('__wall 生效：日柱与时柱按锚点计算', [withWall.dayGZ, withWall.hourGZ], [ref.dayGZ, ref.hourGZ]);
+  eq('__wall 生效：结果不同于按 getters 计算', withWall.hourGZ === byGetters.hourGZ, false);
+  const plain = new Date(2026, 2, 8, 12, 0, 0);
+  eq('无 __wall 时行为不变', C.fourPillars(plain).hourGZ, byGetters.hourGZ);
+  // 锚点字段不全时不得半信半疑地混用，须整体退回 getters
+  const partial = new Date(2026, 2, 8, 12, 0, 0);
+  partial.__wall = { y: 2026, m: 3 };
+  eq('__wall 字段不全 → 退回 getters', C.fourPillars(partial).hourGZ, byGetters.hourGZ);
+}
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

@@ -29,7 +29,7 @@
 - **暗动闭环**：静爻被日冲，先查月令旺衰（旺相=暗动，休囚=日破）——修复旧版「文字说了一套、代码没做」
 - **规则覆盖**：月建档（旺相休囚死）、真假月破、日辰生克拱扶、冲散/暗动/日破、合起合绊、静空/动空/真空（**真空以「安静」为前提，动爻永不真空**）、回头生克冲合、进神退神、三合局、相刑相害、飞伏生克、用神两现取舍、伏神引拔、伏神伏世下（不误报用神持世）；**M16 新增三族**：卦型（六冲/六合/游魂/归魂及相变五型，只陈述不入 trend）、生旺墓绝（长生十二宫四正位 + 觉子曰三宽：烈火煎金/论生不论墓/论生不论绝）、元神/忌神/仇神（三神识别、有力无力、贪生忘克）
 - **上层契约层（M15）**：`sensitive.js` / `domain-methods.js` / `fact-audit.js` / `coverage-audit.js` 四个**不参与排盘**的模块——分别负责「敏感问题确定性分流」「所测之事的分析方法与误判清单注入」「断语与卦盘的事实一致性审计」「断语推理一致性审查」。详见下节；自检见 `test-absorb.js`（135 项）
-- **质量保障**：`test-core.js` 89 项基础自检（含入参校验、非法日期文案、`bian` 语义契约锁定） + `test-rules.js` 265 项规则链单测（含直测 `ruleXingHai` 的三刑全覆盖、M16 三族卦型/生旺墓绝/三神的正反用例） + `test-gua-types.js` 卦型判定回归（64 卦全枚举 + 京房八宫卦次整表 + 10 类变异自检） + `test-functions.mjs` 125 项 Functions 层（含上游超时、流式缓冲守卫、限流窗口有界、结果回执白名单与回填端点） + `test-shake.js` 49 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（10 万+字段）+ `tests/guji` 古籍卦例回归（《增删卜易》《卜筮正宗》404 条卦例 + 68 条断语用例 / 12144 断言，断卦规则覆盖 64/78，另附 41 类变异自检）+ `tests/verify` 外部验证集三方对账与零依赖金标准回归；CI 另有「部署隔离断言」守住 `public/` 边界
+- **质量保障**：`test-core.js` 93 项基础自检（含入参校验、非法日期文案、`bian` 语义契约锁定、`__wall` 墙上时间锚点） + `test-rules.js` 265 项规则链单测（含直测 `ruleXingHai` 的三刑全覆盖、M16 三族卦型/生旺墓绝/三神的正反用例） + `test-gua-types.js` 卦型判定回归（64 卦全枚举 + 京房八宫卦次整表 + 10 类变异自检） + `test-functions.mjs` 142 项 Functions 层（含上游超时、流式缓冲守卫、限流窗口有界、结果回执白名单与回填端点、分页/请求体闸门/口令爆破限速、两份提示词全文一致） + `test-shake.js` 49 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（10 万+字段）+ `tests/guji` 古籍卦例回归（《增删卜易》《卜筮正宗》404 条卦例 + 68 条断语用例 / 12144 断言，断卦规则覆盖 64/78，另附 41 类变异自检）+ `tests/verify` 外部验证集三方对账与零依赖金标准回归；CI 另有「部署隔离断言」守住 `public/` 边界
 
 ### 三库交叉差分（test-diff.mjs，devDependencies 不进生产）
 
@@ -155,6 +155,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | `779b4526` 之后 | 第二十一轮：B4/B5/C1/C4/C5/C6/C7/N1 收口，C2/C3 定性订正（详见下方台账） |
 | `da2ae24` | M16 断卦三族落地（卦型 / 生旺墓绝 / 元神忌神仇神）——按外部审计证据建议顺序 ③→②→① 补齐三块结构性差距；引擎纯新增 439 行，+28 条断语用例（40→68 条，12102→12143 断言），+80 项单测（185→265），覆盖 37/51→64/78 |
 | `da2ae24` 之后 | 第二十二轮：三族逐族核验（对证据清单 ①②③）+ `zsby-0875` 补锁「绝于日辰」（12143→12144）+ README 计数漂移收口（详见下方台账） |
+| 待提交 | 第二十三轮：外部审计（Kimi）事实核查后的收口——M1 BGM 后台断链、M2 口令改 `sessionStorage` + 旧版迁移、L1 512 KB 请求体闸门、L2 列表分页（`limit/offset/hasMore`）+ 前端「加载更多」、`beijingNow` 的 DST 时柱偏移（`__wall` 锚点）、口令爆破限速（20 次/10 分钟）、两份 SYSTEM_PROMPT 全文一致断言；顺带订正 `wrangler.toml` 中 `LIB_CODE` 的口径注释 |
 
 > ⚠️ **历史教训**：第二轮 20 项报告在修复后仍被反复重报，原因是外部审计取的源码是 GitHub main（`f5a0ca4`），而修复提交全部停留在本地未推送。**提交推送之前不要发起外部审计**，否则拿到的必然是旧版的结论。
 >
@@ -390,12 +391,13 @@ git status -sb                    # 若显示 ahead，先推送再审计
 
 - **D1 卦例库**：卦例含各模型独立对话历史（`{modelId: history[]}`），支持进阶探讨时延续上下文
 - **卦例库口令**：`LIB_CODE` 管卦例库的**读与写**（浏览/装入/删除），与全站闸 `ACCESS_CODE` 解耦（闸门取 `LIB_CODE || ACCESS_CODE`）——**卦例库需登录，断卦不受限**；页面「口令登录」按钮经 `POST /api/records?verify=1` 探针验证，自动保存静默跳过未登录状态；未登录时点「卦例」会提示补输口令（`apiFetch` 遇 401 自动重试）
+- **口令存储与爆破防护（第二十三轮）**：口令由 `localStorage` 改为 `sessionStorage`（键名不变）——同一标签页刷新免重输，关标签页即失效；首次载入会把旧版残留的 `localStorage` 明文迁移过来并**立即删除**，不在磁盘上留第二份。注意这缩的是「持久化窗口」，`sessionStorage` 同样可被 XSS 读取，那一层只能靠转义与 CSP。服务端对同 IP 的口令失败计数：10 分钟窗口内错 20 次 → `429 TOO_MANY_ATTEMPTS`，成功一次清零（与 `interpret.js` 的限流同属 isolate 内软限制）。
 - **密钥不出服务端**：API Key 全部存 CF secret（加密变量，wrangler 部署不覆盖），模型名白名单 + 输入长度截断防注入
 - **读接口开放的影响范围（第五轮提出 → 第二十轮彻底闭合）**：`GET /api/records` 列表与 `?id=` 详情原先**始终开放**，在只设 `LIB_CODE` 的配置下任何访客可读到全部卦例的 `question`（占问之事）与 `pillars`；猜中/拿到 id 后 `?id=` 还会返回 **`pan_text` 全文与 `messages`（各模型完整 AI 对话历史）**。问病、问讼、问感情类占问内容属隐私。
   2026-09-28 曾随全站 `ACCESS_CODE` 收口，同日按需求撤销 `ACCESS_CODE` 时**未单独评估这条连带影响**，读路径遂退化为「未设即放行」（实测 `GET /api/records` → `200`）。**第二十轮把读路径与写路径收口到同一口令闸**（`records.js` 的 `requireCode`，认 `LIB_CODE || ACCESS_CODE`）：无口令读列表/详情 → `401 ACCESS_REQUIRED`。当前口径为「卦例库**读与写均需口令**，`/api/models` 免口令」。
-- **静态资源安全响应头（第二十一轮 C7）**：新增 `public/_headers`，对静态资源下发 CSP + `X-Content-Type-Options: nosniff` + `Referrer-Policy` + `X-Frame-Options: DENY` + `Permissions-Policy`。CSP 的价值在于兜住**外联与回传**（`script-src 'self'` 挡外部脚本、`connect-src 'self'` 挡把卦例/提示词 exfil 到外域）；`'unsafe-inline'` 为必需项——页面含内联 `<style>`，且 **Cloudflare 会向 HTML 注入内联的 `__CF$cv$params`**（Bot Management），不带它会被本页自己的 CSP 拦掉。前端已逐处 `esc()`/`escAttr()`/`mdLite()` 转义，CSP 在此是**第二道防线**而非唯一防线。注意 `_headers` **不作用于 Pages Functions 响应**，`/api/*` 的头由函数自身控制。
+- **静态资源安全响应头（第二十一轮 C7）**：新增 `public/_headers`，对静态资源下发 CSP + `X-Content-Type-Options: nosniff` + `Referrer-Policy` + `X-Frame-Options: DENY` + `Permissions-Policy`。CSP 的价值在于兜住**外联与回传**（`script-src 'self'` 挡外部脚本、`connect-src 'self'` 挡 fetch/XHR/WebSocket 把卦例/提示词 exfil 到外域；**顶层导航不在 CSP 管辖内**——`navigate-to` 未被浏览器实现，故 `location=` 跳转型外泄仍需靠转义挡住）；`'unsafe-inline'` 为必需项——页面含内联 `<style>`，且 **Cloudflare 会向 HTML 注入内联的 `__CF$cv$params`**（Bot Management），不带它会被本页自己的 CSP 拦掉。前端已逐处 `esc()`/`escAttr()`/`mdLite()` 转义，CSP 在此是**第二道防线**而非唯一防线。注意 `_headers` **不作用于 Pages Functions 响应**，`/api/*` 的头由函数自身控制。
 - **限流窗口的单 IP 计数有界（第二十一轮 C5）**：旧版每次请求都 `hits.push()`，单个 IP 的数组随请求数**无界增长**，且 `RL_HITS.size` 超限时 `clear()` 会**把正在被限流的访客一并放行**。现改为「达限即拒且不再入队」（数组长度硬封顶在 `limit`）＋「只淘汰窗口内已无有效计数的 IP」。IP 取用顺序为 `CF-Connecting-IP`（边缘写入、客户端伪造值被剥离）→ `X-Forwarded-For`（非 CF 部署的回退，该环境下可伪造，故此时限流只算降级可用）。
-- **请求规模与限流**：`/api/interpret` 单请求上限为 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符；`RATE_LIMIT_PER_MIN` 为可选软开关（按访客 IP 滑窗，仅 isolate 内计数），**生产当前未设 → 不限流**（2026-09-28 曾设 20，同日按用户要求撤销）。全站口令 `ACCESS_CODE` 于同日启用后撤销，`/api/interpret` **回归无口令开放**（实测无口令 → 越过守卫，直接进入参数校验）。费用敞口现**仅由「入模上限 ≈ 20,000 字符」单独约束**
+- **请求规模与限流**：`/api/interpret` 单请求上限为 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符；两个写端点另有 **512 KB 请求体闸门**（按 `Content-Length` 在 `request.json()` 之前 413，chunked 无该头时只能靠字段限长与平台上限兜底）；`RATE_LIMIT_PER_MIN` 为可选软开关（按访客 IP 滑窗，仅 isolate 内计数），**生产当前未设 → 不限流**（2026-09-28 曾设 20，同日按用户要求撤销）。全站口令 `ACCESS_CODE` 于同日启用后撤销，`/api/interpret` **回归无口令开放**（实测无口令 → 越过守卫，直接进入参数校验）。费用敞口现**仅由「入模上限 ≈ 20,000 字符」单独约束**
 - **部署防回归**：已禁用 GitHub 集成的自动生产部署（其 Functions 构建缓存会回滚代码并抢占生产），统一由 wrangler direct upload 部署
 
 ### 生成式琴音（bgm.js）
@@ -426,7 +428,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 页面（静态）→ Pages Functions
   /api/interpret  断卦（多供应商路由，模型白名单校验）
   /api/models     动态模型清单下发
-  /api/records    卦例库 CRUD（D1）
+  /api/records    卦例库 CRUD（D1；列表支持 ?limit=&offset=，默认 100/上限 200，返回 hasMore）
 供应商通道：
   Gemini   → CF AI Gateway（绕开 Google 对数据中心 IP 的拒绝）→ Google 原生 generateContent
   DeepSeek → api.deepseek.com（OpenAI 兼容）

@@ -23,6 +23,19 @@ export function json(data, status) {
   });
 }
 
+// 请求体总大小闸门（L1）：await request.json() 会对任意大的 body 先全量读入内存，
+// 之后才轮到字段级限长（panText 上限、jsonWithin 收缩）。CF 平台虽有请求体上限兜底，
+// 但恶意大 JSON 仍会先吃掉 isolate 内存。这里按 Content-Length 提前拒绝。
+// 局限：chunked 请求没有该头，只能靠字段限长与平台上限；故这是"早退"而非"边界"。
+export const MAX_JSON_BODY = 512 * 1024;
+export function bodyTooLarge(request) {
+  const cl = parseInt(request.headers.get('content-length') || '0', 10);
+  return cl > MAX_JSON_BODY;
+}
+export function payloadTooLarge() {
+  return json({ error: 'BODY_TOO_LARGE', message: '请求体过大（上限 512 KB）' }, 413);
+}
+
 // 口令比较：先 SHA-256 再逐字节异或，长度不参与比较、耗时与口令内容无关
 // （直接字符串 === 比较会因短路提前返回而泄露前缀信息）
 // 放在共享层而非各端点各自实现：records.js 与 interpret.js 必须走同一实现，

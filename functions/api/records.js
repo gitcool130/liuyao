@@ -9,7 +9,7 @@
  * 绑定：Pages 项目 → Settings → Functions → D1 database bindings → 变量名 LIUYAO_DB
  */
 
-import { safeEqual } from './_lib.js';
+import { safeEqual, bodyTooLarge, payloadTooLarge } from './_lib.js';
 
 // 保持既有 import 路径可用（test-functions.mjs 直接从此文件 import safeEqual）；
 // 实现已上移到 _lib.js，与 interpret.js 共用同一份常量时间比较
@@ -27,17 +27,58 @@ function json(data, status) {
 // 无任何格式校验，那些行至今可能仍在线上 D1 中，且会被前端拼进 data-id 属性。
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
+// 列表分页：默认 100 与旧版行为一致；上限 200 防"一次拉全库"。
+const PAGE_DEFAULT = 100;
+const PAGE_MAX = 200;
+const PAGE_MAX_OFFSET = 100000;
+
 // 口令闸门：读、写共用同一实现、同一口令来源（LIB_CODE || ACCESS_CODE），差异只在失败文案。
 // 两者都未配置时保持开放（向后兼容本地/测试环境）。
 //
 // 读路径（列表 + 详情）与写路径同源，是第二十轮的收口：
 // 第十七轮按要求撤销 ACCESS_CODE 后，读路径曾退化为「未设即放行」——列表下发的 question
 // 是起卦时所测之事，?id= 详情还会返回 pan_text 与完整对话历史，对任何访客可见。
+//
+// 失败计数（防口令爆破）：safeEqual 只保证单次比较不泄露时序，不防高频试错。
+// 同一 IP 在 10 分钟窗口内错 20 次即 429，成功一次立即清零。与 interpret.js 的限流同属
+// 「isolate 内软限制」——跨 isolate 不共享，故只是把爆破成本从「无门槛」抬到「可观测」。
+const AUTH_FAILS = new Map();      // ip → { n, until }
+const AUTH_MAX_FAILS = 20;
+const AUTH_WINDOW_MS = 10 * 60 * 1000;
+const AUTH_MAX_IPS = 5000;
+
+function authKey(request) {
+  // CF-Connecting-IP 由边缘写入、客户端伪造会被剥离；X-Forwarded-For 仅非 CF 部署回退
+  return request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
+}
+function authBlocked(key) {
+  const rec = AUTH_FAILS.get(key);
+  if (!rec) return false;
+  if (Date.now() >= rec.until) { AUTH_FAILS.delete(key); return false; }
+  return rec.n >= AUTH_MAX_FAILS;
+}
+function noteAuthFail(key) {
+  const now = Date.now();
+  let rec = AUTH_FAILS.get(key);
+  if (!rec || now >= rec.until) rec = { n: 0, until: now + AUTH_WINDOW_MS };
+  rec.n++;
+  AUTH_FAILS.set(key, rec);
+  if (AUTH_FAILS.size > AUTH_MAX_IPS) {
+    AUTH_FAILS.forEach(function (v, k) { if (now >= v.until) AUTH_FAILS.delete(k); });
+  }
+}
+
 async function requireCode(request, env, message) {
   const code = env.LIB_CODE || env.ACCESS_CODE;
   if (!code) return null;
+  const key = authKey(request);
+  if (authBlocked(key)) {
+    return json({ error: 'TOO_MANY_ATTEMPTS', message: '口令错误次数过多，请 10 分钟后再试' }, 429);
+  }
   const given = request.headers.get('X-Access-Code') || '';
-  return (await safeEqual(given, code)) ? null : json({ error: 'ACCESS_REQUIRED', message: message }, 401);
+  if (await safeEqual(given, code)) { AUTH_FAILS.delete(key); return null; }
+  noteAuthFail(key);
+  return json({ error: 'ACCESS_REQUIRED', message: message }, 401);
 }
 
 async function checkAccess(request, env) { return requireCode(request, env, '需要访问口令'); }
@@ -191,13 +232,25 @@ export async function onRequestGet(context) {
     const row = await env.LIUYAO_DB.prepare('SELECT * FROM casts WHERE id = ?').bind(id).first();
     return row ? json({ record: row }) : json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
   }
-  // outcome 一并下发：列表徽标与命中率统计（M16）都在前端据它计算；单条 JSON ≤ 数百字节，100 行体量可控
+  // outcome 一并下发：列表徽标与命中率统计（M16）都在前端据它计算；单条 JSON ≤ 数百字节。
+  // 分页：limit 默认 100（与旧版一致）、上限 200；多取一条判断 hasMore，避免"最后一页
+  // 少一条"或"多一页空列表"这类边界。offset 走索引扫描，个人规模下成本可忽略。
+  const qLimit = parseInt(url.searchParams.get('limit') || '', 10);
+  const qOffset = parseInt(url.searchParams.get('offset') || '', 10);
+  const limit = (qLimit > 0) ? Math.min(qLimit, PAGE_MAX) : PAGE_DEFAULT;
+  const offset = (qOffset > 0) ? Math.min(qOffset, PAGE_MAX_OFFSET) : 0;
   const { results } = await env.LIUYAO_DB.prepare(
-    'SELECT id, created_at, datetime, question, hex, pillars, outcome FROM casts ORDER BY created_at DESC LIMIT 100'
-  ).all();
+    'SELECT id, created_at, datetime, question, hex, pillars, outcome FROM casts ORDER BY created_at DESC LIMIT ? OFFSET ?'
+  ).bind(limit + 1, offset).all();
   // 读路径同样不能信库里的数据：历史无校验写入的非法 id 行一律不下发前端
   // （这些 id 会被拼进 data-id / data-del 属性，是存储型 XSS 的入口）
-  return json({ records: (results || []).filter(function (r) { return ID_RE.test(r.id); }) });
+  const rows = (results || []).filter(function (r) { return ID_RE.test(r.id); });
+  return json({
+    records: rows.slice(0, limit),
+    hasMore: rows.length > limit,
+    limit: limit,
+    offset: offset
+  });
 }
 
 export async function onRequestDelete(context) {
@@ -219,6 +272,8 @@ export async function onRequestPost(context) {
   // 口令验证探针：POST /api/records?verify=1 只校验口令不落库
   if (url.searchParams.get('verify')) return json({ ok: true });
   if (!env.LIUYAO_DB) return noDb();
+  // 请求体总大小闸门：必须早于 request.json()——后者会把整个 body 先读进 isolate 内存
+  if (bodyTooLarge(request)) return payloadTooLarge();
   // 结果回执回填（M16）：独立分支，只写 outcome 列
   if (url.searchParams.get('outcome')) return handleOutcome(request, env);
 

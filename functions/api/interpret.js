@@ -27,7 +27,7 @@
  */
 
 // 供应商解析共享层（白名单 / 自定义供应商 / json 响应 / 常量时间口令比较），与 models.js 同一口径
-import { customProviders, customKeyEnv, modelWhitelist, json, safeEqual } from './_lib.js';
+import { customProviders, customKeyEnv, modelWhitelist, json, safeEqual, bodyTooLarge, payloadTooLarge } from './_lib.js';
 
 // 入模规模上限：单请求最多 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符。
 // 旧值 8,000 + 20×4,000 ≈ 88,000，在未设 ACCESS_CODE 时是可直接放大的费用敞口。
@@ -189,6 +189,9 @@ export async function onRequestPost(context) {
     // 与 records.js 共用同一常量时间实现（旧版此处是明文 !==，属同类修复未收口）
     if (!(await safeEqual(code, env.ACCESS_CODE))) return json({ error: 'ACCESS_REQUIRED', message: '需要访问口令' }, 401);
   }
+
+  // 请求体总大小闸门（L1）：早于 request.json()，避免超大 body 先全量入内存
+  if (bodyTooLarge(request)) return payloadTooLarge();
 
   let body;
   try { body = await request.json(); } catch (e) { return json({ error: 'BAD_JSON', message: '请求体解析失败' }, 400); }

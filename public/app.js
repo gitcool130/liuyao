@@ -47,10 +47,34 @@
   // fmtDT 读的是同一组 getters，因此三者天然同源，core 无需改动。
   // 补录模式输入的字符串按「北京墙上时间」解释（new Date('...') 在任意时区下
   // 本机 getters 都等于用户输入值），与现场模式口径一致。
+  //
+  // ⚠ 夏令时例外：实行 DST 的时区在春令切换日会把 02:00–02:59 归一化成 03:xx，
+  //   此时「本机 getters 呈现北京墙上时间」不成立（实测 America/New_York
+  //   2026-03-08 02:30 得 03:30），时柱会错一位。故把真实墙上分量钉在 __wall 上，
+  //   由 fourPillars 与显示层优先读取；克隆 Date 时须一并复制（见 cloneDate）。
+  const WALL = '__wall';
   function beijingNow() {
     const b = new Date(Date.now() + 8 * 3600 * 1000);
-    return new Date(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate(),
-      b.getUTCHours(), b.getUTCMinutes(), b.getUTCSeconds());
+    const wall = {
+      y: b.getUTCFullYear(), m: b.getUTCMonth() + 1, d: b.getUTCDate(),
+      h: b.getUTCHours(), min: b.getUTCMinutes()
+    };
+    const dt = new Date(wall.y, wall.m - 1, wall.d, wall.h, wall.min, b.getUTCSeconds());
+    dt[WALL] = wall;
+    return dt;
+  }
+  // 墙上时间分量：有 __wall 用 __wall，否则退回本机 getters（补录输入、测试传入的普通 Date）
+  function wallOf(dt) {
+    const w = dt && dt[WALL];
+    if (w) return { y: w.y, m: w.m, d: w.d, h: w.h, min: w.min };
+    return { y: dt.getFullYear(), m: dt.getMonth() + 1, d: dt.getDate(), h: dt.getHours(), min: dt.getMinutes() };
+  }
+  // 克隆 Date 时保留 __wall：lockedDate 往返恢复用的就是 new Date(t)，
+  // 不复制锚点会让锁定的时刻在 DST 跳变窗口内退回错值。
+  function cloneDate(dt) {
+    const c = new Date(dt.getTime());
+    if (dt && dt[WALL]) c[WALL] = dt[WALL];
+    return c;
   }
 
   let selectedDate = beijingNow();
@@ -93,8 +117,8 @@
   // ---------- 时间 ----------
   function fmtDT(dt) {
     const p = function (n) { return (n < 10 ? '0' : '') + n; };
-    return dt.getFullYear() + '-' + p(dt.getMonth() + 1) + '-' + p(dt.getDate()) +
-      ' ' + p(dt.getHours()) + ':' + p(dt.getMinutes());
+    const w = wallOf(dt);
+    return w.y + '-' + p(w.m) + '-' + p(w.d) + ' ' + p(w.h) + ':' + p(w.min);
   }
   function renderTime() {
     const pil = C.fourPillars(selectedDate);
@@ -104,13 +128,13 @@
       '<div class="gz">' + pil.yearGZ + '年 · ' + pil.monthGZ + '月 · <b>' + pil.dayGZ + '日</b> · ' + pil.hourGZ + '时</div>' +
       '<div class="muted">月建 <b class="gz-hi">' + C.ZHI[pil.monthZhi] + '</b> ｜ 日辰 <b class="gz-hi">' + C.ZHI[pil.dayZhi] + '</b> ｜ 旬空 <b class="kong">' + pil.kongStr + '</b></div>' +
       (pil.outOfTable
-        ? '<div class="warn">⚠ 历法精度降级：' + selectedDate.getFullYear() + ' 年超出节气时刻表覆盖范围（1900–2100），月柱与年柱按典型交节日近似（±2 日以内）；日柱、时柱不受影响。古籍卦例回归请注意此项。</div>'
+        ? '<div class="warn">⚠ 历法精度降级：' + wallOf(selectedDate).y + ' 年超出节气时刻表覆盖范围（1900–2100），月柱与年柱按典型交节日近似（±2 日以内）；日柱、时柱不受影响。古籍卦例回归请注意此项。</div>'
         : '');
     const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
     // 始终与 selectedDate 同步：切模式/锁定时刻恢复/补录改时后，
     // #timeInfo 与输入框必须指向同一时刻（旧版仅在输入框为空时赋值，二者会不一致）
-    $('#dtInput').value = selectedDate.getFullYear() + '-' + p2(selectedDate.getMonth() + 1) + '-' + p2(selectedDate.getDate()) +
-      'T' + p2(selectedDate.getHours()) + ':' + p2(selectedDate.getMinutes());
+    const w = wallOf(selectedDate);
+    $('#dtInput').value = w.y + '-' + p2(w.m) + '-' + p2(w.d) + 'T' + p2(w.h) + ':' + p2(w.min);
     $('#dtInput').disabled = (timeMode === 'live'); // 现场模式不可改时间
   }
 
@@ -270,7 +294,7 @@
       timeLocked = hasProgress;
       if (hasProgress) {
         // 已开摇的现场模式：恢复首摇锁定的时刻——补录期间改过时间也不得污染锁定值
-        if (lockedDate) selectedDate = new Date(lockedDate.getTime());
+        if (lockedDate) selectedDate = cloneDate(lockedDate);
       } else {
         lockedDate = null; // 尚未开摇：解除记忆，取当前时刻
         selectedDate = beijingNow();
@@ -740,9 +764,39 @@
     const btnAI = $('#btnAI'); if (btnAI) { btnAI.disabled = false; btnAI.textContent = '开始断卦'; }
   }
 
+  // ---------- 口令存储（M2）----------
+  // 口令是可直接换取全库读写的凭据，不应长期落盘。改用 sessionStorage：
+  // 同一标签页刷新仍免重输，关标签页即失效；同时把旧版留在 localStorage 的明文
+  // 一次性迁移过来并删除，避免磁盘上继续残留。
+  // 注意：sessionStorage 同样可被 XSS 读取，这一步缩的是「持久化窗口」，
+  // 不是「XSS 可读」——后者只能靠转义与 CSP 兜。
+  const CODE_KEY = 'ly_access_code';
+  let memCode = '';                       // 存储被禁用（Safari 隐私模式等）时的页内兜底
+  function readCode() {
+    try {
+      const s = sessionStorage.getItem(CODE_KEY);
+      if (s) return s;
+      const legacy = localStorage.getItem(CODE_KEY);
+      if (legacy) {
+        sessionStorage.setItem(CODE_KEY, legacy);
+        localStorage.removeItem(CODE_KEY); // 迁移即清除，不留第二份明文
+        return legacy;
+      }
+    } catch (e) { /* 存储不可用：退回 memCode */ }
+    return memCode;
+  }
+  function writeCode(code) {
+    memCode = code || '';
+    try {
+      if (code) sessionStorage.setItem(CODE_KEY, code);
+      else sessionStorage.removeItem(CODE_KEY);
+    } catch (e) { /* 存储不可用：仅保留 memCode */ }
+    try { localStorage.removeItem(CODE_KEY); } catch (e) { /* 清旧版残留，失败无妨 */ }
+  }
+
   function apiHeaders() {
     const h = { 'Content-Type': 'application/json' };
-    const code = localStorage.getItem('ly_access_code');
+    const code = readCode();
     if (code) h['X-Access-Code'] = code;
     return h;
   }
@@ -758,14 +812,14 @@
   async function apiFetch(path, opts, silent) {
     let res = await fetch(path, withHeaders(opts));
     if (res.status === 401 && !silent) {
-      localStorage.removeItem('ly_access_code');
+      writeCode('');
       renderLoginBtn();
       const code = prompt('需要口令才能继续，请输入：');
       if (code) {
-        localStorage.setItem('ly_access_code', code);
+        writeCode(code);
         renderLoginBtn();
         res = await fetch(path, withHeaders(opts));
-        if (res.status === 401) localStorage.removeItem('ly_access_code');
+        if (res.status === 401) writeCode('');
         renderLoginBtn();
       }
     }
@@ -1435,26 +1489,28 @@
   function renderLoginBtn() {
     const btn = $('#btnLogin'), tip = $('#loginTip');
     if (!btn) return;
-    const logged = !!localStorage.getItem('ly_access_code');
+    const logged = !!readCode();
     btn.textContent = logged ? '已登录 · 退出' : '口令登录';
-    if (tip) tip.textContent = logged ? '已登录，断卦后自动入卦例库' : '卦例库需口令，浏览与装入均需登录';
+    if (tip) tip.textContent = logged ? '已登录（本次会话有效），断卦后自动入卦例库' : '卦例库需口令，浏览与装入均需登录';
   }
   const _btnLogin = $('#btnLogin');
   if (_btnLogin) _btnLogin.onclick = async function () {
-    if (localStorage.getItem('ly_access_code')) {
-      localStorage.removeItem('ly_access_code');
+    if (readCode()) {
+      writeCode('');
       renderLoginBtn();
       return;
     }
     const code = prompt('请输入卦例库口令：');
     if (!code) return;
-    localStorage.setItem('ly_access_code', code);
+    writeCode(code);
     // 验证探针：只校验口令不落库
     try {
       const res = await fetch('/api/records?verify=1', { method: 'POST', headers: apiHeaders(), body: '{}' });
       if (res.status === 401) {
-        localStorage.removeItem('ly_access_code');
+        writeCode('');
         alert('口令错误');
+      } else if (res.status === 429) {
+        alert('口令错误次数过多，请稍后再试');
       }
     } catch (e) { /* 网络异常时保留输入，实际写入时再校验 */ }
     renderLoginBtn();
@@ -1510,37 +1566,76 @@
       '<div class="muted" style="margin-top:4px">样本尚少，以上只是忠实计数，不构成预测效力的证据；Brier score 等待样本量足够后再算。</div></div>';
   }
 
-  $('#btnLib').onclick = async function () {
-    $('#libList').innerHTML = '<div class="muted">载入中…</div>';
+  // 列表分页（L2）：服务端 limit 默认 100/上限 200，前端按页追加。
+  // 旧版硬编码 LIMIT 100，第 101 条之后只能靠 id 直访，列表里永久不可见。
+  const LIB_PAGE = 100;
+  let libRecs = [];     // 已载入的记录（统计口径 = 已载入样本，随"加载更多"一起增长）
+  let libLoaded = 0;    // 已渲染条数 = 下一页 offset
+
+  function libItemHTML(r) {
+    return '<div class="lib-item" data-id="' + escAttr(r.id) + '"><span>' + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) + '</span>' +
+      '<span class="lib-side">' + outcomeBadge(r.outcome) + '<span class="muted">' + esc((r.created_at || '').slice(0, 10)) + '</span>' +
+      '<button class="lib-del" data-del="' + escAttr(r.id) + '" title="删除此卦例">×</button></span></div>';
+  }
+
+  async function loadLibPage(offset, append) {
+    const list = $('#libList');
+    if (!append) { list.innerHTML = '<div class="muted">载入中…</div>'; libRecs = []; libLoaded = 0; }
+    const res = await apiFetch('/api/records?limit=' + LIB_PAGE + '&offset=' + offset, {});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || '读取失败');
+    const oldMore = list.querySelector('[data-lib-more]');
+    if (oldMore) oldMore.parentNode.removeChild(oldMore);
+    if (!append) list.innerHTML = '';
+    if (!data.records.length) {
+      if (!append) { list.innerHTML = '<div class="muted">尚无卦例。</div>'; renderLibStats([]); }
+      return;
+    }
+    list.insertAdjacentHTML('beforeend', data.records.map(libItemHTML).join(''));
+    libRecs = append ? libRecs.concat(data.records) : data.records.slice();
+    libLoaded = libRecs.length;
+    renderLibStats(libRecs);
+    if (data.hasMore) {
+      list.insertAdjacentHTML('beforeend',
+        '<div class="btn-row" style="margin-top:8px"><button class="btn" data-lib-more>加载更多</button>' +
+        '<span class="muted" style="margin-left:8px">已载入 ' + libLoaded + ' 例</span></div>');
+    }
+  }
+
+  async function delCast(id) {
+    if (!confirm('确定删除此卦例？不可恢复。')) return;
     try {
-      const res = await apiFetch('/api/records', {});
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || '读取失败');
-      if (!data.records.length) { $('#libList').innerHTML = '<div class="muted">尚无卦例。</div>'; renderLibStats([]); return; }
-      renderLibStats(data.records);
-      $('#libList').innerHTML = data.records.map(function (r) {
-        return '<div class="lib-item" data-id="' + escAttr(r.id) + '"><span>' + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) + '</span>' +
-          '<span class="lib-side">' + outcomeBadge(r.outcome) + '<span class="muted">' + esc((r.created_at || '').slice(0, 10)) + '</span>' +
-          '<button class="lib-del" data-del="' + escAttr(r.id) + '" title="删除此卦例">×</button></span></div>';
-      }).join('');
-      Array.prototype.forEach.call(document.querySelectorAll('.lib-item'), function (el) {
-        el.onclick = function () { loadCast(el.dataset.id); };
-      });
-      Array.prototype.forEach.call(document.querySelectorAll('.lib-del'), function (btn) {
-        btn.onclick = async function (e) {
-          e.stopPropagation();
-          if (!confirm('确定删除此卦例？不可恢复。')) return;
-          try {
-            const res = await apiFetch('/api/records?id=' + encodeURIComponent(btn.dataset.del), { method: 'DELETE' });
-            const d = await res.json();
-            if (!res.ok) throw new Error(d.message || '删除失败');
-            const item = btn.closest('.lib-item');
-            if (item) item.remove();
-            $('#libDetail').innerHTML = '';
-            if (!$('.lib-item')) $('#libList').innerHTML = '<div class="muted">尚无卦例。</div>';
-          } catch (err) { alert('删除失败：' + err.message); }
-        };
-      });
+      const res = await apiFetch('/api/records?id=' + encodeURIComponent(id), { method: 'DELETE' });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.message || '删除失败');
+      const item = document.querySelector('.lib-item[data-id="' + id + '"]'); // id 已过 ^[A-Za-z0-9_-]{1,64}$ 白名单
+      if (item) item.remove();
+      $('#libDetail').innerHTML = '';
+      libRecs = libRecs.filter(function (x) { return x.id !== id; });
+      libLoaded = libRecs.length;
+      renderLibStats(libRecs);
+      // 删空当前页则退一页重拉（顺带把"加载更多"换成"尚无卦例"或下一页数据）
+      if (!libRecs.length) return loadLibPage(0, false);
+      if (!$('.lib-item')) $('#libList').innerHTML = '<div class="muted">尚无卦例。</div>';
+    } catch (err) { alert('删除失败：' + err.message); }
+  }
+
+  // 事件委托：分页后节点是追加进来的，用一次性委托避免每页重复绑定
+  const _libList = $('#libList');
+  if (_libList) _libList.addEventListener('click', function (e) {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    const del = t.closest('.lib-del');
+    if (del) { e.stopPropagation(); delCast(del.dataset.del); return; }
+    const more = t.closest('[data-lib-more]');
+    if (more) { more.disabled = true; loadLibPage(libLoaded, true).catch(function (err) { alert('读取失败：' + err.message); more.disabled = false; }); return; }
+    const item = t.closest('.lib-item');
+    if (item) loadCast(item.dataset.id);
+  });
+
+  $('#btnLib').onclick = async function () {
+    try {
+      await loadLibPage(0, false);
     } catch (e) {
       $('#libList').innerHTML = '<div class="muted">读取失败：' + esc(e.message) + '</div>';
     }

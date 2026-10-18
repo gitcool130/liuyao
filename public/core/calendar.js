@@ -136,8 +136,20 @@
     if (!dt || typeof dt.getTime !== 'function' || isNaN(dt.getTime())) {
       throw new Error('fourPillars: dt 须为有效 Date，实得 ' + Object.prototype.toString.call(dt));
     }
-    let y = dt.getFullYear(), m = dt.getMonth() + 1, d = dt.getDate();
-    const h = dt.getHours(), min = dt.getMinutes();
+    // 墙上时间锚点：调用方可在 Date 上挂 __wall（北京墙上时间分量）。
+    // 起因：app.js 的 beijingNow() 把北京墙上时间喂给本机时区的构造函数，而
+    // 实行夏令时的时区在春令切换日会把 02:00–02:59 归一化成 03:xx；此处读本机
+    // getters 就会把时柱排错一位（实测 America/New_York 2026-03-08 02:30 → 03:30）。
+    // 有锚点则用锚点，没有则维持原行为（测试与补录路径传入的都是普通 Date）。
+    const wall = dt.__wall;
+    let y, m, d, h, min;
+    if (wall && typeof wall.y === 'number' && typeof wall.m === 'number' &&
+        typeof wall.d === 'number' && typeof wall.h === 'number' && typeof wall.min === 'number') {
+      y = wall.y; m = wall.m; d = wall.d; h = wall.h; min = wall.min;
+    } else {
+      y = dt.getFullYear(); m = dt.getMonth() + 1; d = dt.getDate();
+      h = dt.getHours(); min = dt.getMinutes();
+    }
 
     // 夜子时流派：23:00-24:00 日柱归属
     let nightZi = false;

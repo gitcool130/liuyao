@@ -110,6 +110,10 @@
   // 一个乐句：3~6 音，级进为主；音区压在中低音域；句后留白 5~10 秒
   function phrase() {
     if (!playing) return;
+    // 后台不排句：visibilitychange 已 suspend，ctx.currentTime 冻结，
+    // 继续每 1.2s 自旋一次只是空转（旧版靠下面那行 state 判断自旋自保，仍会留下轮询链）。
+    // 恢复可见时由 visibilitychange 重新起句，故此处直接断链、置空 timer。
+    if (document.hidden) { timer = null; return; }
     // 后台挂起期间 currentTime 冻结，避免在冻结时间上叠加调度，待恢复后再排句
     if (ctx.state !== 'running') { timer = setTimeout(phrase, 1200); return; }
     const notes = 3 + Math.floor(Math.random() * 4);
@@ -187,10 +191,23 @@
     document.addEventListener('pointerdown', kick);
   }
 
-  // 切后台时暂停，回前台恢复
+  // 切后台时暂停，回前台恢复。
+  // 必须同时撤掉 pending 的乐句定时器，否则 phrase() 在 ctx 非 running 时每 1.2s
+  // 自旋重排，后台挂着就是一条纯空转的轮询链（浏览器虽会把后台定时器节流到分钟级，
+  // 但这里的设计意图是"暂停"，不是"低频轮询"）。
+  // 恢复时不直接调 phrase()：resume() 是异步的，此刻 state 仍可能是 'suspended'，
+  // 直接调会白走一次 1.2s 自旋；延后一拍再起句，并先清掉可能残留的定时器防双链。
   document.addEventListener('visibilitychange', function () {
     if (!ctx) return;
-    if (document.hidden && playing) ctx.suspend();
-    else if (!document.hidden && playing) ctx.resume();
+    if (document.hidden) {
+      if (!playing) return;
+      clearTimeout(timer); timer = null;
+      ctx.suspend();
+      return;
+    }
+    if (!playing) return;
+    ctx.resume();
+    clearTimeout(timer);
+    timer = setTimeout(phrase, 1200);
   });
 })();

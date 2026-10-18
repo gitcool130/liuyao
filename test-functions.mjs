@@ -108,17 +108,31 @@ eq('去重逻辑仍生效（normal-model 只留一个）', mIds.filter(function 
 // D1 最小桩：记录被下发的 SQL 与被绑定的参数，用于断言「非法 id 不下探数据库」
 // bind 可变参（UPDATE 等多参语句全部记录）；run 的 meta.changes 可由 state.changes 控制（默认 1）
 function mkDb() {
-  const state = { sqls: [], bound: [], changes: 1 };
+  const state = { sqls: [], bound: [], changes: 1, rows: [] };
   return {
     state: state,
     prepare: function (sql) {
       state.sqls.push(sql);
       return {
         bind: function () {
-          state.bound.push(Array.prototype.slice.call(arguments));
-          return { run: async function () { return { meta: { changes: state.changes } }; }, first: async function () { return null; } };
+          const args = Array.prototype.slice.call(arguments);
+          state.bound.push(args);
+          return {
+            run: async function () { return { meta: { changes: state.changes } }; },
+            first: async function () { return null; },
+            // 列表查询走 bind(...).all()（分页参数为占位符）。桩按 args 模拟
+            // LIMIT ? OFFSET ?：last 两个参数是 [limit, offset]，否则原样返回。
+            all: async function () {
+              if (args.length >= 2 && state.rows.length) {
+                const lim = Number(args[args.length - 2]);
+                const off = Number(args[args.length - 1]);
+                if (lim > 0) return { results: state.rows.slice(off, off + lim) };
+              }
+              return { results: state.rows };
+            }
+          };
         },
-        all: async function () { return { results: [] }; }
+        all: async function () { return { results: state.rows }; }
       };
     }
   };
@@ -145,6 +159,59 @@ eq('带口令读列表 → 200', (await get('', { 'X-Access-Code': 'k' })).statu
 eq('未配置任何口令时读列表保持开放（向后兼容）', (await get('', {}, { LIUYAO_DB: mkDb() })).status, 200);
 eq('读路径同样认 ACCESS_CODE（与写路径同源）',
   (await get('', { 'X-Access-Code': 'a' }, { LIUYAO_DB: mkDb(), ACCESS_CODE: 'a' })).status, 200);
+
+// ---------- 列表分页（L2）：limit/offset 占位符 + hasMore ----------
+const dbPage = mkDb();
+dbPage.state.rows = [0, 1, 2].map(function (i) {
+  return { id: 'r' + i, created_at: '2026-10-0' + (i + 1), question: 'q' + i, hex: 'h', pillars: 'p', outcome: null };
+});
+const envPage = { LIUYAO_DB: dbPage, LIB_CODE: 'k' };
+const lastBound = function () { return dbPage.state.bound[dbPage.state.bound.length - 1]; };
+const jPage = await (await get('?limit=2&offset=0', { 'X-Access-Code': 'k' }, envPage)).json();
+eq('分页：SQL 走 LIMIT ? OFFSET ?', /LIMIT \? OFFSET \?/.test(dbPage.state.sqls[dbPage.state.sqls.length - 1]), true);
+eq('分页：多取一条判 hasMore（limit+1, offset）', lastBound(), [3, 0]);
+eq('分页：只下发 limit 条', jPage.records.length, 2);
+eq('分页：hasMore 为真', jPage.hasMore, true);
+eq('分页：回显 limit/offset', [jPage.limit, jPage.offset], [2, 0]);
+const jPage2 = await (await get('?limit=2&offset=2', { 'X-Access-Code': 'k' }, envPage)).json();
+eq('分页：offset 透传', lastBound(), [3, 2]);
+eq('分页：末页 hasMore 为假', jPage2.hasMore, false);
+eq('分页：超上限收敛到 200', (await get('?limit=9999', { 'X-Access-Code': 'k' }, envPage), lastBound()), [201, 0]);
+eq('分页：缺省仍是 100', (await get('', { 'X-Access-Code': 'k' }, envPage), lastBound()), [101, 0]);
+
+// ---------- 请求体总大小闸门（L1）：早于 request.json() 拒绝 ----------
+const big = await interpretPost({
+  request: new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'content-length': String(600 * 1024), 'X-Access-Code': 'a' },
+    body: '{}'
+  }),
+  env: { ACCESS_CODE: 'a' }
+});
+eq('超大 Content-Length → 413', big.status, 413);
+eq('413 错误码固定', (await big.json()).error, 'BODY_TOO_LARGE');
+const bigRec = await onRequestPost({
+  request: new Request('https://x/api/records', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'content-length': String(600 * 1024), 'X-Access-Code': 'k' },
+    body: '{}'
+  }),
+  env: envLib
+});
+eq('records 同样 413', bigRec.status, 413);
+
+// ---------- 口令爆破限速：同 IP 错 20 次后 429 ----------
+const bruteCode = { LIUYAO_DB: mkDb(), LIB_CODE: 'k' };
+const bruteIp = { 'X-Access-Code': 'wrong', 'CF-Connecting-IP': '203.0.113.7' };
+let bruteStatus = 0;
+for (let i = 0; i < 21; i++) {
+  bruteStatus = (await get('', bruteIp, bruteCode)).status;
+}
+eq('连续错口令第 21 次 → 429', bruteStatus, 429);
+eq('换 IP 不受影响（仍是 401）',
+  (await get('', { 'X-Access-Code': 'wrong', 'CF-Connecting-IP': '203.0.113.8' }, bruteCode)).status, 401);
+eq('正确口令不受计数影响',
+  (await get('', { 'X-Access-Code': 'k', 'CF-Connecting-IP': '203.0.113.9' }, bruteCode)).status, 200);
 
 // ---------- #19 结果回执（M16）：白名单校验 + 只写 outcome 列 + 不被自动保存冲掉 ----------
 // sanitizeOutcome 三态：object = 合法；null = 显式清除；undefined = 非法
@@ -419,6 +486,22 @@ CONTRACT_MARKS.forEach(function (m) {
 eq('两份提示词同引经据典口径', appSrc.indexOf('引经据典') >= 0 && SYSTEM_PROMPT.indexOf('引经据典') >= 0, true);
 // 反向对照：契约段一旦被删，本组断言必须变红（防止断言写成恒真）
 eq('对照：契约段总数应为 4', CONTRACT_MARKS.length, 4);
+
+// 全文一致：上面的断言只查 4 个标记「各自存在」，两份提示词正文分叉（一侧多/少一段
+// 说明、改了措辞）仍会全绿。这里从 app.js 源码取出数组字面量求值（纯字符串元素，
+// 无副作用），与 interpret.js 的 SYSTEM_PROMPT 逐字符比对。
+// 相比跨文件 import（app.js 是浏览器 IIFE，import 会缺 DOM），求值只依赖源码文本。
+(function () {
+  const head = 'const SYSTEM_PROMPT = [';
+  const start = appSrc.indexOf(head);
+  const end = appSrc.indexOf("].join('\\n');", start);
+  if (start < 0 || end < 0) { eq('能从 app.js 提取 SYSTEM_PROMPT 数组', false, true); return; }
+  const literal = appSrc.slice(start + 'const SYSTEM_PROMPT = '.length, end + 1);
+  let appPrompt = null;
+  try { appPrompt = new Function('return ' + literal + ".join('\\n')")(); } catch (e) { appPrompt = null; }
+  eq('app.js 的 SYSTEM_PROMPT 可求值', typeof appPrompt, 'string');
+  eq('两份 SYSTEM_PROMPT 全文逐字符一致', appPrompt, SYSTEM_PROMPT);
+})();
 
 // ---------- #21 SSE 透传剥离 reasoning_content（2026-10-13） ----------
 // 事故复盘：百炼思考模型把 reasoning_content（思考草稿）与 content（最终答案）

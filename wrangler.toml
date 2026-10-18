@@ -71,7 +71,7 @@ database_id = "42279a23-7032-42bb-b675-bb7a2015fcc0"
 # CUSTOM_PROVIDERS = '[{"id":"kimi","label":"Moonshot","base":"https://api.moonshot.cn/v1","models":["kimi-k2"]}]'
 
 # 费用/访问闸门现状（2026-09-28 用户要求「不限流」后）：
-#   LIB_CODE            → secret，生产已设（只管卦例库**写入**）
+#   LIB_CODE            → secret，生产已设（卦例库**读 + 写**：浏览/装入/删除，见 records.js 的 checkAccess/writeGuard）
 #   ACCESS_CODE         → secret，生产未设（曾启用、同日撤销，断卦恢复免口令）
 #   RATE_LIMIT_PER_MIN  → 本文件 [vars]，**当前不设 = 不限流**
 # → 即 /api/interpret 目前**无口令、无限流**，费用敞口仅由「入模上限 ≈ 20,000 字符」约束。
