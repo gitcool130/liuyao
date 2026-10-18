@@ -153,7 +153,7 @@ async function launchBrowser() {
   // ---------- D. core 加载失败守卫（#17） ----------
   {
     const page = await browser.newPage();
-    await page.route('**/core/analyze.js', route => route.fulfill({ status: 404, body: '' }));
+    await page.route('**/core/analyze.js*', route => route.fulfill({ status: 404, body: '' }));
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(300);
     console.log('D. 内核加载失败守卫');
