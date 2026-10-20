@@ -616,6 +616,42 @@
     ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
   }
 
+  /* ---------- AI 输出复制按钮 ----------
+     断语正文含引号、换行、尖括号，用 data-* 属性传递还得再转义一层，易写错；
+     故按钮只作触发器，原文由闭包持有。host 为按钮的挂载容器（列头 / 消息气泡）。 */
+  function attachCopyBtn(host, text) {
+    if (!host) return null;
+    const prev = host.querySelector('[data-copy]');
+    if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'copy-btn';
+    btn.setAttribute('data-copy', '1');
+    btn.textContent = '复制';
+    // 连点两次时不能读已被改写的按钮文案，故还原定时器固定用「复制」
+    btn.onclick = function (ev) {
+      if (ev && ev.stopPropagation) ev.stopPropagation();   // 卦例项/列头有父级点击
+      const txt = String(text == null ? '' : text);
+      if (!txt) return;
+      btn.textContent = '已复制 ✓';
+      btn.classList.add('done');
+      clearTimeout(btn._copyTimer);
+      btn._copyTimer = setTimeout(function () {
+        btn.textContent = '复制'; btn.classList.remove('done');
+      }, 1500);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).catch(function () { fallbackCopy(txt); });
+      } else { fallbackCopy(txt); }
+    };
+    host.appendChild(btn);
+    return btn;
+  }
+  // 模型列头：按钮挂在列头右侧（列体由 renderCols 生成，head 是 body 的兄弟节点）
+  function colHeadOf(model) {
+    const body = colBody(model);
+    return body && body.parentNode ? body.parentNode.querySelector('.ai-col-head') : null;
+  }
+
   // ---------- AI 断卦 / 进阶探讨 / 卦例库（多模型对比） ----------
   // 模型清单：初始为内置默认，页面加载后从 /api/models 动态拉取（GPT 清单由后台 GPT_MODELS 变量驱动）
   let MODELS = [
@@ -1264,7 +1300,7 @@
     $('#aiReply').innerHTML = selModels.map(function (m, i) {
       const cfg = MODELS.filter(function (x) { return x.id === m; })[0] || {};
       return '<div class="ai-col">' +
-        '<div class="ai-col-head">' + esc(cfg.label || m) + '<span class="pv-tag">' + esc(cfg.pv || '') + '</span></div>' +
+        '<div class="ai-col-head"><span class="ai-col-title">' + esc(cfg.label || m) + '<span class="pv-tag">' + esc(cfg.pv || '') + '</span></span></div>' +
         '<div class="ai-col-body" id="col-' + midSafe(m) + '"></div>' +
         '</div>';
     }).join('');
@@ -1347,6 +1383,8 @@
               : '';
             bodyEl.innerHTML = card + '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply) + checklistHTML() +
               (corrected ? '<div class="muted" style="margin-top:6px;font-size:12px">已按盘面校正 1 次</div>' : '');
+            // 复制的是模型原文（正文末尾本含「结论/应期」四行），不拼前端解析出的卡片，避免重复
+            attachCopyBtn(colHeadOf(m), reply);
             scrollBody(bodyEl);
           }
         } catch (e) {
@@ -1411,7 +1449,10 @@
           // 会把两个卦象的盘面文本混在一趟上下文里发给模型。
           if (aiGen !== myGen) return;
           aiStates[m].history.push({ role: 'assistant', content: reply });
-          if (loadEl) loadEl.innerHTML = mdLite(reply) + auditHTML(reply);
+          if (loadEl) {
+            loadEl.innerHTML = mdLite(reply) + auditHTML(reply);
+            attachCopyBtn(loadEl, reply);
+          }
           scrollBody(colBody(m));
         } catch (e) {
           if (e && e.kind === 'aborted') return;
@@ -1664,15 +1705,20 @@
       let msgs = {}; try { msgs = JSON.parse(r.messages || '{}'); } catch (e) {}
       // 兼容旧格式（单模型数组）
       if (Array.isArray(msgs)) msgs = msgs.length ? { '（旧版记录）': msgs } : {};
+      // 断语正文按渲染顺序入队，供下方 innerHTML 落地后逐条绑定复制按钮
+      // （历史记录里每条「断」各一份，不分模型合并，免得复制串行）
+      const copyQueue = [];
       let colHTML = Object.keys(msgs).map(function (m) {
         const cfg = MODELS.filter(function (x) { return x.id === m; })[0] || { label: m, pv: '' };
         // 兼容两种结构：{模型: [消息...]}（旧）与 {模型: {history: [消息...]}}（现行 aiStates 格式）
         const arr = Array.isArray(msgs[m]) ? msgs[m] : ((msgs[m] && msgs[m].history) || []);
         return '<div class="ai-col">' +
-          '<div class="ai-col-head">' + esc(cfg.label || m) + '<span class="pv-tag">' + esc(cfg.pv || '') + '</span></div>' +
+          '<div class="ai-col-head"><span class="ai-col-title">' + esc(cfg.label || m) + '<span class="pv-tag">' + esc(cfg.pv || '') + '</span></span></div>' +
           arr.map(function (msg) {
-            return '<div class="msg ' + (msg.role === 'user' ? 'user' : 'ai') + '"><b>' +
-              (msg.role === 'user' ? '问' : '断') + '：</b>' + mdLite(msg.content) + '</div>';
+            const isUser = msg.role === 'user';
+            if (!isUser) copyQueue.push(msg.content);
+            return '<div class="msg ' + (isUser ? 'user' : 'ai') + '"><b>' +
+              (isUser ? '问' : '断') + '：</b>' + mdLite(msg.content) + '</div>';
           }).join('') + '</div>';
       }).join('');
       if (!colHTML) colHTML = '<div class="muted">该卦例无对话记录。</div>';
@@ -1702,6 +1748,9 @@
         (oc ? '<button class="btn ghost" id="btnOcClear">清除回执</button>' : '') +
         '</div><div class="muted" id="ocMsg" style="margin-top:6px;font-size:12px"></div></div>' +
         '</div>';
+      // 每条「断」挂一个复制按钮：DOM 顺序与 copyQueue 顺序一致
+      const aiNodes = $('#libDetail').querySelectorAll('.msg.ai');
+      for (let i = 0; i < aiNodes.length; i++) attachCopyBtn(aiNodes[i], copyQueue[i]);
       if (oc) {
         if (oc.result) $('#ocResult').value = oc.result;
         if (oc.yingqi) $('#ocYingqi').value = oc.yingqi;

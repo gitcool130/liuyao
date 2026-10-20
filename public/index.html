@@ -211,6 +211,17 @@
     border-left: 3px solid var(--gold); display: flex; justify-content: space-between; align-items: center;
   }
   .ai-col-head .pv-tag { font-size: 11px; font-weight: 400; color: var(--ink-light); }
+  .ai-col-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  /* AI 输出的复制按钮（列头 / 追问气泡内的轻量按钮） */
+  .copy-btn {
+    font-family: inherit; font-size: 12px; line-height: 1; letter-spacing: .5px;
+    padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line);
+    background: #fff; color: var(--ink-light); cursor: pointer; transition: all .15s;
+    flex-shrink: 0; white-space: nowrap;
+  }
+  .copy-btn:hover { border-color: var(--gold); color: var(--cinnabar); }
+  .copy-btn.done { border-color: #b8d4bc; background: #eef5ee; color: var(--ok); }
+  .msg > .copy-btn { display: block; margin: 6px 0 0 auto; }
   .chat-row { display: flex; gap: 10px; margin-top: 10px; }
   .chat-row input {
     flex: 1; font-family: inherit; font-size: 14px; padding: 9px 12px;
@@ -380,16 +391,16 @@
 
 <button id="bgmBtn" title="琴音 · 点击播放">琴</button>
 
-<script src="core/data.js?v=20261017f"></script>
-<script src="core/data-jieqi.js?v=20261017f"></script>
-<script src="core/calendar.js?v=20261017f"></script>
-<script src="core/paipan.js?v=20261017f"></script>
-<script src="core/analyze.js?v=20261017f"></script>
-<script src="core/sensitive.js?v=20261017f"></script>
-<script src="core/domain-methods.js?v=20261017f"></script>
-<script src="core/fact-audit.js?v=20261017f"></script>
-<script src="core/coverage-audit.js?v=20261017f"></script>
-<script src="app.js?v=20261017f"></script>
+<script src="core/data.js?v=20261021a"></script>
+<script src="core/data-jieqi.js?v=20261021a"></script>
+<script src="core/calendar.js?v=20261021a"></script>
+<script src="core/paipan.js?v=20261021a"></script>
+<script src="core/analyze.js?v=20261021a"></script>
+<script src="core/sensitive.js?v=20261021a"></script>
+<script src="core/domain-methods.js?v=20261021a"></script>
+<script src="core/fact-audit.js?v=20261021a"></script>
+<script src="core/coverage-audit.js?v=20261021a"></script>
+<script src="app.js?v=20261021a"></script>
 <script src="bgm.js"></script>
 </body>
 </html>
