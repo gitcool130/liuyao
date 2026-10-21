@@ -358,6 +358,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | ⑧ | 契约段看守不足 | `CONTRACT_MARKS` 4 → 6 段（新增法理口径、多选一问法入强制比对名单；另三段由「两份提示词全文一致」断言覆盖），反向对照断言同步改为 6 | `test-functions.mjs` |
 | ⑨ | 新模块无回归 | `test-absorb.js` 新增第 9 节 20 项：三型正用例 + 副词/趋势题反用例 + 空输入不炸 + hint/aiNote 成对出现 | `test-absorb.js` |
 | ⑩ | CI 脚本顺序断言漏新文件 | 推送后 CI 红：`ci.yml` 的脚本加载顺序 `expect` 清单为硬编码 11 项，未含 `question-shape.js`，语法检查清单同漏。教训：新 core 文件须同步三处——`index.html` script 链、`core.js` 注释与 require、`ci.yml` 两道清单 | `.github/workflows/ci.yml` |
+| ⑪ | 外部评审（DeepSeek）复核本轮方案 | 批判性吸收：其「禁止双象」的举例有语病——占病以子孙为医药是传统正取，真问题是「一爻充任两个对立选项」，【取象边界】据此精化并明列传统正取豁免；其自检层「吉凶与世应矛盾」一条为真增量，补入【输出自检】；其余各项（变爻本位、前提校验、空亡、问法三模板、黄金用例）本轮前已落地，不重复做。其「怎么办也强制决策树」不予采纳——怎么办是六爻原生趋势问法，过度约束反稀释断语 | 两份 `SYSTEM_PROMPT` |
 
 **验证**：`core 93 / rules 265 / gua-types 91 / absorb 181 / functions 149 / diff 零 BUG / guji PASS` 全绿（absorb 161 → 181；functions 契约组同步扩段）。`test:diff` 此前在本机报缺依赖，核实为检出目录从未 `npm install`（HEAD 基线同样失败），装齐 devDependencies 后 104780 字段零 BUG。
 
