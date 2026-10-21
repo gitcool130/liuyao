@@ -47,6 +47,7 @@ const PROXY = arg('proxy', '');
 const ONLY = arg('only', '');
 const TIMEOUT = parseInt(arg('timeout', '90'), 10);
 const STRICT = args.indexOf('--strict') >= 0;
+const RETRIES = parseInt(arg('retries', '2'), 10);   // 抖动链路上重试是刚需：实测小请求成功率仅 40%
 
 // 不该出现在公网的仓库文件：命中即判泄露
 const MUST_NOT_LEAK = ['wrangler.toml', 'schema.sql', 'package.json', 'README.md', 'test-rules.js', '.gitignore'];
@@ -61,23 +62,57 @@ function walk(dir) {
   return out;
 }
 
-function fetchBuf(rel) {
-  // cache-bust：CF 对静态资源有边缘缓存，不加参数会拿旧副本
-  const url = HOST + '/' + rel + '?cb=' + Date.now() + Math.random().toString(36).slice(2, 8);
-  const argv = ['-sS', '--max-time', String(TIMEOUT), '-o', '-'];
-  // 环境里的 http_proxy/https_proxy 会静默改变校验结果：实测沙箱环境中代理路径
-  // 连不通（25s 超时），直连却 200——同一份产物被判成「不一致」或「取不到」。
-  // 故默认绕开环境代理；要走代理必须显式 --proxy 指定，让影响可见。
-  argv.push('--noproxy', PROXY ? '' : '*');
-  if (PROXY) argv.push('--proxy', PROXY);
-  argv.push(url);
-  try {
-    const buf = execFileSync('curl', argv, { maxBuffer: 64 * 1024 * 1024, encoding: 'buffer' });
-    return { buf: buf, err: null };
-  } catch (e) {
-    // 超时/连接失败：curl 非零退出，stdout 可能只有半截——绝不能当完整内容用
-    return { buf: e.stdout || Buffer.alloc(0), err: e.message.split('\n')[0] };
+function curlToFile(rel, extra) {
+  // 一律写临时文件，不用 `-o -` 走管道：Windows 的 schannel 版 curl 在把
+  // 大体量响应写进管道时会 `Recv failure: Connection was reset`（实测
+  // app.js 106KB 必挂、18KB 以下的小文件全过）。这不是网络问题，是输出通道问题。
+  const tmp = path.join(os.tmpdir(), 'ly-v-' + process.pid + '-' + Math.random().toString(36).slice(2, 8));
+  let lastErr = null;
+  for (let attempt = 0; attempt <= RETRIES; attempt++) {
+    const argv = ['-sS', '--max-time', String(TIMEOUT), '-o', tmp, '-w', '%{http_code}'];
+    argv.push('--noproxy', PROXY ? '' : '*');
+    if (PROXY) argv.push('--proxy', PROXY);
+    argv.push.apply(argv, extra || []);
+    argv.push(HOST + '/' + rel + '?cb=' + Date.now() + Math.random().toString(36).slice(2, 8));
+    try {
+      const code = execFileSync('curl', argv, { encoding: 'utf8' }).trim();
+      const buf = fs.readFileSync(tmp);
+      if (code === '200' || code === '206') return { buf: buf, err: null };
+      lastErr = 'HTTP ' + code;
+      if (code === '404' || code === '403') break;   // 这类重试无意义
+    } catch (e) {
+      lastErr = e.message.split('\n')[0];
+    }
   }
+  try { fs.unlinkSync(tmp); } catch (e) { /* 没生成 */ }
+  return { buf: Buffer.alloc(0), err: lastErr };
+}
+
+function fetchRanged(rel, limit) {
+  const CH = 8192;                 // 段太小则握手开销大，太大则易被重置
+  const parts = [];
+  let total = 0;
+  while (total < limit + CH) {
+    const p = curlToFile(rel, ['-r', total + '-' + (total + CH - 1)]);
+    if (p.err || p.buf.length === 0) return null;
+    parts.push(p.buf);
+    total += p.buf.length;
+    if (p.buf.length < CH) break;  // 短段 = 到文件尾
+  }
+  return { buf: Buffer.concat(parts), err: null, ranged: true };
+}
+
+function fetchBuf(rel, localSize) {
+  // 大文件直接走分段：整包请求在这条链路上必被中途重置/超时（实测 106KB 必挂），
+  // 先花一次超时毫无收益。
+  if (localSize > 32768) {
+    const r = fetchRanged(rel, localSize);
+    if (r) return r;
+  }
+  const r = curlToFile(rel);
+  if (!r.err) return r;
+  const rr = fetchRanged(rel, localSize);
+  return rr || r;
 }
 
 function headContentType(rel) {
@@ -129,7 +164,7 @@ const problems = [];
 
 for (const rel of files) {
   const local = fs.readFileSync(path.join(pub, rel));
-  const r = fetchBuf(rel);
+  const r = fetchBuf(rel, local.length);
   if (r.err) {
     unknown++;
     console.log(pad(rel, 30) + pad(local.length, 9) + pad('-', 9) + 'UNKNOWN（' + r.err + '）');
@@ -163,7 +198,12 @@ for (const rel of files) {
 console.log('\n隔离检查（仓库文件不得出现在公网）：');
 console.log('-'.repeat(64));
 let leak = 0, isoUnknown = 0;
-for (const rel of MUST_NOT_LEAK) {
+if (ONLY) {
+  // --only 是「只查这一个文件」的定向校验，再跑 6 项隔离检查纯属浪费时间：
+  // 实测在网络差时，一次 --only 会被尾部隔离检查拖到超时。
+  console.log('（--only 模式跳过；要查隔离请不带 --only 运行）');
+}
+for (const rel of (ONLY ? [] : MUST_NOT_LEAK)) {
   const h = headContentType(rel);
   if (h.err) {
     isoUnknown++;
