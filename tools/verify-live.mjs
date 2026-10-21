@@ -47,6 +47,7 @@ const PROXY = arg('proxy', '');
 const ONLY = arg('only', '');
 const TIMEOUT = parseInt(arg('timeout', '90'), 10);
 const STRICT = args.indexOf('--strict') >= 0;
+const CHUNK = parseInt(arg('chunk', '4096'), 10);   // 实测 8KB 段会卡，4KB 段稳（206 + 0.9s）
 const RETRIES = parseInt(arg('retries', '2'), 10);   // 抖动链路上重试是刚需：实测小请求成功率仅 40%
 
 // 不该出现在公网的仓库文件：命中即判泄露
@@ -89,7 +90,7 @@ function curlToFile(rel, extra) {
 }
 
 function fetchRanged(rel, limit) {
-  const CH = 8192;                 // 段太小则握手开销大，太大则易被重置
+  const CH = CHUNK;
   const parts = [];
   let total = 0;
   while (total < limit + CH) {
