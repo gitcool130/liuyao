@@ -705,19 +705,25 @@ const envGw = {
   DEEPSEEK_API_KEY: 'k',
   DEEPSEEK_BASE_URL: 'https://gateway.ai.cloudflare.com/v1/acc/gw/deepseek'
 };
-const postDS = function (extra) {
+const postDS = function (extra, envOverride) {
   return interpretPost({
     request: new Request('https://x/api/interpret', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(Object.assign({ panText: '占测试', model: 'deepseek-flash' }, extra || {}))
     }),
-    env: envGw
+    env: Object.assign({}, envGw, envOverride || {})
   });
 };
 await (await postDS({})).text();
-eq('走网关默认不带 skip-cache（继续吃缓存）', gwOpts.headers['cf-aig-skip-cache'], undefined);
+eq('首轮断卦默认跳过缓存（防残篇被固化）', gwOpts.headers['cf-aig-skip-cache'], 'true');
 eq('走网关仍带超时头（未破坏既有网关头）', String(gwOpts.headers['cf-aig-request-timeout']).length > 0, true);
+// 追问：body 含 messages，与首轮不同键，本就不会命中缓存 → 不必跳过
+await (await postDS({ messages: [{ role: 'user', content: '那应期呢' }] })).text();
+eq('追问默认仍吃缓存', gwOpts.headers['cf-aig-skip-cache'], undefined);
+// 回退开关：设了 LLM_CACHE_FIRST=1 就恢复「首轮也吃缓存」的旧行为
+await (await postDS({}, { LLM_CACHE_FIRST: '1' })).text();
+eq('LLM_CACHE_FIRST=1 恢复旧行为（首轮吃缓存）', gwOpts.headers['cf-aig-skip-cache'], undefined);
 await (await postDS({ skipCache: true })).text();
 eq('skipCache:true → 透传 cf-aig-skip-cache', gwOpts.headers['cf-aig-skip-cache'], 'true');
 await (await postDS({ skip_cache: true })).text();

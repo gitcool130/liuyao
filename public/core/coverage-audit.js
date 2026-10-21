@@ -84,7 +84,13 @@
   // 方向是保守的：长距否定（「……吗？不，是真空」）会漏报，但绝不误报。
   const NEG = ['非', '不', '未', '无', '莫'];
   function isNegated(src, idx) {
-    const pre = src.slice(Math.max(0, idx - 3), idx);
+    // 窗口 6 字（原 3 字）：实测「卦中无爻逢月破」「盘面未列爻逢月破」里
+    // 否定词距被断言词 4–5 字，3 字窗口够不着，误报「月破无中生有」。
+    // 截到同一个小句，避免上一句的否定豁免本句（「无救，月破」仍算断言）。
+    const raw = src.slice(Math.max(0, idx - 6), idx);
+    const cut = Math.max(raw.lastIndexOf('，'), raw.lastIndexOf('。'), raw.lastIndexOf('；'),
+      raw.lastIndexOf('、'), raw.lastIndexOf(','));
+    const pre = cut >= 0 ? raw.slice(cut + 1) : raw;
     for (let i = 0; i < NEG.length; i++) if (pre.indexOf(NEG[i]) >= 0) return true;
     return false;
   }
@@ -97,12 +103,55 @@
   function isNegatedAfter(src, endIdx) {
     return /^(无|不|非|未)/.test(src.slice(endIdx, endIdx + 2));
   }
-  /** 找 word 的非否定出现位置；全部出现都在否定语境中则返回 -1。 */
+  /**
+   * 引述后否定：断语先引古法条文、再说它不适用——
+   * 「《卜筮正宗》谓『旺不为空，动不为空』……故『动不为空』『旺不惧空』皆不适用」
+   * 这是**正确**写法（先立后破），旧版只匹配子串，把引文当成主张，判「旬空误置」。
+   * 实测一轮 14 条断语里有 7 条栽在这条上，直接把要素错误率抬到 43%。
+   * 判据：命中词之后 24 字内出现「不适用／不成立／非也／皆不／并非」等否定收束语。
+   */
+  function isRefutedAfter(src, endIdx) {
+    const post = src.slice(endIdx, endIdx + 24);
+    const clause = post.split(/[。！？；]/)[0];   // 只看同一句，避免跨句误收
+    // 只收「明确否认前面那个说法」的收束语。不可写成宽松的「不可/误/错」——
+    // 「真破难扶，事不可为」里的「不可」是谓语（事不可为），不是否认「真破」，
+    // 宽松匹配会把该报的漏掉（实测 test-absorb 反例立即变红）。
+    return /(不适用|不成立|非也|皆不|并非|不是|不可谓|算不上|不属于)/.test(clause);
+  }
+  /**
+   * 引号区间：断语引古法条文时会把禁用词原样抄进引号。
+   * 「《卜筮正宗》谓“旺不为空，动不为空”」——引号内是**引文**，不是主张。
+   * 只凭后置否定救不了：引文那句后面 24 字内没有否定词（否定在下一句）。
+   * 故扫描主张时整体跳过引号区间。
+   * 取舍：模型若把错误主张塞进引号即可绕过——但本层是「防手滑误置」，
+   * 不是对抗性防护；真有恶意，另有 fact-audit 与人工回填兜底。
+   */
+  function quotedRanges(src) {
+    const out = [];
+    const re = /[「『“"]([^」』”"]*)[」』”"]/g;
+    let m;
+    while ((m = re.exec(src))) out.push([m.index, m.index + m[0].length]);
+    return out;
+  }
+  function inQuote(ranges, idx) {
+    for (let i = 0; i < ranges.length; i++) {
+      if (idx >= ranges[i][0] && idx < ranges[i][1]) return true;
+    }
+    return false;
+  }
+  /** 找 word 的非否定出现位置；全部出现都在否定/引述/标题语境中则返回 -1。 */
   function findAsserted(src, word) {
+    const qs = quotedRanges(src);
     let idx = src.indexOf(word);
     while (idx >= 0) {
-      if (!isNegated(src, idx) && !isNegatedAfter(src, idx + word.length)) return idx;
-      idx = src.indexOf(word, idx + word.length);
+      const end = idx + word.length;
+      // 列表标题：`- 月破：盘面未列爻逢月破` / `- 旬空月破：旬空戌亥…`
+      // 「月破：」只是小标题，真正的陈述在冒号之后（往往还带否定）。
+      // 旧版把标题当主张，实测 2 条断语因此被判「月破无中生有」。
+      const isLabel = /^[：:]/.test(src.slice(end, end + 1));
+      if (!isLabel && !inQuote(qs, idx) && !isNegated(src, idx)
+          && !isNegatedAfter(src, end) && !isRefutedAfter(src, end)) return idx;
+      idx = src.indexOf(word, end);
     }
     return -1;
   }

@@ -250,6 +250,15 @@ eq('「月破，无救」不算后置否定→仍告警',
   C.auditCoverage('用神月破，无救，凶。', noPo).accepted, false);
 eq('「旬空不见」→放行（后置否定）', C.auditCoverage('全盘旬空不见。', ripo).accepted, true);
 
+// 引述古法：断语先引条文再说不适用，是正确写法，不得判「概念误置」。
+// 实测一轮 14 条断语里 7 条栽在这条上，把要素错误率抬到 43%。
+eq('引文+「皆不适用」→放行',
+  C.auditCoverage('《卜筮正宗》谓“旺不为空，动不为空”。今用神安静，故“动不为空”“旺不惧空”皆不适用。', kZhen).accepted, true);
+eq('无引号的真断言→仍告警', C.auditCoverage('此卦旺不为空，可言有成。', kZhen).accepted, false);
+// 列表标题：「月破：」只是小标题，真正的陈述在冒号之后
+eq('标题「月破：盘面未列」→放行', C.auditCoverage('- 月破：盘面未列爻逢月破；', noPo).accepted, true);
+eq('「卦中无爻逢月破」→放行（否定距词 5 字）', C.auditCoverage('- 旬空月破：旬空戌亥；卦中无爻逢月破。', noPo).accepted, true);
+
 // 用神一致性
 eq('取用与卦盘不符→告警', C.auditCoverage('以妻财为用神观之。', ripo).accepted, false);
 eq('取用与卦盘相符→放行',

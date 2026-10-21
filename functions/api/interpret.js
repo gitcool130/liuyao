@@ -264,14 +264,26 @@ export async function onRequestPost(context) {
     return json({ error: 'PAN_TOO_LONG', message: '排盘文本超长（上限 ' + LIMITS.panText + ' 字符）' }, 413);
   }
   const panText = panTextRaw;
-  // skipCache：仅影响上游网关缓存，不影响任何生成参数。
-  // 供「评测要独立样本」「截断后重试」两类场景使用；普通断卦不传，继续吃缓存。
-  const skipCache = body.skipCache === true || body.skip_cache === true;
+  const history = Array.isArray(body.messages) ? body.messages.slice(-LIMITS.historyTurns) : [];
+  /* skipCache：只影响上游网关缓存，不改任何生成参数。
+     2026-10-21 起**首轮断卦默认跳过缓存**，理由是缓存对本产品的害处大于好处：
+       ① 网关缓存键 = provider+endpoint+model+鉴权头+整个请求体，同一盘同一问
+          重发必命中。首轮断卦的 body 恰好固定，是命中率最高的一类请求。
+       ② 它会把**残篇一起固化**：gemini 偶发提前收尾（实测 137/405 tokens、
+          正文断在句中），这份残篇进缓存后，用户重试（同一盘同一问）拿回的
+          还是它 —— 重试按钮形同虚设。这才是「缓存伤害产品」的真实路径。
+       ③ 而它对追问没用：追问 body 含 messages，与首轮不同键，本就不会命中。
+       ④ 省下的钱有限：同一用户重复点同一盘断卦属少数场景。
+     代价：同一盘重复断卦会真的重新生成（多花一次调用）。这正是我们想要的——
+     用户点第二次，应该得到第二次的回答，而不是第一次的存档。
+     要恢复旧行为（首轮也吃缓存）：设 env LLM_CACHE_FIRST=1。 */
+  const firstTurn = history.length === 0;
+  const skipCache = body.skipCache === true || body.skip_cache === true
+    || (firstTurn && env.LLM_CACHE_FIRST !== '1');
   // 参数对照实验开关：仅在显式开启 env 时接受 body.variant（A/B/C），
   // 否则一律按 A（旧行为）。防止外部随意改生成参数。
   const variant = (env.LLM_DEBUG_VARIANTS === '1' && typeof body.variant === 'string')
     ? body.variant.toUpperCase().slice(0, 1) : null;
-  const history = Array.isArray(body.messages) ? body.messages.slice(-LIMITS.historyTurns) : [];
 
   const model = (body.model || '').toString();
   const wl = modelWhitelist(env);
