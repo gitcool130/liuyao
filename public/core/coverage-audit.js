@@ -88,11 +88,20 @@
     for (let i = 0; i < NEG.length; i++) if (pre.indexOf(NEG[i]) >= 0) return true;
     return false;
   }
+  /**
+   * 后置否定：否定词跟在被断言词**之后**——「月破无」「旬空不见」「暗动未成」。
+   * 断语说「月破无。用神巳克世」是**正确**表述（全盘确无月破），旧版只查前置 3 字，
+   * 于是把它当成「断言月破」，A2 判「无中生有」——实测误报，出自 2026-10-21 扩样本。
+   * 只看紧邻 2 字且必须是句首否定词：「月破，无救」不算否定（逗号隔开，是真的在论月破）。
+   */
+  function isNegatedAfter(src, endIdx) {
+    return /^(无|不|非|未)/.test(src.slice(endIdx, endIdx + 2));
+  }
   /** 找 word 的非否定出现位置；全部出现都在否定语境中则返回 -1。 */
   function findAsserted(src, word) {
     let idx = src.indexOf(word);
     while (idx >= 0) {
-      if (!isNegated(src, idx)) return idx;
+      if (!isNegated(src, idx) && !isNegatedAfter(src, idx + word.length)) return idx;
       idx = src.indexOf(word, idx + word.length);
     }
     return -1;

@@ -81,7 +81,23 @@ const ACCURACY_CLAIM = /准确率\s*(?:可达|达到|约|≥|>|超过)?\s*\d+\s*
 function boundaryOf(text) {
   const src = String(text == null ? '' : text);
   const dogma = [];
-  DOGMA.forEach(function (w) { if (src.indexOf(w) >= 0) dogma.push(w); });
+  DOGMA.forEach(function (w) {
+    let idx = src.indexOf(w);
+    while (idx >= 0) {
+      // 前 5 字内是否定：「不等于必然录取」「并非必然」「未必」——都是在**否认**独断，
+      // 旧版直接按子串判独断，把正确表述算成违规（2026-10-21 扩样本实测误报）。
+      // 只看同一个小句：越过标点的否定词属于上一句，不得豁免本句
+      // （「用神无救，此事必然无救」里的「无」是上一句的，本句「必然」照样是独断）。
+      const preRaw = src.slice(Math.max(0, idx - 5), idx);
+      const cut = Math.max(preRaw.lastIndexOf('，'), preRaw.lastIndexOf('。'), preRaw.lastIndexOf('；'), preRaw.lastIndexOf('、'), preRaw.lastIndexOf(','));
+      const pre = cut >= 0 ? preRaw.slice(cut + 1) : preRaw;
+      // 只查前置：独断词后面的「无/不」属于谓语，不是否定独断本身。
+      // 「必然无救」是标准独断（必然→无救），不能因为紧跟一个「无」就豁免。
+      const negated = /[非不未无莫]/.test(pre);
+      if (!negated) { dogma.push(w); break; }
+      idx = src.indexOf(w, idx + w.length);
+    }
+  });
   const claim = ACCURACY_CLAIM.exec(src);
   if (claim) dogma.push(claim[0]);
   let hedge = 0;

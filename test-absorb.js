@@ -243,6 +243,12 @@ const noPo = an([1, 6, 0, 1, 0, 0], '妻财');
 const hasPoTag = noPo.judgments.some(function (j) { return j.tag === '月破'; });
 eq('样本前提：该盘确无月破', hasPoTag, false);
 eq('无月破却断言「月破」→告警', C.auditCoverage('用神月破，凶。', noPo).accepted, false);
+// 后置否定（2026-10-21 扩样本实测误报）：断语写「月破无」是在说**没有**月破，
+// 旧版只看前置 3 字，把它当成断言月破 → 无中生有误报。
+eq('「月破无」→放行（后置否定）', C.auditCoverage('月建戌，日辰辰，旬空戌亥；月破无。', noPo).accepted, true);
+eq('「月破，无救」不算后置否定→仍告警',
+  C.auditCoverage('用神月破，无救，凶。', noPo).accepted, false);
+eq('「旬空不见」→放行（后置否定）', C.auditCoverage('全盘旬空不见。', ripo).accepted, true);
 
 // 用神一致性
 eq('取用与卦盘不符→告警', C.auditCoverage('以妻财为用神观之。', ripo).accepted, false);
