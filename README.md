@@ -871,6 +871,10 @@ npm run verify:live -- --strict           # UNKNOWN 也判失败（CI 用）
 再检查 `wrangler.toml` / `schema.sql` / `package.json` / `README.md` 等
 是否泄露到公网（**看 `Content-Type` 而非状态码**——本项目有 SPA 回退，200 不可信）。
 
+**上线后的人工验收**：自动化只能证明「代码是这份」，证不了「用起来是对的」。
+每次有可见行为改动，照 [`docs/manual-test-2026-10-21.md`](docs/manual-test-2026-10-21.md)
+点一遍（含回滚命令与配置类回退开关）。
+
 D1 建库：控制台创建后将 `database_id` 填入 wrangler.toml，并执行 `schema.sql`。
 
 ## 许可
