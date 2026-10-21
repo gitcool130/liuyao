@@ -21,6 +21,15 @@ import { onRequestPost as interpretPost, isRateLimited, __rlState, SYSTEM_PROMPT
 import { readFileSync } from 'node:fs';
 
 let pass = 0, fail = 0;
+// 服务端每次收流会打一行 {"ev":"stream_end",…} 采样日志（2026-10-21 加，用于区分
+// 「模型自停」与「流被提前关闭」）。本文件会驱动上百次流，不加过滤会把断言输出淹没。
+// 只滤这一种事件，FAIL 与其它输出原样保留。
+const rawLog = console.log.bind(console);
+console.log = function () {
+  const a = arguments;
+  if (a.length && typeof a[0] === 'string' && a[0].indexOf('"ev":"stream_end"') !== -1) return;
+  rawLog.apply(null, a);
+};
 function eq(name, got, want) {
   const ok = JSON.stringify(got) === JSON.stringify(want);
   if (ok) { pass++; } else { fail++; console.log('FAIL', name, 'got=', JSON.stringify(got), 'want=', JSON.stringify(want)); }

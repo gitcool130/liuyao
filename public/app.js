@@ -703,16 +703,20 @@
   // ---------- AI 断卦 / 进阶探讨 / 卦例库（多模型对比） ----------
   // 模型清单：初始为内置默认，页面加载后从 /api/models 动态拉取（GPT 清单由后台 GPT_MODELS 变量驱动）
   let MODELS = [
-    { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', pv: 'Google', tip: '快' },
-    { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', pv: 'Google', tip: '高峰期易过载' },
+    { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', pv: 'Google', tip: '快 · 偶发断稿' },
+    { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', pv: 'Google', tip: '高峰易过载' },
     { id: 'deepseek-flash', label: 'DeepSeek V4.1 Flash', pv: 'DeepSeek', tip: '1017 快照' }
   ];
-  const DEFAULT_MODELS = ['gemini-3.6-flash', 'deepseek-flash'];
+  // 默认模型（2026-10-21 调整）：3.6 → 3.8。
+  // 实测 13 次首轮断卦，gemini-3.6-flash 有 6 次断在句中（46%），gemini-3.8-flash
+  // 六次全部成篇。默认配置不该选那个「一半概率给半篇」的。
+  const DEFAULT_MODELS = ['gemini-3.8-flash', 'deepseek-flash'];
 
   // 已知模型的特性提示；后台自定义的模型名无提示
   const MODEL_TIPS = {
-    'gemini-3.6-flash': '快',
-    'gemini-3.8-flash': '高峰期易过载',
+    // 「快」是真的快（8–20 s），但实测 46% 断在句中，标签不能只写优点
+    'gemini-3.6-flash': '快 · 偶发断稿',
+    'gemini-3.8-flash': '高峰易过载',
     'deepseek-flash': 'V4.1 · 1017',
     'gpt-6-luna': '便宜 · 快',
     'gpt-6-sol': '均衡',
@@ -727,6 +731,22 @@
     }
     return parts[0].charAt(0).toUpperCase() + parts[0].slice(1) +
       (parts.length > 1 ? ' ' + parts.slice(1).join(' ') : '');
+  }
+
+  /* 残篇补发用哪个模型：优先同供应商的兄弟模型，gemini 家族优先 3.8。
+     理由（2026-10-21 实测，n=13）：gemini-3.6-flash 有 46% 断在句中，用**同一个**
+     模型重跑仍有一半概率撞同一处；gemini-3.8-flash 六次全部成篇。
+     补发是为了拿到完篇，不是为了复现失败——所以能换就换。
+     没有兄弟模型（如 deepseek 单模型）时原地重跑，行为同旧版。 */
+  function retryModelFor(m) {
+    const cur = MODELS.filter(function (x) { return x.id === m; })[0];
+    if (!cur || !cur.pv) return m;
+    // 只在「有实测更稳的兄弟」时才换。反过来的情况（3.8 残篇 → 换 3.6）是降级，
+    // 宁可原地重跑：不能为了换而换，把稳定模型换成 46% 断稿的那个。
+    const stable = MODELS.filter(function (x) {
+      return x.pv === cur.pv && x.id !== m && x.id === 'gemini-3.8-flash';
+    })[0];
+    return stable ? stable.id : m;
   }
 
   function applyModels(list) {
@@ -772,6 +792,26 @@
       }
     }
   }
+
+  /* 老用户默认模型迁移（2026-10-21）：默认从 3.6 换成 3.8，但 localStorage 里
+     还存着旧默认值，只改常量对老用户不生效。只迁移「一直没动过选择」的那批
+     ——存的正好是旧默认两项才替换；用户自己勾过的组合一律不动。
+     用一次性标记，避免他们以后主动选回 3.6 又被下次加载改掉。 */
+  (function migrateDefaultModels() {
+    try {
+      if (localStorage.getItem('ly_models_v2') === '1') return;
+      const raw = localStorage.getItem('ly_models');
+      if (raw) {
+        const arr = JSON.parse(raw);
+        const oldDefaults = ['gemini-3.6-flash', 'deepseek-flash'];
+        if (Array.isArray(arr) && arr.length === oldDefaults.length &&
+          oldDefaults.every(function (id) { return arr.indexOf(id) >= 0; })) {
+          lsSet('ly_models', JSON.stringify(DEFAULT_MODELS));
+        }
+      }
+    } catch (e) { /* 脏数据不迁移，保持原样 */ }
+    lsSet('ly_models_v2', '1');
+  })();
 
   let selModels = loadSelModels();
   let aiStates = {};   // { modelId: { history: [] } }
@@ -1437,13 +1477,21 @@
              deepseek 8 s / 951 字符、gemini 137 tokens），用户拿到的半篇连「结论：」
              行都没有，只能自己再点一次。这里检测到就自动重来一遍，把完整稿
              覆盖上去，用户最多多等一次生成，不用自己判断「是不是没写完」。
+             2026-10-21 晚：补发改用兄弟模型（见 retryModelFor）——同模型重跑
+             对 3.6 的 46% 残篇率没有改善，换 3.8 才拿得到完篇。
              只补一次：再失败就保留较长的一稿并显示提示，避免反复烧调用。 */
+          let retriedWith = '';
           if (reply && reply.length > 30 && !/结[论局]\s*[：:]/.test(reply)) {
-            onStatus('断语未写完，正在重新生成…');
-            const retry = await callInterpret(m, [], onStatus, onStream, { gen: myGen, signal: mySignal });
+            const alt = retryModelFor(m);
+            onStatus(alt !== m ? '断语未写完，改用 ' + alt + ' 重新生成…' : '断语未写完，正在重新生成…');
+            const retry = await callInterpret(alt, [], onStatus, onStream, { gen: myGen, signal: mySignal });
             if (myGen !== aiGen) return;
-            if (retry && /结[论局]\s*[：:]/.test(retry)) reply = retry;
-            else if (retry && retry.length > reply.length) reply = retry;
+            const good = !!retry && (/结[论局]\s*[：:]/.test(retry) || retry.length > reply.length);
+            if (good) {
+              reply = retry;
+              // 只有真的换上、且模型不同才标注，避免「补全」二字在默认路径上刷屏
+              if (alt !== m) retriedWith = alt;
+            }
           }
 
           /* 盘面事实冲突 → 把冲突点回灌给模型，只重写一次。
@@ -1484,7 +1532,8 @@
                 '</div>'
               : '';
             bodyEl.innerHTML = card + '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply) + checklistHTML() +
-              (corrected ? '<div class="muted" style="margin-top:6px;font-size:12px">已按盘面校正 1 次</div>' : '');
+              (corrected ? '<div class="muted" style="margin-top:6px;font-size:12px">已按盘面校正 1 次</div>' : '') +
+              (retriedWith ? '<div class="muted" style="margin-top:6px;font-size:12px">首稿未完篇，本稿由 ' + esc(retriedWith) + ' 补全</div>' : '');
             // 复制的是模型原文（正文末尾本含「结论/应期」四行），不拼前端解析出的卡片，避免重复
             attachCopyBtn(colHeadOf(m), reply);
             scrollBody(bodyEl);

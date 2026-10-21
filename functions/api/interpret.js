@@ -435,6 +435,8 @@ export async function onRequestPost(context) {
   // （可用 LLM_TIMEOUT_MS 调）。
   // 计时器覆盖主调用与降级重试的总时长，超时任一环节都会被 abort 并落入下方 504 分支。
   const timeoutMs = Math.max(1000, parseInt(env.LLM_TIMEOUT_MS || '300000', 10) || 300000);
+  // 采样日志用的请求起点（见 pipeMergedSSE 末尾 ev=stream_end）
+  const startedAt = Date.now();
   // 生成上限：未配置则不传，避免把上游默认值写死；配置后 Google/OpenAI 两条路径同口径。
   const maxTokens = Math.max(0, parseInt(env.LLM_MAX_TOKENS || '0', 10) || 0);
   // 心跳间隔：默认 15s，下限 1s（留 (SSE_HEARTBEAT_MS) 给测试压到 1s 验证「心跳真的发出去了」）。
@@ -568,6 +570,12 @@ export async function onRequestPost(context) {
         // .catch 静默吞掉，15s 心跳从未真正写出，思考期的 524 防护形同虚设。
         const w = writer;
         let buf = '', outLen = 0, cut = null, reasBuf = '';
+        // 思考片段计数（仅观测，不改输出）：Google 原生流里思考内容以
+        // parts[{ text, thought:true }] 返回，而下方统一按 p.text 拼接。
+        // 若上游的 thinkingBudget:0 被忽略（gemini 3.x 可能强制最小思考），
+        // 思考就会被当成正文下发——这正是 2026-10-13 事实审计 6 处假阳性的成因。
+        // 此处只统计字符数并写进日志，不放行/不拦截，先把「有没有」测出来。
+        let thoughtLen = 0;
         // finishReason：上游「为什么停」。旧版完全不读——于是 MAX_TOKENS / SAFETY
         // 截断的半个断语被当作正常完整响应交给用户，且（网关缓存开着时）该残缺响应
         // 会被一并缓存，之后同一盘永远拿回同一段残句。实测 gemini-3.6-flash 稳定
@@ -632,7 +640,13 @@ export async function onRequestPost(context) {
                   const cand = j.candidates[0];
                   if (cand && cand.finishReason) finish = cand.finishReason;
                   const parts = cand && cand.content && cand.content.parts;
-                  if (parts) chunk = parts.map(function (p) { return (p && p.text) || ''; }).join('');
+                  if (parts) {
+                    for (let pi = 0; pi < parts.length; pi++) {
+                      const p = parts[pi];
+                      if (p && p.thought && typeof p.text === 'string') thoughtLen += p.text.length;
+                    }
+                    chunk = parts.map(function (p) { return (p && p.text) || ''; }).join('');
+                  }
                 }
               } catch (e) { /* 忽略无法解析的分片 */ }
               if (chunk) {
@@ -689,6 +703,24 @@ export async function onRequestPost(context) {
               }) + '\n\n'));
             } catch (e) { /* 客户端已断开则忽略 */ }
           }
+          /* 收流留痕（2026-10-21 补）：finishReason 只对「非正常收尾」下发 warn，
+             STOP 与「压根没收到 finishReason」在客户端完全一样——可两者的处置方向
+             相反：前者是模型自己停，后者是流被提前关闭（网关超时/上游断连）。
+             实测 gemini-3.6-flash 未成篇样本只有 INCOMPLETE_STRUCTURE、没有任何
+             MODEL_*，无法判断属于哪一种，故此前「根因未定」。这一行日志把
+             finish(null 也是有效值)/字符数/思考片段长度一并落库，之后统计即可
+             定论，不必再靠猜参数。字段名短是给 CF 日志检索用的。 */
+          try {
+            console.log(JSON.stringify({
+              ev: 'stream_end',
+              finish: finish === null ? null : String(finish),
+              chars: outLen,
+              thought: thoughtLen,
+              cut: cut || null,
+              first: history.length === 0,
+              ms: Date.now() - startedAt
+            }));
+          } catch (e) { /* 日志失败不影响响应 */ }
         } catch (e) {
           // 上游断连 / abort（含超时）：告知客户端这是中断而非完篇
           await writeErr(timedOut ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_STREAM_ERROR',
