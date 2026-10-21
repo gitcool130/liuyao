@@ -579,10 +579,10 @@ npm run gen:jieqi                 # 重新生成节气表（改覆盖范围时�
 > 审查提示：若 `raw.githubusercontent.com` 不可达（部分网络环境会静默超时，导致误判"文件不存在"），可用 CDN 镜像取源：
 > `https://cdn.jsdelivr.net/gh/idavailable/liuyao@main/public/core/calendar.js`；或直接读 Git 对象树 `git ls-tree -r --name-only origin/main`。
 
-## 部署
-
+## 手动部署要点
+先断开cf自动部署
 **先判断要不要部署**：只有触及 `public/`、`functions/`、`wrangler.toml` 的提交才进部署产物；
-只改 `tests/`、`tools/`、README 的提交推上去线上也不会变（本项目自动部署已禁用）。
+只改 `tests/`、`tools/`、README 的提交推上去线上也不会变
 
 ```bash
 npx wrangler pages deploy public --project-name=liuyao --branch=main \
