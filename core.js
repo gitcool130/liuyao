@@ -6,10 +6,11 @@
  *   → public/core/calendar.js → public/core/paipan.js
  *   → public/core/analyze.js
  *   → public/core/sensitive.js → public/core/domain-methods.js
+ *   → public/core/question-shape.js
  *   → public/core/fact-audit.js → public/core/coverage-audit.js
  * （public/index.html 已如此引用；本文件不参与浏览器加载链路）
- * 后三个为「上层契约层」：不参与排盘，只做分流、方法注入与断后审计，
- * 依赖 paipan.js 的输出，故必须排在 analyze.js 之后。
+ * 后五个为「上层契约层」：不参与排盘，只做分流、方法注入、问法检测
+ * 与断后审计，依赖 paipan.js 的输出，故必须排在 analyze.js 之后。
  *
  * Node：require('./core.js') 聚合全部模块，对外 API 与
  * window.LY 完全一致（测试层入口）。
@@ -22,6 +23,7 @@ if (typeof window === 'undefined') {
   require('./public/core/analyze.js');
   require('./public/core/sensitive.js');
   require('./public/core/domain-methods.js');
+  require('./public/core/question-shape.js');
   require('./public/core/fact-audit.js');
   require('./public/core/coverage-audit.js');
   module.exports = globalThis.LY;
@@ -36,6 +38,7 @@ if (typeof window === 'undefined') {
       '  <script src="core/analyze.js"></script>    <!-- 断卦规则链 -->\n' +
       '  <script src="core/sensitive.js"></script>  <!-- 敏感分流 -->\n' +
       '  <script src="core/domain-methods.js"></script> <!-- 所测之事的分析规程 -->\n' +
+      '  <script src="core/question-shape.js"></script> <!-- 多选一问法检测与改写建议 -->\n' +
       '  <script src="core/fact-audit.js"></script> <!-- 断语事实审计 -->\n' +
       '  <script src="core/coverage-audit.js"></script> <!-- 断语推理审查 -->\n' +
       '（以上路径相对部署根 public/，在仓库根运行测试请用 public/core/ 前缀）');

@@ -382,5 +382,36 @@ ok('占病 + 官鬼 → 明言「缠绵」，不套功名口径',
   /缠绵/.test(ggJ({ topic: '这个病什么时候好' }).text) &&
   !/非祸即灾/.test(ggJ({ topic: '这个病什么时候好' }).text));
 
+// ---------- 9. 问法形态检测（core/question-shape.js） ----------
+// 「多选一」问法是断语分歧的重灾区：卦面无专爻代表各选项，两模型各执
+// 一象必得相反建议（2026-10-21 实测：换医生 vs 不换医生）。本层只提示
+// 改问（趋势题 / 定向假设题 / 决策树），永不拦截——所有用例双向对照。
+const qs3 = C.questionShape('是换医生还是不换还是先不治疗了');
+eq('三选一→multi', qs3.shape, 'multi');
+eq('三选一选项拆分', JSON.stringify(qs3.options), JSON.stringify(['换医生', '不换', '先不治疗']));
+eq('并列选项（还是×2）→multi', C.questionShape('换医生还是换药还是继续等').shape, 'multi');
+eq('或者×2→multi', C.questionShape('换医生或者换药或者继续等').shape, 'multi');
+eq('单个还是→either-or', C.questionShape('换工作还是留在原公司').shape, 'either-or');
+eq('「A还是不A」句式→either-or', C.questionShape('换医生还是不换医生').shape, 'either-or');
+eq('「该不该」→should-i', C.questionShape('该不该换医生').shape, 'should-i');
+eq('「要不要」→should-i', C.questionShape('要不要跳槽').shape, 'should-i');
+// 误伤对照（反向断言，防检测写过头——副词「还是」与趋势题问法不得报）
+eq('副词「他还是不回」不误报', C.questionShape('他还是不回消息，这单能成吗').shape, null);
+eq('句首「还是算了」不误报', C.questionShape('还是算了吧，看这一卦就好').shape, null);
+eq('「能不能」不误报（趋势题本来就是这个问法）', C.questionShape('这笔投资能不能回款').shape, null);
+eq('开放式「怎么办」不误报', C.questionShape('当下该怎么办').shape, null);
+eq('空串不炸', C.questionShape('').shape, null);
+eq('null 不炸', C.questionShape(null).shape, null);
+// 提示与入模指令的内容契约
+ok('multi 提示含三条改法（趋势/定向假设/决策树）',
+  /趋势/.test(qs3.hint) && /定向假设/.test(qs3.hint) && /决策树/.test(qs3.hint));
+ok('multi 入模指令含条件分支与不站队',
+  qs3.aiNote.indexOf('条件分支') >= 0 && qs3.aiNote.indexOf('不得强制站队') >= 0);
+ok('should-i 也有改写建议', C.questionShape('该不该换医生').hint.length > 0);
+ok('should-i 入模指令要求先断走势', C.questionShape('该不该换医生').aiNote.indexOf('走势') >= 0);
+ok('正常问法无提示无指令', !C.questionShape('这笔投资能不能回款').hint && !C.questionShape('这笔投资能不能回款').aiNote);
+ok('questionShapeText：multi 有文，正常问法为空串',
+  C.questionShapeText(qs3).indexOf('问法提示') >= 0 && C.questionShapeText(C.questionShape('这笔投资能不能回款')) === '');
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

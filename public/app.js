@@ -24,9 +24,15 @@
   // coverage-audit 是后加的第四块，旧缓存页面可能没有它：
   // 缺了就只跑盘面对撞，不让整块校对能力失效。
   const HAS_COVER = !!(C.auditCoverage && C.coverageText);
+  // question-shape 是后加的第五块（多选一问法检测与改写建议），
+  // 同样按「缺了就降级关闭」处理，不影响断卦主流程。
+  const HAS_SHAPE = typeof C.questionShape === 'function';
   if (!HAS_ABSORB) {
     console.warn('[liuyao] core/sensitive.js / domain-methods.js / fact-audit.js 未加载，' +
       '敏感分流、分析方法注入与断后事实审计已降级关闭。');
+  }
+  if (!HAS_SHAPE) {
+    console.warn('[liuyao] core/question-shape.js 未加载，多选一问法检测已降级关闭。');
   }
 
   const LINE_NAMES = ['初爻', '二爻', '三爻', '四爻', '五爻', '上爻'];
@@ -279,6 +285,7 @@
     const uc = $('#useCustom'); if (uc) { uc.value = ''; uc.hidden = true; }
     // 一并清掉新增三块的状态：敏感提示、按卦名提示、被拦截而禁用的断卦按钮
     const sb = $('#senseBox'); if (sb) { sb.hidden = true; sb.innerHTML = ''; lastSensitive = null; }
+    const shb = $('#shapeBox'); if (shb) { shb.hidden = true; shb.innerHTML = ''; }
     const bnh = $('#byNameHint'); if (bnh) bnh.innerHTML = '';
     const bai = $('#btnAI'); if (bai) bai.disabled = false;
     renderTime(); renderCoins(); renderTossHint(); renderStack();
@@ -471,6 +478,29 @@
     if (btn) btn.disabled = (d.action === 'block');
   }
 
+  // ---------- 多选一问法检测（core/question-shape.js） ----------
+  // 实测「是换医生还是不换还是先不治疗了」这类问法，两个模型断出相反建议：
+  // 卦面无专爻代表各选项，各执一象必致分歧。此层只提示改问（趋势题 /
+  // 定向假设题 / 决策树），永不拦截；同层还有一段「问法处理」指令随
+  // 排盘文本入模，约束模型按条件决策树输出。
+  function questionShapeDecision() {
+    if (!HAS_SHAPE) return null;
+    // 只看用户自己写下的事由：固定事类的下拉标签不是多选一问法
+    const isCustom = $('#useSelect').value === '__custom__';
+    const q = isCustom ? currentQuestion() : '';
+    if (!q) return null;
+    try { return C.questionShape(q); } catch (e) { return null; }
+  }
+  function renderQuestionShape() {
+    const box = $('#shapeBox');
+    if (!box) return;
+    const d = questionShapeDecision();
+    if (!d || !d.shape) { box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+    box.className = 'verdict';
+    box.innerHTML = '<b>问法提示</b>　' + esc(d.hint).replace(/\n/g, '<br>');
+  }
+
   function renderAnalysis() {
     const target = $('#useSelect').value;
     const list = $('#conclList');
@@ -478,6 +508,7 @@
     const customInput = $('#useCustom');
     customInput.hidden = (target !== '__custom__');
     renderSensitive();     // 每次改选事类都重算分流（含把拦截态解除）
+    renderQuestionShape(); // 多选一问法检测同轮重算（改选固定事类即解除提示）
 
     /* 自定义事由：先按关键词推出用神（复用 domain-methods 的 INTENT_YONGSHEN），
        再走与固定事类完全相同的规则链。推不出关键词才退回通用次第。
@@ -539,6 +570,7 @@
   let customTimer = null;
   $('#useCustom').oninput = function () {
     renderSensitive();
+    renderQuestionShape();
     clearTimeout(customTimer);
     customTimer = setTimeout(renderAnalysis, 250);
   };
@@ -583,6 +615,10 @@
       // 领域分析方法注入：只规定看盘次序与常见误判，不预设吉凶，也不得被当成古籍引文。
       const blk = C.domainBlock($('#useSelect').value, currentQuestion());
       if (blk) txt += '\n' + blk;
+      // 多选一问法处理指令：模型须按条件决策树输出，不得强制站队——
+      // 实测此类问法两模型各执一象，断出完全相反的建议。
+      const shape = questionShapeDecision();
+      if (shape && shape.aiNote) txt += '\n' + shape.aiNote + '\n';
       const d = sensitiveDecision();
       if (d.action === 'advisory') txt += '\n【现实边界提示】' + d.message + '\n';
       // 契约：盘面事实不可改写，传统推断可自由但不得与盘面矛盾。
@@ -915,6 +951,18 @@
     '若认为某条判语有误，须先引古法原文说明理由，再另行推断，不得静默绕过或只字不提。',
     '【结论须带依据】每条吉凶与应期结论后，用括号注明所依据的盘面要素（用神／世应／月建／日辰／动爻／旬空）；' +
     '找不到盘面依据的推断只能标为存疑，不得写成结论。',
+    // ↓ 法理层五段（2026-10-21 起）：与 functions/api/interpret.js 逐字符一致，
+    //   改一处必须同步另一处（test-functions.mjs 有全文比对断言）。
+    '【法理口径】变爻只对本位动爻作回头生克冲合，不得跨位作用于其他爻；三刑冲合须论动静，静爻不成刑冲；' +
+    '通关须动爻旺相有力方成；旬空为旬内概念——填实在值日、出空在出旬，不得引申至他月他旬。',
+    '【取象边界】卦中无专爻代表所指之人或事时，不得将用神或应爻兼作他用；' +
+    '取象推断须与旺衰生克之断分开表述，不得把象写成盘面事实。',
+    '【前提未定】病之近久、事之进程等直接决定断法的前提，题面未给出时不得单引一诀下断' +
+    '（如近病久病未定，不得径引「逢冲则愈/则凶」），须先声明前提未定，再按两种前提分别推断。',
+    '【多选一问法】所测若为「A还是B还是C」式多选一：卦面无专爻代表各选项，不得强制站队单选其一；' +
+    '按「当前态势 → 可核对的节点（出空、填实、值日等） → 各选项适用的条件分支」输出条件决策树，每个分支注明盘面依据。',
+    '【输出自检】正文写完后逐条核对：卦名、世应、动爻、旬空是否与排盘一致；所引口诀的前提是否成立；' +
+    '应期是否与空破冲合一一对应。发现矛盾即改，不得带着矛盾交稿。',
     '【结构化结论】正文写完后另起四行，单独成行、不加粗、不编号、不加解释：',
     '结论：吉｜凶｜平（只填一个词）',
     '应期：<干支日或节气节点>（约 <公历区间，形如 10月20日—10月26日>）',
