@@ -81,12 +81,6 @@
     return { y: t.y, m: t.m, day: t.d, hour: t.hour, minute: t.minute };
   }
 
-  // 兼容旧 API：交节日（天粒度）。已废弃，仅供旧调用方，勿用于新逻辑。
-  function termDay(year, month) {
-    const t = termMoment(year, month);
-    return t ? t.day : 1;
-  }
-
   // 日柱：以 1949-10-01 甲子日校准 → index = (JDN + 49) % 60
   function dayGanZhiIndex(y, m, d) {
     return ((jdn(y, m, d) + 49) % 60 + 60) % 60;
@@ -137,10 +131,15 @@
       throw new Error('fourPillars: dt 须为有效 Date，实得 ' + Object.prototype.toString.call(dt));
     }
     // 墙上时间锚点：调用方可在 Date 上挂 __wall（北京墙上时间分量）。
-    // 起因：app.js 的 beijingNow() 把北京墙上时间喂给本机时区的构造函数，而
-    // 实行夏令时的时区在春令切换日会把 02:00–02:59 归一化成 03:xx；此处读本机
-    // getters 就会把时柱排错一位（实测 America/New_York 2026-03-08 02:30 → 03:30）。
+    // 起因：节气表为 UTC+8 口径，现场占时须按北京墙上时间取值（app.js 的
+    // beijingNow()），否则同一 UTC 时刻在不同本机时区会排出不同四柱
+    // （实测上海/纽约对比见 README 轮次记录）；补录输入同口径。
     // 有锚点则用锚点，没有则维持原行为（测试与补录路径传入的都是普通 Date）。
+    // 注（2026-10-21 审计订正）：旧注释称「实行夏令时的时区会把 02:00–02:59
+    // 归一化成 03:xx，本机 getters 就会把时柱排错一位（实测 America/New_York
+    // 2026-03-08 02:30 → 03:30）」——V8/ICU 对不存在的墙上时间以切换前偏移
+    // 构造，本地 getters 往返保值，该归一化实测不复现（4 时区 × 6 类切换
+    // 场景全通过）。锚点的价值在统一北京口径，而非防 DST 归一化。
     const wall = dt.__wall;
     let y, m, d, h, min;
     if (wall && typeof wall.y === 'number' && typeof wall.m === 'number' &&
@@ -200,7 +199,6 @@
   LY.jdn = jdn;
   LY.jdnToDate = jdnToDate;
   LY.termMoment = termMoment;
-  LY.termDay = termDay;
   LY.dayGanZhiIndex = dayGanZhiIndex;
   LY.monthZhiIndex = monthZhiIndex;
   LY.yearGanZhiIndex = yearGanZhiIndex;

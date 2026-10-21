@@ -14,42 +14,66 @@
  *     条件决策树输出，不得强制站队。
  *
  * 检测口径（宁缺勿滥，全部为软提示）：
- *   - multi（多选一）：连接词「还是/或者」出现 ≥2 次；
- *   - either-or（二选一）：单个连接词且两侧均为实义选项；
+ *   - multi（多选一）：**连接义**连接词「还是/或者」出现 ≥2 次；
+ *   - either-or（二选一）：单个连接义连接词且两侧均为实义选项；
  *   - should-i（该不该）：「该不该 / 要不要」式单一动作问句；
  *   - 「能不能 / 怎么办」等趋势题、开放式问法一律不报——它们
  *     本来就是六爻擅长的问法。
  *   - 「还是」的副词用法（「仍然」义，如「他还是不回消息」「还是
- *     算了吧」）须排除：前接人称代词、或后接否定/情态字者不报；
- *     但「A还是不A」句式（换医生还是不换医生）是真实二选一，
- *     用回指匹配单独识别，先于副词排除。
+ *     算了吧」）不计入连接词：前接人称代词、或后接情态/建议类字
+ *     （还是**算**了 / 还是**再**等等）者排除；「还是不X」「还是先X」
+ *     在前接实义选项时是连接义（「换医生还是不换还是先不治疗了」），
+ *     仅前接人称代词（「他还是不…」= 他仍然不）时是副词。
  * ============================================================ */
 (function (root) {
   const LY = root.LY = root.LY || {};
 
   // 「还是」作副词（仍然义）的两侧紧邻字排除表：
   //   前接人称/指示代词（他还是…/我还是…）；后接否定、情态、建议类字
-  //   （还是不回 / 还是算了 / 还是先别动）。「还是不X」的真实二选一
-  //   由下方 RE_REPEAT 单独捕获，不走这张表，故「不」可以放进来。
-  var ADV_BEFORE = '他她它我您你';
-  var ADV_AFTER = '不没别会得就仍算先再也好吧太很有老';
+  //   （还是不回 / 还是算了 / 还是先别动）。
+  // 后接表分两组：
+  //   HARD（没别会得就仍算再也好吧太很有老）——后接即恒副词；
+  //   SOFT（不先）——「还是不X」「还是先X」在**前接实义选项**时其实是
+  //     连接义（「换医生还是不换还是先不治疗了」两个「还是不/还是先」
+  //     都是并列链的一环），只有前接人称代词（「他还是不…」= 他仍然不）
+  //     才是副词——后者已由 ADV_BEFORE 兜住。旧版把「不先」与 HARD 同组，
+  //     且 n>=2 路径完全不过副词排除，既漏掉上面这类真实多选一的判定依据，
+  //     又让「他还是不来，还是算了吧」这类双副词句误报 multi（2026-10-21 修正）。
+  var ADV_BEFORE = '他她它我您你这那其';
+  var ADV_AFTER_HARD = '没别会得就仍算再也好吧太很有老';
+  var ADV_AFTER_SOFT = '不先';
 
-  function countConnectors(q) {
-    var n = 0, i;
-    i = q.indexOf('还是');
-    while (i >= 0) { n++; i = q.indexOf('还是', i + 2); }
-    i = q.indexOf('或者');
-    while (i >= 0) { n++; i = q.indexOf('或者', i + 2); }
-    return n;
-  }
-
+  // 「还是」在位置 i 是否副词用法（仍然义）：
+  //   句首（i===0）或前接人称/指示代词 → 恒副词；
+  //   后接 HARD 字（没别会得就仍算再也好吧太很有老）→ 恒副词；
+  //   后接 SOFT 字（不/先）或句尾无后接字 → 按连接义（前接代词已兜住）。
   function adverbialHaishi(q, idx) {
     if (idx === 0) return true;
     var before = q.charAt(idx - 1);
     var after = q.charAt(idx + 2);
     if (ADV_BEFORE.indexOf(before) >= 0) return true;
-    if (after && ADV_AFTER.indexOf(after) >= 0) return true;
+    if (after && ADV_AFTER_HARD.indexOf(after) >= 0) return true;
     return false;
+  }
+
+  // 连接义「还是」出现位列表（副词位不计）。
+  function haishiPositions(q) {
+    var pos = [], i;
+    i = q.indexOf('还是');
+    while (i >= 0) {
+      if (!adverbialHaishi(q, i)) pos.push(i);
+      i = q.indexOf('还是', i + 2);
+    }
+    return pos;
+  }
+
+  // 连接词总数：「或者」无歧义恒计；「还是」只计连接义位。
+  function countConnectors(q) {
+    var n = 0, i;
+    haishiPositions(q).forEach(function () { n++; });
+    i = q.indexOf('或者');
+    while (i >= 0) { n++; i = q.indexOf('或者', i + 2); }
+    return n;
   }
 
   // 「A还是不A」句式：同一短语回指出现，如「换医生还是不换医生」。
@@ -89,14 +113,17 @@
   function questionShape(question) {
     const q = String(question == null ? '' : question);
     if (!q) return { shape: null, options: [], hint: '', aiNote: '' };
+    // n 为**连接义**连接词总数：「或者」恒计，「还是」只计非副词位。
+    // 旧版 n 计全部出现位，n>=2 路径又完全不过副词排除——两个副词「还是」
+    // 的句子（「他还是不来，还是算了吧」）会误判 multi；现在该路径与
+    // n===1 路径同一口径（2026-10-21 修正）。
     const n = countConnectors(q);
     if (n >= 2) return build('multi', splitOptions(q));
     if (RE_REPEAT.test(q)) return build('either-or', []);
-    if (n === 1) {
-      const i = q.indexOf('还是');
-      // 或者：连接词义无歧义，恒按二选一；还是：排除副词用法后才算
-      if (i < 0 || !adverbialHaishi(q, i)) return build('either-or', []);
-    }
+    // 单个连接义连接词即二选一（「或者」无歧义；「还是」的连接义位已由
+    // countConnectors 保证非副词，旧版此处再查一次 indexOf 首位，句首副词
+    // 会遮住后文的连接义——如「他还是不来，还是换一家」漏报 either-or）。
+    if (n === 1) return build('either-or', []);
     if (/该不该|要不要/.test(q)) return build('should-i', []);
     return { shape: null, options: [], hint: '', aiNote: '' };
   }

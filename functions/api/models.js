@@ -6,7 +6,8 @@
  */
 
 // 解析逻辑统一在 _lib.js，与 interpret.js 白名单共享同一口径
-import { gptModelList, customProviders, customProviderWarnings, customKeyEnv, json } from './_lib.js';
+// （内置三条同样取自 _lib.js 的 BUILTIN_MODELS，不再本地硬编码第二份）
+import { gptModelList, customProviders, customProviderWarnings, customKeyEnv, json, BUILTIN_MODELS } from './_lib.js';
 
 export async function onRequestGet(context) {
   const { env } = context;
@@ -14,11 +15,9 @@ export async function onRequestGet(context) {
   const gptModels = gptModelList(env);
   const gptKeyed = !!(env.GPT_API_KEY || env.OPENAI_API_KEY);
 
-  const all = [
-    { id: 'gemini-3.6-flash', pv: 'Google', configured: !!env.GEMINI_API_KEY },
-    { id: 'gemini-3.8-flash', pv: 'Google', configured: !!env.GEMINI_API_KEY },
-    { id: 'deepseek-flash', pv: 'DeepSeek', configured: !!env.DEEPSEEK_API_KEY }
-  ].concat(gptModels.map(function (id) {
+  const all = BUILTIN_MODELS.map(function (m) {
+    return { id: m.id, pv: m.pv, configured: !!env[m.key] };
+  }).concat(gptModels.map(function (id) {
     return { id: id, pv: 'OpenAI', configured: gptKeyed };
   }));
 

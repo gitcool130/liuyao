@@ -592,7 +592,9 @@
         '，' + y.wang + '，' + (yl.moving ? '发动' : '安静') + (yl.isFu ? '，伏神' : '') + '）\n';
     }
     // 卦型行：六冲/六合/游魂/归魂/相变——确定性陈述（与 ruleGuaXing 同一判定，非推断）
-    const gxRules = C.ruleGuaXing(pan).map(function (j) { return j.rule; });
+    // typeof 守卫与 371/518 行同风格：ruleGuaXing 与核心守卫已覆盖的 analyze 同在
+    // analyze.js（同生同灭），实际不会缺；此处对齐代码风格（2026-10-21 审计修正）。
+    const gxRules = (typeof C.ruleGuaXing === 'function' ? C.ruleGuaXing(pan) : []).map(function (j) { return j.rule; });
     if (gxRules.length) txt += '卦型：' + gxRules.join('、') + '\n';
     txt += '六神　伏神　本卦　　　世应　变爻\n';
     for (let i = 5; i >= 0; i--) {
@@ -1224,9 +1226,13 @@
           // 流式期间**不能**放弃超时守卫：旧版 clearTimeout 后 readStreamSSE 自身
           // 无任何超时，上游挂起时 reader.read() 可无限期 pending——用户对着
           // 「推卦中…」干等到服务端 300s 才断开，远超自己声明的 180s 截止策略。
-          // 改为把守卫重设为「距 AI_RETRY_DEADLINE 的剩余量」，与总截止口径一致。
+          // 改为把守卫重设为「距 AI_RETRY_DEADLINE 的剩余量」——注意必须
+          // 在**收到响应头后**重算：remaining 是 attempt 顶部（进入 apiFetch
+          // 之前）算的，未扣除建连耗时，直接复用会让总截止被超出建连耗时
+          // 那么久，与「与总截止口径一致」的意图相反（2026-10-21 审计修正）。
           clearTimeout(timer);
-          const streamTimeout = setTimeout(function () { ctrl.abort(); }, Math.max(1000, remaining));
+          const streamTimeout = setTimeout(function () { ctrl.abort(); },
+            Math.max(1000, AI_RETRY_DEADLINE - (Date.now() - start)));
           let text;
           try {
             text = await readStreamSSE(res, onStream);

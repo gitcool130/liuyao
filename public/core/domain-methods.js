@@ -130,12 +130,6 @@
     '自身': 'shi', '运势': 'shi', '身体': 'shi'
   };
 
-  /**
-   * 生成进入大模型上下文的分析方法文本块。
-   * @param {string} key  #useSelect 的 value（六亲 / 'shi' / '__custom__'）
-   * @param {string} [question] 自定义事项原文
-   * @returns {string}
-   */
   /** 按自定义事由里的语义线索推一个建议用神；命中不了就返回 null（宁缺勿强推）。 */
   function suggestYongshen(question) {
     const q = String(question == null ? '' : question);
@@ -147,6 +141,12 @@
     return null;
   }
 
+  /**
+   * 生成进入大模型上下文的分析方法文本块。
+   * @param {string} key  #useSelect 的 value（六亲 / 'shi' / '__custom__'）
+   * @param {string} [question] 自定义事项原文
+   * @returns {string}
+   */
   function domainBlock(key, question) {
     const m = DOMAIN_METHODS[key];
     if (!m) return '';

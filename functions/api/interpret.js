@@ -24,6 +24,8 @@
  *   SSE_HEARTBEAT_MS  选填，SSE 空闲心跳间隔（毫秒），默认 15000，下限 1000（测试用）。
  *                      上游思考期可能数十秒无输出，CF 边缘约 100s 无数据即 524。
  *   LLM_MAX_TOKENS    选填，单次生成上限；未设置则不传（由上游按自身默认值裁定）。
+ *   GPT_EFFORT        选填，gpt-5 / o 系思考模型的推理强度（minimal/low/medium/high），
+ *                      默认 low（防超时）；对这些模型会自动剔除其不支持的 temperature。
  */
 
 // 供应商解析共享层（白名单 / 自定义供应商 / json 响应 / 常量时间口令比较），与 models.js 同一口径
@@ -57,6 +59,30 @@ export function deltaText(d) {
 export function deltaReasoning(d) {
   if (!d || typeof d !== 'object') return '';
   return typeof d.reasoning_content === 'string' ? d.reasoning_content : '';
+}
+
+// 限长读取响应体（非流式路径专用）。await resp.text()/resp.json() 会把整个
+// body 先全量读入 isolate 内存（CF 上限 128 MB）——流式路径已有
+// SSE_MAX_LINE/SSE_MAX_REPLY 双守卫，非流式兼容路径（上游忽略 stream 参数
+// 回 JSON、或错误响应体）此前无对应守卫，信任边界外的异常上游可打爆内存
+// （2026-10-21 审计修正）。读满 max 即停并 cancel 上游。
+export async function readCapped(resp, max) {
+  if (!resp || !resp.body || typeof resp.body.getReader !== 'function') {
+    // 无 body（测试桩 / 已耗尽）：退化为 text()，由调用方的 try 兜底
+    return (await resp.text()).slice(0, max);
+  }
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let out = '';
+  try {
+    while (out.length <= max) {
+      const r = await reader.read();
+      if (r.done) break;
+      out += dec.decode(r.value, { stream: true });
+    }
+  } catch (e) { /* 上游已断开：返回已读部分 */ }
+  try { reader.cancel().catch(function () { /* 已断开则忽略 */ }); } catch (e) { /* 已释放 */ }
+  return out.slice(0, max);
 }
 
 // 按 IP 的滑动窗口限流（默认关闭，仅在配置了 RATE_LIMIT_PER_MIN 时生效）。
@@ -218,7 +244,14 @@ export async function onRequestPost(context) {
     return json({ error: 'BAD_JSON', message: '请求体应为 JSON 对象' }, 400);
   }
 
-  const panTextRaw = (body.panText || '').toString();
+  // 类型边界：非字符串 panText（{} / [1,2] / 42）旧版被 .toString() 强转
+  // （"[object Object]" / "1,2"）后通过非空与长度校验，作为排盘文本提交给
+  // 模型——本端点无口令无限流时，这是可直接放大的无意义调用敞口。
+  // 空/超限已有显式拒绝，此处补齐类型（2026-10-21 审计修正）。
+  if (typeof body.panText !== 'string') {
+    return json({ error: 'NO_PAN', message: '排盘文本应为字符串' }, 400);
+  }
+  const panTextRaw = body.panText;
   if (!panTextRaw) return json({ error: 'NO_PAN', message: '缺少排盘文本' }, 400);
   // 超限显式拒绝，不静默 slice：旧版硬切 4000 字符会把盘面尾巴（伏神/变爻/契约段）
   // 悄无声息地砍掉，模型仍会照着残缺文本断卦，且服务端无任何痕迹。
@@ -403,7 +436,9 @@ export async function onRequestPost(context) {
       return { fail: { status: 0, detail: e.message, retryable: true } };
     }
     if (!resp.ok) {
-      const t = await resp.text();
+      // 限长读：上游错误体只进服务端日志（不回传客户端），读满 2 KB 即停，
+      // 防止异常/恶意中转站以超大错误体消耗 isolate 内存。
+      const t = await readCapped(resp, 2000);
       const st = resp.status;
       return { fail: { status: st, detail: t.slice(0, 500), retryable: st === 429 || st >= 500 } };
     }
@@ -416,14 +451,23 @@ export async function onRequestPost(context) {
       // CF 边缘约 100s 无数据即断连；透传流式后首字节一到即开始向下发送。
       return { stream: resp };
     }
-    const data = await resp.json();
+    // 非流式 JSON：同样限长读后解析，reply 按 SSE_MAX_REPLY 截断并标
+    // truncated（与流式路径守卫②同口径，见 pipeMergedSSE）。
+    const raw = await readCapped(resp, SSE_MAX_REPLY + 1024);
+    let data = null;
+    try { data = JSON.parse(raw); } catch (e) { /* 解析失败走下方统一失败分支 */ }
+    if (!data) {
+      return { fail: { status: 502, detail: '非流式响应解析失败', retryable: true } };
+    }
     if (isGoogle) {
       const cand = data.candidates && data.candidates[0];
       const parts = cand && cand.content && cand.content.parts;
-      return { reply: parts ? parts.map(function (p) { return p.text || ''; }).join('') : '', cut: null };
+      const reply = parts ? parts.map(function (p) { return p.text || ''; }).join('') : '';
+      return { reply: reply.slice(0, SSE_MAX_REPLY), cut: reply.length > SSE_MAX_REPLY ? 'REPLY_OVERFLOW' : null };
     }
     const choice = data.choices && data.choices[0];
-    return { reply: choice && choice.message ? (choice.message.content || '') : '', cut: null };
+    const reply = choice && choice.message ? (choice.message.content || '') : '';
+    return { reply: reply.slice(0, SSE_MAX_REPLY), cut: reply.length > SSE_MAX_REPLY ? 'REPLY_OVERFLOW' : null };
   }
 
   try {

@@ -698,8 +698,19 @@
     const muOpened = function (muZhi) {
       return muOpeners.some(function (z) { return z !== muZhi && chong(z, muZhi); });
     };
-    [[pil.monthZhi, '月建'], [pil.dayZhi, '日辰']].forEach(function (o) {
-      const z = o[0], who = o[1];
+    // 日支与月支同支时合并为一条，与 ruleXingHai:575-581 同口径：
+    // 旧版两条循环各自输出，辰月辰日 + 用神水会得两条「入墓」（rule 与 basis
+    // 完全相同，纯重复陈述）；月日同支约占全年 1/12，属常见场景。
+    // 非同支路径下 who 逐字等于旧版的 '月建' / '日辰'，文本不变。
+    const sameZhi = pil.dayZhi === pil.monthZhi;
+    const srcs = sameZhi
+      ? [{ zhiIdx: pil.dayZhi, who: '日辰月建同支' }]
+      : [
+        { zhiIdx: pil.monthZhi, who: '月建' },
+        { zhiIdx: pil.dayZhi, who: '日辰' }
+      ];
+    srcs.forEach(function (o) {
+      const z = o.zhiIdx, who = o.who;
       if (z === T.sheng) {
         if (strong || !ke(ZHI_WX[z], L.wx)) {
           js.push({

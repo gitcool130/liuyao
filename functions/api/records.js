@@ -209,9 +209,13 @@ export async function onRequestGet(context) {
   // 读路径同样不能信库里的数据：历史无校验写入的非法 id 行一律不下发前端
   // （这些 id 会被拼进 data-id / data-del 属性，是存储型 XSS 的入口）
   const rows = (results || []).filter(function (r) { return ID_RE.test(r.id); });
+  // hasMore 按**过滤前**行数判：SQL 多取一条的本义就是「库中是否还有更多行」，
+  // 脏 id 被滤掉只影响本页展示条数、不影响翻页推进（offset 按 SQL 序走）。
+  // 旧版按过滤后行数判，脏 id 行恰居 limit+1 位时误报 false，分页提前终止
+  // 且无任何提示（2026-10-21 审计修正）。
   return json({
     records: rows.slice(0, limit),
-    hasMore: rows.length > limit,
+    hasMore: (results || []).length > limit,
     limit: limit,
     offset: offset
   });
@@ -249,7 +253,11 @@ export async function onRequestPost(context) {
   if (!b || typeof b !== 'object' || Array.isArray(b)) {
     return json({ error: 'BAD_JSON', message: '请求体应为 JSON 对象' }, 400);
   }
-  if (!b.panText) return json({ error: 'NO_PAN', message: '缺少排盘文本' }, 400);
+  // 类型边界与 interpret.js 同口径：非字符串 panText 旧版被 .toString() 强转
+  // （{} → "[object Object]"）后入库，前端装入即显示垃圾文本（2026-10-21 审计修正）。
+  if (typeof b.panText !== 'string' || !b.panText) {
+    return json({ error: 'NO_PAN', message: '缺少排盘文本' }, 400);
+  }
 
   // id 策略：客户端可携带 id（复用/更新场景），但必须通过格式校验（ID_RE 见文件头）；
   // 缺失或非法一律服务端生成 UUID，杜绝空主键、超长主键与伪造覆盖
@@ -267,7 +275,7 @@ export async function onRequestPost(context) {
     (b.question || '').toString().slice(0, 100),
     (b.hex || '').toString().slice(0, 80),
     jsonWithin(b.tosses || [], 4000),
-    (b.panText || '').toString().slice(0, 8000),
+    b.panText.slice(0, 8000),
     jsonWithin(b.messages || [], 100000)
   ).run();
   return json({ id: id });

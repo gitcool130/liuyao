@@ -10,7 +10,10 @@
 
   let ctx = null, bus = null, master = null;
   let playing = false, timer = null;
-  let enabled = localStorage.getItem('ly_bgm') !== 'off';
+  // 隐私模式 / 配额满时 localStorage 会抛异常，与 app.js 的 lsSet/lsRemove
+  // 同口径做容错：读失败用默认值（开启），写失败静默（2026-10-21 审计修正）。
+  let enabled = true;
+  try { enabled = localStorage.getItem('ly_bgm') !== 'off'; } catch (e) { /* 用默认值 */ }
 
   // D 宫五声音阶：D E F# A B（羽调色彩），跨两个八度余
   const SCALE = [
@@ -121,7 +124,7 @@
     for (let n = 0; n < notes; n++) {
       // 随机漫步：小步为主，略偏下行（低音更沉稳）
       const step = pick([-3, -2, -2, -1, -1, -1, -1, 0, 1, 1, 2]);
-      pos = Math.max(1, Math.min(SCALE.length - 5, pos + step)); // 避开最高三音
+      pos = Math.max(1, Math.min(SCALE.length - 5, pos + step)); // 避开最高四音（pos≤10，共 15 音）
       const f = SCALE[pos];
       const dur = rand(2.6, 4.5);
       const gain = rand(0.05, 0.10);
@@ -173,7 +176,7 @@
 
   btn.onclick = function () {
     enabled = !enabled;
-    localStorage.setItem('ly_bgm', enabled ? 'on' : 'off');
+    try { localStorage.setItem('ly_bgm', enabled ? 'on' : 'off'); } catch (e) { /* 隐私模式等：忽略持久化 */ }
     if (enabled) start(); else stop();
   };
 

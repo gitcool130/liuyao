@@ -157,6 +157,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | `da2ae24` | M16 断卦三族落地（卦型 / 生旺墓绝 / 元神忌神仇神）——按外部审计证据建议顺序 ③→②→① 补齐三块结构性差距；引擎纯新增 439 行，+28 条断语用例（40→68 条，12102→12143 断言），+80 项单测（185→265），覆盖 37/51→64/78 |
 | `da2ae24` 之后 | 第二十二轮：三族逐族核验（对证据清单 ①②③）+ `zsby-0875` 补锁「绝于日辰」（12143→12144）+ README 计数漂移收口（详见下方台账） |
 | 待提交 | 第二十三轮：外部审计（Kimi）事实核查后的收口——M1 BGM 后台断链、M2 口令改 `sessionStorage` + 旧版迁移、L1 512 KB 请求体闸门、L2 列表分页（`limit/offset/hasMore`）+ 前端「加载更多」、`beijingNow` 的 DST 时柱偏移（`__wall` 锚点）、口令爆破限速（20 次/10 分钟）、两份 SYSTEM_PROMPT 全文一致断言；顺带订正 `wrangler.toml` 中 `LIB_CODE` 的口径注释 |
+| 待提交 | 第二十四轮：全源码审计（六 Pass）后 **16 项全量修复**——P2×3：`app.js` SSE 流守卫改用响应头后重算的剩余量（旧值未扣建连耗时，180 s 截止可被超出）、`interpret.js` `panText` 非字符串直接 400（旧版 `.toString()` 强转使 `{}` 也能消耗一次真实调用）、`analyze.js` `ruleChangsheng` 月建/日辰同支合并为一条陈述（辰月辰日+用神水旧版输出两条「入墓」，与 `ruleXingHai` 合并不先例对齐）。P3×13：`question-shape` 多选一路径补副词排除（「他还是不来，还是算了吧」不再误判 multi，`还是不/还是先` 前接实义时按连接义，顺带修好「他还是不来，还是换一家」漏报 either-or）、`interpret.js` 非流式路径补大小守卫（`readCapped`，错误体 2 KB / 回复 `SSE_MAX_REPLY` 截断并标 `truncated`）、`models.js` 内置三条硬编码收敛为 `_lib.js` 的 `BUILTIN_MODELS`（消除双副本漂移）、`records.js` `hasMore` 改按过滤前行数判（脏 id 不再让分页提前终止）、`records.js` 主 POST `panText` 类型校验、`calendar.js` 删 `termDay` 死代码、DST 注释订正（V8 下归一化实测不复现，锚点价值在统一北京口径）、`domain-methods.js` JSDoc 归位、`bgm.js` localStorage 容错 + 「最高四音」注释订正、`index.html` bgm.js 补 `?v=` 缓存戳（全站升 `?v=20261021c`）+ loginTip 静态文案对齐运行时、`interpret.js` 头注释补 `GPT_EFFORT`、`app.js` `ruleGuaXing` typeof 守卫风格对齐。复跑：test:all 全绿（12144 古籍 + 265 规则 + 181 契约 + 149 Functions + 173 金标准 + 162 外部对账），UI 冒烟 49/49 |
 
 > ⚠️ **历史教训**：第二轮 20 项报告在修复后仍被反复重报，原因是外部审计取的源码是 GitHub main（`f5a0ca4`），而修复提交全部停留在本地未推送。**提交推送之前不要发起外部审计**，否则拿到的必然是旧版的结论。
 >
@@ -487,7 +488,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | `test-diff.mjs` | 三库交叉差分（4096 组合 + 历法时点 + 夜子时双流派 + 节气全量，10 万+字段） |
 | `tools/gen-jieqi.js` | 节气表离线生成器（lunar-javascript → 差分压缩表） |
 | `functions/api/interpret.js` | 断卦接口（多供应商路由 + 流式 SSE 透传（思考草稿剥离）+ gemini 跨模型降级：主模型 429/5xx/网络错误自动落同族备选，响应带 `fallback` 字段） |
-| `functions/api/models.js` | 模型清单接口 |
+| `functions/api/models.js` | 模型清单接口（内置三条取自 `_lib.js` 的 `BUILTIN_MODELS`，与白名单同一份，不本地硬编码） |
 | `functions/api/records.js` | 卦例库接口（id 服务端校验/生成，防伪造覆盖；`?outcome=1` 结果回执回填，只写 outcome 列） |
 | `functions/api/_lib.js` | 供应商解析共享层（`_` 前缀不路由，白名单与清单共用一口径） |
 | `.github/workflows/ci.yml` | CI 质量门禁（单测 + 差分 + 语法检查 + 部署隔离断言，只验证不部署） |
@@ -560,8 +561,8 @@ git status -sb                    # 若显示 ahead，先推送再审计
 ```bash
 npm install                       # 安装测试裁判库（devDependencies）
 npx wrangler pages dev public     # 本地起 Pages（部署根为 public/，需先在 wrangler.toml 绑定 D1）
-npm test                          # 快速环：基础自检 93 项 + 规则链单测 265 项 + 卦型判定回归 91 项 + 上层契约 161 项（均无需裁判库）
-npm run test:fn                   # Functions 层单测 145 项（jsonWithin 合法性/常量时间口令/模型名白名单/去重与读鉴权/结果回执/gemini 跨模型降级）
+npm test                          # 快速环：基础自检 93 项 + 规则链单测 265 项 + 卦型判定回归 91 项 + 上层契约 181 项（均无需裁判库）
+npm run test:fn                   # Functions 层单测 149 项（jsonWithin 合法性/常量时间口令/模型名白名单/去重与读鉴权/结果回执/gemini 跨模型降级）
 npm run test:paipan               # 排盘金标准回归 173 项（零依赖，只加载 core.js）
 npm run test:ui                   # UI 冒烟 49 断言（Playwright + Edge 通道，需先起本地静态服务）
 npm run test:guji                 # 古籍卦例回归 12144 项断言（《增删卜易》207 +《卜筮正宗》197 + 断语用例 68）

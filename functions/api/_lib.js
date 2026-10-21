@@ -6,6 +6,16 @@
 
 export const DEFAULT_GPT_MODELS = 'gpt-6-luna,gpt-6-sol,gpt-6-astra';
 
+// 内置供应商模型清单：models.js（页面芯片渲染）与 modelWhitelist（服务端校验）
+// 共用这一份，杜绝两处硬编码漂移——旧版两份各写三条，后台改其一忘其二时
+// 前端芯片可点而服务端 BAD_MODEL，且无任何提示（2026-10-21 审计修正）。
+// key 为 configured 探测用的密钥环境变量名（见 models.js 的 env[key]）。
+export const BUILTIN_MODELS = [
+  { id: 'gemini-3.6-flash', pv: 'Google', key: 'GEMINI_API_KEY' },
+  { id: 'gemini-3.8-flash', pv: 'Google', key: 'GEMINI_API_KEY' },
+  { id: 'deepseek-flash', pv: 'DeepSeek', key: 'DEEPSEEK_API_KEY' }
+];
+
 // 已被判定为「签到送流量但请求不到模型」的问题模型/中转站，强制从清单与白名单剔除。
 // 即使后台 GPT_MODELS / CUSTOM_PROVIDERS 里还留着，前端不会再展示，服务端也会拒绝请求。
 const BANNED_MODEL_RE = /^gpt[-\s]?5[.-]2$/i;
@@ -199,11 +209,11 @@ export function customKeyEnv(id) { return id.toUpperCase().replace(/[^A-Z0-9]/g,
 // 各供应商可用模型白名单（服务端校验，防任意模型名注入）
 export function modelWhitelist(env) {
   const wl = {
-    gemini: ['gemini-3.6-flash', 'gemini-3.8-flash'],
+    gemini: BUILTIN_MODELS.filter(function (m) { return m.key === 'GEMINI_API_KEY'; }).map(function (m) { return m.id; }),
     // deepseek-flash 现指向 V4.1-Flash-1017（官方原地替换快照，模型名不变）。
     // 旧版另挂的 DeepSeek 深推理型号自 2026-09-14 起已被官方重定向到 Flash 并按其费率计费，
     // 继续留在清单里会让用户误以为在跑该型号，故已从白名单移除。
-    deepseek: ['deepseek-flash'],
+    deepseek: BUILTIN_MODELS.filter(function (m) { return m.key === 'DEEPSEEK_API_KEY'; }).map(function (m) { return m.id; }),
     gpt: gptModelList(env)
   };
   customProviders(env).forEach(function (p) { wl[p.id] = p.models.slice(0, 8); });
