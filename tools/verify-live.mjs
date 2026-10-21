@@ -50,6 +50,11 @@ const STRICT = args.indexOf('--strict') >= 0;
 const CHUNK = parseInt(arg('chunk', '4096'), 10);   // 实测 8KB 段会卡，4KB 段稳（206 + 0.9s）
 const RETRIES = parseInt(arg('retries', '2'), 10);   // 抖动链路上重试是刚需：实测小请求成功率仅 40%
 
+// 配置型文件：位于 public/ 但**不作为资源下发**（Pages 把它读作规则，请求时回落到首页）。
+// 不能参与逐字节比对——实测 /_headers 返回 19753B，恰是 index.html(18815)+CF注入(938)。
+// 对它们的正确判据是「不可作为配置文件被下载」，见下方隔离检查。
+const CONFIG_FILES = ['_headers', '_redirects'];
+
 // 不该出现在公网的仓库文件：命中即判泄露
 const MUST_NOT_LEAK = ['wrangler.toml', 'schema.sql', 'package.json', 'README.md', 'test-rules.js', '.gitignore'];
 
@@ -63,6 +68,14 @@ function walk(dir) {
   return out;
 }
 
+function urlFor(rel) {
+  // CF Pages 把 /index.html 308 重定向到 /（响应体为空）。若照直请求，
+  // 会拿到 0 字节并被判成「不一致」——本轮实测 index.html 一直 DIFF 的真因。
+  // 首页统一按根路径取；其余（含 -L 兜底）照常。
+  const p = rel === 'index.html' ? '' : rel;
+  return HOST + '/' + (p ? p + '?' : '?') + 'cb=' + Date.now() + Math.random().toString(36).slice(2, 8);
+}
+
 function curlToFile(rel, extra) {
   // 一律写临时文件，不用 `-o -` 走管道：Windows 的 schannel 版 curl 在把
   // 大体量响应写进管道时会 `Recv failure: Connection was reset`（实测
@@ -70,17 +83,17 @@ function curlToFile(rel, extra) {
   const tmp = path.join(os.tmpdir(), 'ly-v-' + process.pid + '-' + Math.random().toString(36).slice(2, 8));
   let lastErr = null;
   for (let attempt = 0; attempt <= RETRIES; attempt++) {
-    const argv = ['-sS', '--max-time', String(TIMEOUT), '-o', tmp, '-w', '%{http_code}'];
+    const argv = ['-sS', '-L', '--max-time', String(TIMEOUT), '-o', tmp, '-w', '%{http_code}'];
     argv.push('--noproxy', PROXY ? '' : '*');
     if (PROXY) argv.push('--proxy', PROXY);
     argv.push.apply(argv, extra || []);
-    argv.push(HOST + '/' + rel + '?cb=' + Date.now() + Math.random().toString(36).slice(2, 8));
+    argv.push(urlFor(rel));
     try {
       const code = execFileSync('curl', argv, { encoding: 'utf8' }).trim();
       const buf = fs.readFileSync(tmp);
       if (code === '200' || code === '206') return { buf: buf, err: null };
       lastErr = 'HTTP ' + code;
-      if (code === '404' || code === '403') break;   // 这类重试无意义
+      if (code === '404' || code === '403' || code === '308') break;   // 重试无意义
     } catch (e) {
       lastErr = e.message.split('\n')[0];
     }
@@ -153,6 +166,7 @@ function pad(s, n) {
 const files = walk(pub)
   .map(function (p) { return path.relative(pub, p).split(path.sep).join('/'); })
   .filter(function (r) { return !ONLY || r === ONLY; })
+  .filter(function (r) { return CONFIG_FILES.indexOf(r) < 0; })
   .sort();
 
 console.log('校验目标：' + HOST + (PROXY ? '（proxy ' + PROXY + '）' : '（直连）'));
@@ -196,9 +210,21 @@ for (const rel of files) {
   }
 }
 
+console.log('\n配置型文件（应回落到首页，不得作为文件被下载）：');
+console.log('-'.repeat(64));
+let cfgLeak = 0;
+for (const rel of CONFIG_FILES) {
+  if (!fs.existsSync(path.join(pub, rel))) continue;
+  if (ONLY) { console.log('（--only 模式跳过）'); break; }
+  const h = headContentType(rel);
+  if (h.err) { console.log(pad('/' + rel, 30) + 'UNKNOWN（' + h.err.slice(0, 40) + '）'); continue; }
+  if (/text\/html/.test(h.ct)) console.log(pad('/' + rel, 30) + 'OK（回落首页，配置未下发）');
+  else { cfgLeak++; console.log(pad('/' + rel, 30) + 'LEAK  ' + h.ct); }
+}
+
 console.log('\n隔离检查（仓库文件不得出现在公网）：');
 console.log('-'.repeat(64));
-let leak = 0, isoUnknown = 0;
+let leak = cfgLeak, isoUnknown = 0;
 if (ONLY) {
   // --only 是「只查这一个文件」的定向校验，再跑 6 项隔离检查纯属浪费时间：
   // 实测在网络差时，一次 --only 会被尾部隔离检查拖到超时。
