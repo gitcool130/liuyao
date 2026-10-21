@@ -283,7 +283,7 @@
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
     $('#useSelect').value = '';
     const uc = $('#useCustom'); if (uc) { uc.value = ''; uc.hidden = true; }
-    // 一并清掉新增三块的状态：敏感提示、按卦名提示、被拦截而禁用的断卦按钮
+    // 一并清掉新增四块的状态：敏感提示、问法提示、按卦名提示、被拦截而禁用的断卦按钮
     const sb = $('#senseBox'); if (sb) { sb.hidden = true; sb.innerHTML = ''; lastSensitive = null; }
     const shb = $('#shapeBox'); if (shb) { shb.hidden = true; shb.innerHTML = ''; }
     const bnh = $('#byNameHint'); if (bnh) bnh.innerHTML = '';
