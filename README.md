@@ -741,6 +741,7 @@ npm run test:drift:strict         # 同上，但未达门槛即 exit 1（基线�
 npm run test:all                  # 完整环：上述全部 + 三库交叉差分 10 万+字段（CI 即用此命令）
 npm run test:diff                 # 仅差分（需裁判库；差分本身时区无关，CI 仍固定 TZ=Asia/Shanghai）
 npm run gen:jieqi                 # 重新生成节气表（改覆盖范围时用）
+npm run verify:live               # 线上产物逐字节校验 + 隔离检查（见下）
 ```
 
 > UI 冒烟用法：`node test-shake.js [baseURL]`，默认 `http://127.0.0.1:8931`（可指向线上验证）。需 `playwright-core`（`npm i -D playwright-core`）与本机 Edge/Chrome。
@@ -762,7 +763,7 @@ npx wrangler pages deploy public --project-name=liuyao --branch=main \
 > （若返回 `text/html` 即页面回退，说明隔离正常；返回 `application/toml` 即为泄露）。
 > 注意本项目对未知路径有 SPA 回退，故不能只看 HTTP 状态码，必须比对 `Content-Type`。
 
-### ⚠️ 两个会让「逐字节校验」误判的坑（2026-09-28 实测）
+### ⚠️ 三个会让「逐字节校验」误判的坑（2026-09-28 / 2026-10-21 实测）
 
 **① 行尾：wrangler 把 `public/` 文件原样上传。**
 本仓库远端是 LF，而 Windows 工作区被 `core.autocrlf` 检出为 CRLF。
@@ -787,6 +788,27 @@ Cloudflare 会向 `text/html` 注入 Bot Management 脚本
 实测首页多出 938 字节。判据要换成「**最长公共前缀 + 最长公共后缀**」：
 若 `live = prefix + 注入段 + suffix` 且 `repo = prefix + suffix`，即为注入而非改动。
 静态 JS/CSS 不会被注入，可直接 `cmp`。
+
+**③ 取不全 ≠ 不一致（2026-10-21 实测）。**
+网络退化时 curl 会只下到一部分就超时返回（实测 `app.js` 拿到 1440 / 4187 字节，
+本地 106155），此时算出的哈希必然不同。若直接判「线上与本地不符」，
+结论会完全反过来。故判据必须是**三态**：`OK` / `DIFF` / `UNKNOWN`，
+只有 `UNKNOWN=0` 且 `DIFF=0` 才算校验通过。
+同理，环境变量里的 `http_proxy` 会静默改变结果——实测同一台机器上
+代理路径 25 s 超时、直连 200，一份正常产物被报成「取不到」。
+
+以上三条已固化进脚本，不必再靠记忆：
+
+```bash
+npm run verify:live                       # 默认校验线上域名（绕开环境代理）
+npm run verify:live -- --proxy=http://127.0.0.1:7890
+npm run verify:live -- --only=app.js --timeout=150
+npm run verify:live -- --strict           # UNKNOWN 也判失败（CI 用）
+```
+
+它做两件事：逐文件比对 `sha256`（HTML 自动剥掉 CF 注入段），
+再检查 `wrangler.toml` / `schema.sql` / `package.json` / `README.md` 等
+是否泄露到公网（**看 `Content-Type` 而非状态码**——本项目有 SPA 回退，200 不可信）。
 
 D1 建库：控制台创建后将 `database_id` 填入 wrangler.toml，并执行 `schema.sql`。
 

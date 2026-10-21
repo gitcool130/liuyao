@@ -22,6 +22,7 @@
     "guji:coverage": "node tests/guji/coverage.mjs",
     "test:ui": "node test-shake.js",
     "gen:jieqi": "node tools/gen-jieqi.js",
+    "verify:live": "node tools/verify-live.mjs",
     "gen:guji": "node tools/guji-import.mjs",
     "gen:guji:bszz": "node tools/guji-import-bszz.mjs",
     "gen:guji:all": "npm run gen:guji && npm run gen:guji:bszz"

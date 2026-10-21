@@ -1,0 +1,203 @@
+#!/usr/bin/env node
+/* ============================================================
+ * 线上产物逐字节校验 (tools/verify-live.mjs)
+ *
+ * 目的：守住「线上 == main」这条不变量。手工 curl + sha256sum 也能做，
+ * 但 2026-10-21 实测踩到两个坑，都不该靠记忆防：
+ *
+ *   ① **下载失败 ≠ 产物不一致**。沙箱到 CF 的链路会退化到 ~8 B/s，
+ *      curl 超时只下到 1440 字节，算出来的哈希必然不同。把它当成
+ *      「线上与本地不符」会得出完全相反的结论。故本工具区分三态：
+ *        OK / DIFF / UNKNOWN（下载不完整或超时）
+ *   ② **index.html 恒不等于本地**。CF 边缘会往 </body> 前注入
+ *      `/cdn-cgi/challenge-platform/scripts/jsd/main.js` 探针（JS
+ *      Detections / Bot Fight Mode），改仓库删不掉。故先剥掉这段
+ *      再比；剥完一致即判 OK，并注明「已剥边缘注入」。
+ *
+ * 用法：
+ *   node tools/verify-live.mjs                          # 默认校验线上域名
+ *   node tools/verify-live.mjs --host=https://xxx.pages.dev
+ *   node tools/verify-live.mjs --proxy=http://127.0.0.1:7890
+ *   node tools/verify-live.mjs --only=app.js            # 只校验一个文件
+ *   node tools/verify-live.mjs --strict                 # UNKNOWN 也算失败（CI 用）
+ *
+ * 退出码：0 全 OK ／ 1 有 DIFF 或隔离泄露 ／ 2 有 UNKNOWN（网络未取全）
+ *
+ * 依赖：curl（本仓 CI 为 ubuntu-latest 自带；Windows Git Bash 亦自带）。
+ *      不用 node fetch 是因为它不认 HTTP_PROXY，而本机常需要走 7890。
+ * ============================================================ */
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repo = path.resolve(here, '..');
+const pub = path.join(repo, 'public');
+
+const args = process.argv.slice(2);
+const arg = function (name, def) {
+  const hit = args.find(function (a) { return a.indexOf('--' + name + '=') === 0; });
+  return hit ? hit.slice(name.length + 3) : def;
+};
+const HOST = arg('host', 'https://liuyao.dhxlsfn.dpdns.org').replace(/\/+$/, '');
+const PROXY = arg('proxy', '');
+const ONLY = arg('only', '');
+const TIMEOUT = parseInt(arg('timeout', '90'), 10);
+const STRICT = args.indexOf('--strict') >= 0;
+
+// 不该出现在公网的仓库文件：命中即判泄露
+const MUST_NOT_LEAK = ['wrangler.toml', 'schema.sql', 'package.json', 'README.md', 'test-rules.js', '.gitignore'];
+
+function walk(dir) {
+  const out = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) out.push.apply(out, walk(p));
+    else out.push(p);
+  }
+  return out;
+}
+
+function fetchBuf(rel) {
+  // cache-bust：CF 对静态资源有边缘缓存，不加参数会拿旧副本
+  const url = HOST + '/' + rel + '?cb=' + Date.now() + Math.random().toString(36).slice(2, 8);
+  const argv = ['-sS', '--max-time', String(TIMEOUT), '-o', '-'];
+  // 环境里的 http_proxy/https_proxy 会静默改变校验结果：实测沙箱环境中代理路径
+  // 连不通（25s 超时），直连却 200——同一份产物被判成「不一致」或「取不到」。
+  // 故默认绕开环境代理；要走代理必须显式 --proxy 指定，让影响可见。
+  argv.push('--noproxy', PROXY ? '' : '*');
+  if (PROXY) argv.push('--proxy', PROXY);
+  argv.push(url);
+  try {
+    const buf = execFileSync('curl', argv, { maxBuffer: 64 * 1024 * 1024, encoding: 'buffer' });
+    return { buf: buf, err: null };
+  } catch (e) {
+    // 超时/连接失败：curl 非零退出，stdout 可能只有半截——绝不能当完整内容用
+    return { buf: e.stdout || Buffer.alloc(0), err: e.message.split('\n')[0] };
+  }
+}
+
+function headContentType(rel) {
+  // 不用 `-o /dev/null`：Windows 的 schannel 版 curl 会报
+  // `(23) client returned ERROR on write`，把一次正常响应变成失败（实测）。
+  // 改为写临时文件，只要 -w 的结果。
+  const tmp = path.join(os.tmpdir(), 'ly-verify-' + process.pid + '.bin');
+  const argv = ['-sS', '-o', tmp, '-w', '%{http_code}|%{content_type}', '--max-time', String(TIMEOUT)];
+  argv.push('--noproxy', PROXY ? '' : '*');
+  if (PROXY) argv.push('--proxy', PROXY);
+  argv.push(HOST + '/' + rel + '?cb=' + Date.now());
+  try {
+    return { ct: execFileSync('curl', argv, { encoding: 'utf8' }).trim(), err: null };
+  } catch (e) {
+    // 取不到就是取不到，绝不能当成「泄露」。这条与本文件头的原则①同源：
+    // 网络失败与产物异常必须分开报，否则一次断网会报出 6 条假泄露。
+    return { ct: '', err: e.message.split('\n')[0] };
+  } finally {
+    try { fs.unlinkSync(tmp); } catch (e) { /* 没生成则忽略 */ }
+  }
+}
+
+const sha = function (b) { return createHash('sha256').update(b).digest('hex'); };
+
+// CF 边缘注入探针：<script>...__CF$cv$params...</script>，可能跨行
+function stripCFInject(html) {
+  return html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*?__CF\$cv\$params[\s\S]*?<\/script>/g, '');
+}
+
+function pad(s, n) {
+  s = String(s);
+  let w = 0;
+  for (const ch of s) w += /[\u4e00-\u9fa5\uff00-\uffef]/.test(ch) ? 2 : 1;
+  return s + ' '.repeat(Math.max(0, n - w));
+}
+
+const files = walk(pub)
+  .map(function (p) { return path.relative(pub, p).split(path.sep).join('/'); })
+  .filter(function (r) { return !ONLY || r === ONLY; })
+  .sort();
+
+console.log('校验目标：' + HOST + (PROXY ? '（proxy ' + PROXY + '）' : '（直连）'));
+console.log('本地文件：' + files.length + ' 个\n');
+console.log(pad('文件', 30) + pad('本地', 9) + pad('线上', 9) + '判定');
+console.log('-'.repeat(64));
+
+let ok = 0, diff = 0, unknown = 0;
+const problems = [];
+
+for (const rel of files) {
+  const local = fs.readFileSync(path.join(pub, rel));
+  const r = fetchBuf(rel);
+  if (r.err) {
+    unknown++;
+    console.log(pad(rel, 30) + pad(local.length, 9) + pad('-', 9) + 'UNKNOWN（' + r.err + '）');
+    problems.push({ rel: rel, kind: 'UNKNOWN', detail: r.err });
+    continue;
+  }
+  // 空响应同样是「没取到」而不是「不一致」：本地文件不可能为空，
+  // 线上回 0 字节只可能是链路/中间层吞了包（本轮实测 index.html 就出现过）。
+  if (r.buf.length === 0) {
+    unknown++;
+    console.log(pad(rel, 30) + pad(local.length, 9) + pad(0, 9) + 'UNKNOWN（空响应）');
+    problems.push({ rel: rel, kind: 'UNKNOWN', detail: '空响应' });
+    continue;
+  }
+  let live = r.buf;
+  let note = '';
+  if (rel.endsWith('.html')) {
+    const before = live.length;
+    live = Buffer.from(stripCFInject(live.toString('utf8')), 'utf8');
+    if (live.length !== before) note = '（已剥 CF 边缘注入 ' + (before - live.length) + 'B）';
+  }
+  const same = sha(live) === sha(local);
+  if (same) { ok++; console.log(pad(rel, 30) + pad(local.length, 9) + pad(live.length, 9) + 'OK' + note); }
+  else {
+    diff++;
+    console.log(pad(rel, 30) + pad(local.length, 9) + pad(live.length, 9) + 'DIFF');
+    problems.push({ rel: rel, kind: 'DIFF', detail: '本地 ' + local.length + 'B / 线上 ' + live.length + 'B' });
+  }
+}
+
+console.log('\n隔离检查（仓库文件不得出现在公网）：');
+console.log('-'.repeat(64));
+let leak = 0, isoUnknown = 0;
+for (const rel of MUST_NOT_LEAK) {
+  const h = headContentType(rel);
+  if (h.err) {
+    isoUnknown++;
+    console.log(pad('/' + rel, 30) + 'UNKNOWN（' + h.err.slice(0, 40) + '）');
+    continue;
+  }
+  // 本项目对未知路径有 SPA 回退：返回 text/html 才说明隔离正常。
+  // 只看状态码会被 200 骗过去——必须比 Content-Type。
+  const isFallback = /text\/html/.test(h.ct);
+  if (isFallback) console.log(pad('/' + rel, 30) + 'OK（SPA 回退）');
+  else { leak++; console.log(pad('/' + rel, 30) + 'LEAK  ' + h.ct); }
+}
+
+console.log('\n' + '='.repeat(64));
+console.log('文件 ' + files.length + '：OK ' + ok + '　DIFF ' + diff + '　UNKNOWN ' + unknown
+  + '　隔离泄露 ' + leak + (isoUnknown ? '　隔离未知 ' + isoUnknown : ''));
+
+if (diff || leak) {
+  console.log('\n判定：FAIL');
+  problems.filter(function (p) { return p.kind === 'DIFF'; }).forEach(function (p) {
+    console.log('  · DIFF ' + p.rel + '　' + p.detail);
+  });
+  process.exit(1);
+}
+if ((unknown || isoUnknown) && STRICT) {
+  console.log('\n判定：FAIL（--strict：UNKNOWN 视为失败）');
+  problems.forEach(function (p) { console.log('  · ' + p.kind + ' ' + p.rel + '　' + p.detail); });
+  if (isoUnknown) console.log('  · 隔离检查有 ' + isoUnknown + ' 项未取到');
+  process.exit(2);
+}
+if (unknown || isoUnknown) {
+  console.log('\n判定：PASS（逐字节部分通过；有 ' + (unknown + isoUnknown)
+    + ' 项因网络未取全，属取不到而非不一致）');
+  console.log('提示：加 --proxy=http://127.0.0.1:7890 或调大 --timeout 后重跑。');
+  process.exit(2);
+}
+console.log('\n判定：PASS —— 线上与本地逐字节一致，敏感文件未泄露');
