@@ -116,6 +116,53 @@ async function launchBrowser() {
     await page.close();
   }
 
+  // ---------- B2. 引擎判定必须随盘注入（2026-10-21） ----------
+  // 旧版 analyze() 算出了 trend 却从不注入提示词，模型无从得知，
+  // 于是同一张盘、同一 provider 两次调用断出相反结论（实测一次「平」一次「凶」，
+  // 后者与引擎自身判定相反）。这里锁死「注入」这一层——不测模型听不听话，
+  // 只测它有没有拿到锚点。
+  {
+    const page = await browser.newPage();
+    const captured = [];
+    await page.route('**/api/interpret', async route => {
+      captured.push(JSON.parse(route.request().postData() || '{}'));
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '断语示例：用神旺相，事可成。\n结论：吉' }) });
+    });
+    console.log('B2. 引擎判定注入');
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#btnRandom', { timeout: 15000 });
+    for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.waitForTimeout(60); await page.click('#btnConfirm'); await page.waitForTimeout(60); }
+    // 必须先选事类：不选则规则链不取用神，lastAnalysis 为 null，无 trend 可注入
+    await page.selectOption('#useSelect', '妻财');
+    await page.waitForTimeout(300);
+    await page.click('#btnAI');
+    await page.waitForTimeout(800);
+
+    eq('改选事类后断卦请求已发出', captured.length >= 1, true);
+    const pt = captured[0].panText || '';
+    eq('panText 含「用神：」行（规则链已取用）', pt.indexOf('用神：') >= 0, true);
+    eq('panText 含【引擎判定】段', pt.indexOf('【引擎判定') >= 0, true);
+    const mTrend = /【引擎判定（确定性 · 非推断）】(吉|平|凶)/.exec(pt);
+    eq('引擎判定值为吉/平/凶之一', !!(mTrend && mTrend[1]), true);
+    eq('panText 给出分歧标注指引', pt.indexOf('与引擎分歧') >= 0, true);
+
+    // 反向对照：不选事类时确实拿不到 trend —— 证明上面的断言不是恒真
+    const page2 = await browser.newPage();
+    const cap2 = [];
+    await page2.route('**/api/interpret', async route => {
+      cap2.push(JSON.parse(route.request().postData() || '{}'));
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '断语示例' }) });
+    });
+    await page2.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page2.waitForSelector('#btnRandom', { timeout: 15000 });
+    for (let i = 0; i < 6; i++) { await page2.click('#btnRandom'); await page2.waitForTimeout(60); await page2.click('#btnConfirm'); await page2.waitForTimeout(60); }
+    await page2.click('#btnAI');
+    await page2.waitForTimeout(800);
+    eq('对照：未选事类时 panText 无【引擎判定】', (cap2[0] && cap2[0].panText || '').indexOf('【引擎判定') < 0, true);
+    await page2.close();
+    await page.close();
+  }
+
   // ---------- C. 时间一致性（#5 / #10） ----------
   {
     const page = await browser.newPage();

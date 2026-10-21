@@ -115,6 +115,10 @@ function evaluateReply(core, pan, ana, text) {
     direction: dir,
     trend: trend,
     agreesTrend: (dir && trend) ? dir === trend : null,
+    // 显式分歧：断语结论与引擎相反，但按【结论对齐】契约标注了「（与引擎分歧：…）」。
+    // 这不是漂移，是**声明过的**分歧——计入独立桶，从一致率分母中剔除。
+    // 否则契约里「允许分歧但须标注」就成了空话：标了照样扣分，模型只能沉默照抄。
+    declaredDisagreement: !!(dir && trend && dir !== trend && /与引擎(判定)?分歧/.test(String(text == null ? '' : text))),
     errors: errors,
     boundary: boundaryOf(text)
   };
@@ -130,7 +134,7 @@ function evaluateCorpus(cases, core) {
   const perCase = [];
   let replies = 0, stated = 0, agree = 0, disagree = 0;
   let withError = 0, errorCount = 0;
-  let withDogma = 0;
+  let withDogma = 0, declaredN = 0;
   const driftList = [];
 
   (cases || []).forEach(function (c) {
@@ -148,7 +152,10 @@ function evaluateCorpus(cases, core) {
       replies++;
       if (e.direction) { counts[e.direction]++; stated++; }
       if (e.agreesTrend === true) agree++;
-      else if (e.agreesTrend === false) disagree++;
+      else if (e.agreesTrend === false) {
+        if (e.declaredDisagreement) declaredN++;   // 显式分歧：不算静默漂移
+        else disagree++;
+      }
       if (e.errors.length) { withError++; errorCount += e.errors.length; }
       if (!e.boundary.clean) withDogma++;
     });
@@ -180,6 +187,7 @@ function evaluateCorpus(cases, core) {
         judgeable: judged,
         agree: agree,
         disagree: disagree,
+        declared: declaredN,
         rate: judged ? agree / judged : null
       },
       drift: {

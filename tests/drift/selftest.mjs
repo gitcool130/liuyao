@@ -78,6 +78,23 @@ eq('三条 2 同 1 异→冲突率 1/3', Math.round(rThree.metrics.drift.rate * 
 const rDogma = mk(['此事必然应验，准确率可达 90%。\n结论：' + trend]);
 eq('独断断语→边界遵守率 0', rDogma.metrics.boundary.rate, 0);
 
+// 显式分歧：结论与引擎相反，但标注了「（与引擎分歧：…）」
+// —— 契约允许分歧，但要求声明。声明过的从一致率分母剔除，未声明的照扣。
+const otherDir = trend === '凶' ? '吉' : '凶';
+const rDeclared = mk([
+  SAME[trend] + '\n结论：' + trend,
+  OPPOSITE[trend] + '\n结论：' + otherDir + '（与引擎分歧：引擎判' + trend + '，此处判' + otherDir + '）'
+]);
+eq('显式分歧→计入 declared 桶', rDeclared.metrics.trendAgreement.declared, 1);
+eq('显式分歧→不计入 disagree', rDeclared.metrics.trendAgreement.disagree, 0);
+eq('显式分歧→一致率仍为 1（分母只剩同向那条）', rDeclared.metrics.trendAgreement.rate, 1);
+const rSilent = mk([
+  SAME[trend] + '\n结论：' + trend,
+  OPPOSITE[trend] + '\n结论：' + otherDir
+]);
+eq('静默相反→仍计入 disagree（契约不是免责声明）', rSilent.metrics.trendAgreement.disagree, 1);
+eq('静默相反→一致率 0.5', rSilent.metrics.trendAgreement.rate, 0.5);
+
 console.log('D. 硬伤检测会红（用真实语料）');
 const corpus = JSON.parse(fs.readFileSync(path.join(here, 'corpus', '2026-10-21-kun-weijing.json'), 'utf8'));
 const real = evaluateCorpus(corpus.cases, core);
