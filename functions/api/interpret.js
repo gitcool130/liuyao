@@ -657,6 +657,12 @@ export async function onRequestPost(context) {
           if (!cut && outLen === 0 && reasBuf) {
             try {
               await w.write(enc.encode('data: ' + JSON.stringify({ t: reasBuf }) + '\n\n'));
+              // 补发的是**思考草稿**，也必须计入正文长度与尾部快照。
+              // 旧版补发后 outLen 仍为 0，下面「首轮缺结论行」的完整性检查
+              // 因 outLen > 30 不成立而直接跳过 —— 实测 2026-10-21：补全请求
+              // 回 745 字符纯草稿、无任何 warn，用户看到的是半截思考过程。
+              outLen += reasBuf.length;
+              tail = reasBuf.slice(-600);
             } catch (e) { /* 客户端已断开则忽略 */ }
           }
           // 非正常收尾必须显式告知客户端：writeErr 会让前端按「可重试」处理，

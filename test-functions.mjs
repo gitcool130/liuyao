@@ -601,6 +601,35 @@ const rReasOnly = await interpretPost({
 });
 const evReasOnly = await readSSEEvents(rReasOnly);
 eq('端到端兜底：纯草稿流末补发，不至空响应', sseText(evReasOnly), '只有草稿的流');
+
+// 长草稿（>30 字符且无「结论：」行）必须触发完整性告警。
+// 旧版兜底补发后 outLen 仍为 0，完整性检查被 outLen > 30 直接跳过 ——
+// 实测 2026-10-21 线上：补全请求回 745 字符纯草稿、无任何 warn，
+// 用户看到的是半截思考过程当断语。
+const longDraft = '我们需要回答用户关于考试文书的问题，先看用神父母巳火在二爻发动，世爻子孙酉金得月建生助，';
+globalThis.fetch = function () {
+  const enc = new TextEncoder();          // encG 在后面才声明，这里用局部 encoder
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(enc.encode('data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: longDraft } }] }) + '\n\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const rDraft = await interpretPost({
+  request: new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panText: '占测试', provider: 'gpt', model: 'gpt-6-luna' })
+  }),
+  env: ENV_GPT
+});
+const evDraft = await readSSEEvents(rDraft);
+eq('长草稿仍会补发（不为空响应）', sseText(evDraft).indexOf('我们需要回答用户') >= 0, true);
+eq('长草稿无结论行 → 触发 INCOMPLETE_STRUCTURE',
+  evDraft.some(function (e) { return e.warn === 'INCOMPLETE_STRUCTURE'; }), true);
+globalThis.fetch = origFetch;
 globalThis.fetch = origFetch;
 
 // ---------- #22 Google 原生流式（alt=sse）与 SSE 心跳（2026-10-17） ----------
