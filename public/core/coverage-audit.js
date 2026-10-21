@@ -139,7 +139,23 @@
     }
     return false;
   }
-  /** 找 word 的非否定出现位置；全部出现都在否定/引述/标题语境中则返回 -1。 */
+  /**
+   * 括号内并列列举：断语常用「（日冲暗动/变爻冲克）」这种写法**并列列举机制**，
+   * 不是断言"本爻日冲暗动"。旧版按子串命中，把并列项之一当成主张，判「日冲无中生有」
+   * （实测出处：2026-10-21 线上人工清单，甲篇「三爻官鬼卯木……（日冲暗动/变爻冲克）」）。
+   * 判据收紧到「括号内出现并列分隔符」才豁免 —— 这样「用神月破（真破）」
+   * 这类括号内确实在下断语的写法照样要报。
+   */
+  function inEnumeratedParen(src, idx) {
+    const l1 = src.lastIndexOf('（', idx), l2 = src.lastIndexOf('(', idx);
+    const l = Math.max(l1, l2);
+    if (l < 0) return false;
+    const r1 = src.indexOf('）', l), r2 = src.indexOf(')', l);
+    const r = Math.min(r1 < 0 ? Infinity : r1, r2 < 0 ? Infinity : r2);
+    if (!(r > idx)) return false;
+    return /[\/、]|或/.test(src.slice(l + 1, r));
+  }
+  /** 找 word 的非否定出现位置；全部出现都在否定/引述/标题/并列括注语境中则返回 -1。 */
   function findAsserted(src, word) {
     const qs = quotedRanges(src);
     let idx = src.indexOf(word);
@@ -149,7 +165,7 @@
       // 「月破：」只是小标题，真正的陈述在冒号之后（往往还带否定）。
       // 旧版把标题当主张，实测 2 条断语因此被判「月破无中生有」。
       const isLabel = /^[：:]/.test(src.slice(end, end + 1));
-      if (!isLabel && !inQuote(qs, idx) && !isNegated(src, idx)
+      if (!isLabel && !inQuote(qs, idx) && !inEnumeratedParen(src, idx) && !isNegated(src, idx)
           && !isNegatedAfter(src, end) && !isRefutedAfter(src, end)) return idx;
       idx = src.indexOf(word, end);
     }

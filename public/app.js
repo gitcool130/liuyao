@@ -1432,6 +1432,20 @@
           let reply = await callInterpret(m, [], onStatus, onStream, { gen: myGen, signal: mySignal });
           if (myGen !== aiGen) return;     // 旧代响应：不写入状态、不渲染
 
+          /* 断语未完篇 → 自动补一次（2026-10-21）。
+             首轮不再走网关缓存后，每次都是真生成，模型偶发提前收尾（实测
+             deepseek 8 s / 951 字符、gemini 137 tokens），用户拿到的半篇连「结论：」
+             行都没有，只能自己再点一次。这里检测到就自动重来一遍，把完整稿
+             覆盖上去，用户最多多等一次生成，不用自己判断「是不是没写完」。
+             只补一次：再失败就保留较长的一稿并显示提示，避免反复烧调用。 */
+          if (reply && reply.length > 30 && !/结[论局]\s*[：:]/.test(reply)) {
+            onStatus('断语未写完，正在重新生成…');
+            const retry = await callInterpret(m, [], onStatus, onStream, { gen: myGen, signal: mySignal });
+            if (myGen !== aiGen) return;
+            if (retry && /结[论局]\s*[：:]/.test(retry)) reply = retry;
+            else if (retry && retry.length > reply.length) reply = retry;
+          }
+
           /* 盘面事实冲突 → 把冲突点回灌给模型，只重写一次。
              旧版只在断语下方提示，用户拿到的仍是写错的正文；重写一次能消掉
              大半「世应写反／卦名写错」且不会无限循环（仅一次机会）。 */

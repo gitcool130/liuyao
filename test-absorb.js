@@ -257,6 +257,12 @@ eq('引文+「皆不适用」→放行',
 eq('无引号的真断言→仍告警', C.auditCoverage('此卦旺不为空，可言有成。', kZhen).accepted, false);
 // 列表标题：「月破：」只是小标题，真正的陈述在冒号之后
 eq('标题「月破：盘面未列」→放行', C.auditCoverage('- 月破：盘面未列爻逢月破；', noPo).accepted, true);
+// 括号内并列列举机制：「（日冲暗动/变爻冲克）」是在列可能性，不是断言其一。
+// 实测出处：2026-10-21 线上人工清单，甲篇「三爻官鬼卯木……（日冲暗动/变爻冲克）」
+// 被判「日冲无中生有」。豁免只认「括号内带并列分隔符」，防止把真断语一起放过。
+eq('括号并列「（月破/日破）」→放行', C.auditCoverage('五爻亥水（月破/日破）待定。', noPo).accepted, true);
+eq('括号内单独下定语「（真破）」→仍告警', C.auditCoverage('用神月破（真破）。', noPo).accepted, false);
+eq('括号外的裸断言「月破」→仍告警', C.auditCoverage('五爻亥水月破。', noPo).accepted, false);
 eq('「卦中无爻逢月破」→放行（否定距词 5 字）', C.auditCoverage('- 旬空月破：旬空戌亥；卦中无爻逢月破。', noPo).accepted, true);
 
 // 用神一致性

@@ -163,6 +163,40 @@ async function launchBrowser() {
     await page.close();
   }
 
+  // ---------- B3. 残篇自动补一次（2026-10-21） ----------
+  // 首轮不走网关缓存后每次都是真生成，模型偶发提前收尾（实测 deepseek 8s/951 字符）。
+  // 旧版只能靠用户自己再点一次；新版应在缺「结论：」行时自动重来一遍并覆盖 UI。
+  {
+    const page = await browser.newPage();
+    const calls = [];
+    const sse = t => 'data: ' + JSON.stringify({ t: t }) + '\n\n';
+    await page.route('**/api/interpret', async route => {
+      calls.push(JSON.parse(route.request().postData() || '{}'));
+      const n = calls.length;
+      const body = n === 1
+        ? sse('一、卦象要点：用神父母巳火二爻发动，世爻子孙酉金得月建生戌土相生。\n二、断吉凶：旺衰相半，须再核旬空。') // 残篇：无结论行
+        : sse('一、卦象要点：父母巳火二爻发动。\n结论：平\n应期：甲戌日\n验证标志：书面通知落地');            // 完整稿
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body: body });
+    });
+    console.log('B3. 残篇自动补一次');
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#btnRandom', { timeout: 15000 });
+    for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.waitForTimeout(60); await page.click('#btnConfirm'); await page.waitForTimeout(60); }
+    await page.selectOption('#useSelect', '父母');
+    await page.waitForTimeout(300);
+    await page.click('#btnAI');
+    await page.waitForTimeout(2500);
+
+    // 第 1 次是首稿（残篇），第 2 次是自动补全；若补全稿仍触发盘面校正，
+    // 还会有第 3 次带 messages 的重写——那不是本组要断言的，故用 >=2。
+    eq('残篇触发补全请求（≥2 次）', calls.length >= 2, true);
+    eq('补全是一次干净的首轮（不带历史）', calls[1].messages.length, 0);
+    const shown = await page.evaluate(() => document.body.innerText);
+    eq('UI 最终显示的是补全稿（含「结论：」行）', /结论\s*[：:]/.test(shown), true);
+    eq('UI 不再停留在半篇内容', shown.indexOf('旺衰相半，须再核旬空') < 0, true);
+    await page.close();
+  }
+
   // ---------- C. 时间一致性（#5 / #10） ----------
   {
     const page = await browser.newPage();
