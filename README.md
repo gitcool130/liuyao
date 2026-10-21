@@ -357,6 +357,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | ⑦ | 断语带自相矛盾交稿 | 增【输出自检】：交稿前逐条核对卦名/世应/动爻/旬空与排盘一致、所引口诀前提成立、应期与空破冲合对应 | 同上 |
 | ⑧ | 契约段看守不足 | `CONTRACT_MARKS` 4 → 6 段（新增法理口径、多选一问法入强制比对名单；另三段由「两份提示词全文一致」断言覆盖），反向对照断言同步改为 6 | `test-functions.mjs` |
 | ⑨ | 新模块无回归 | `test-absorb.js` 新增第 9 节 20 项：三型正用例 + 副词/趋势题反用例 + 空输入不炸 + hint/aiNote 成对出现 | `test-absorb.js` |
+| ⑩ | CI 脚本顺序断言漏新文件 | 推送后 CI 红：`ci.yml` 的脚本加载顺序 `expect` 清单为硬编码 11 项，未含 `question-shape.js`，语法检查清单同漏。教训：新 core 文件须同步三处——`index.html` script 链、`core.js` 注释与 require、`ci.yml` 两道清单 | `.github/workflows/ci.yml` |
 
 **验证**：`core 93 / rules 265 / gua-types 91 / absorb 181 / functions 149 / diff 零 BUG / guji PASS` 全绿（absorb 161 → 181；functions 契约组同步扩段）。`test:diff` 此前在本机报缺依赖，核实为检出目录从未 `npm install`（HEAD 基线同样失败），装齐 devDependencies 后 104780 字段零 BUG。
 
