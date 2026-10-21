@@ -539,6 +539,18 @@ export async function onRequestPost(context) {
         return json({ error: 'NET_ERROR', message: '无法连接大模型服务，请稍后重试' }, 502);
       }
       console.error('[liuyao] 上游返回 ' + r.fail.status + ':', r.fail.detail);
+      /* 429 单独映射（2026-10-21 晚）：上游是「配额/速率用尽」，不是本服务故障。
+         旧版一律 502，前端把它当「接口未就绪」重试 20 轮、耗三分钟才降级，用户
+         看到的是「接口暂未就绪」而不是真实原因。实测：Gemini 免费配额打满后，
+         每次断卦空转 20 轮。透传 429 + Retry-After，前端据此立即提示换模型。 */
+      if (r.fail.status === 429) {
+        const resp = json({
+          error: 'UPSTREAM_RATE_LIMITED',
+          message: '上游模型配额或速率已用尽（429），请换一个模型或稍后再试'
+        }, 429);
+        resp.headers.set('Retry-After', '60');
+        return resp;
+      }
       return json({ error: 'LLM_ERROR', message: '大模型接口返回 ' + r.fail.status + '，请稍后重试' }, 502);
     }
     if (r.stream) {

@@ -131,8 +131,9 @@ node /tmp/ly/probe.cjs
 | `functions/api/interpret.js` | 收流打 `{"ev":"stream_end","finish":…,"chars":…,"thought":…}` 采样日志；统计 Google 原生流 `parts[].thought` 字符（**只观测不拦截**） |
 | `test-functions.mjs` | 过滤上面那行日志，避免 172 行采样淹没断言 |
 | `test-shake.js` | B3 增加「首稿用 3.6」「补全改用 3.8」两条断言，并先把选中切到只剩 3.6（否则测不到换模型分支） |
+| `functions/api/interpret.js`（第二轮） | 上游 429 透传为 `429 UPSTREAM_RATE_LIMITED` + `Retry-After: 60`（旧版一律 502 → 前端空转 20 轮）；`app.js` 把该码列入不重试白名单 |
 
-验证：`npm test` 265 / `test:fn` 172 / `test-shake` **62/62**（原 55）。
+验证：`npm test` 265 / `test:fn` **176** / `test-shake` **62/62**（原 55）。
 
 部署：
 

@@ -59,13 +59,17 @@ const QUESTION = process.env.SHOT_Q || '此 liuyao 项目准确度如何，是�
   console.log('已点击断卦，等待流结束…');
 
   let done = false;
-  const deadline = t0 + 180000;
+  const deadline = t0 + 300000;
+  const statuses = new Set();
   while (Date.now() < deadline) {
-    const txt = await page.evaluate(() => {
+    const st = await page.evaluate(() => {
       const el = document.querySelector('.ai-block');
-      return el ? el.innerText : '';
+      const loads = Array.prototype.map.call(document.querySelectorAll('.loading'), e => (e.innerText || '').trim());
+      return { txt: el ? el.innerText : '', loads: loads };
     });
-    if (/结[论局]\s*[:：]/.test(txt) || /未完篇/.test(txt)) { done = true; break; }
+    st.loads.forEach(x => { if (x) statuses.add(x); });
+    // 只在断语块自身判断：页面静态说明里也含「未完篇」字样，按整页匹配会提前收工
+    if (st.txt && st.txt.length > 200 && (/结[论局]\s*[:：]/.test(st.txt) || /本卦断语未完篇/.test(st.txt))) { done = true; break; }
     await page.waitForTimeout(1000);
   }
   await page.waitForTimeout(1200);
@@ -80,10 +84,12 @@ const QUESTION = process.env.SHOT_Q || '此 liuyao 项目准确度如何，是�
       warns: warns.map(w => w.slice(0, 160)),
       hasConclusion: /结[论局]\s*[:：]/.test(last),
       hasIncomplete: /未完篇/.test(last),
+      retriedBy: (last.match(/本稿由\s*([\w.\-]+)\s*补全/) || [])[1] || '',
+      bodyHasRetryNote: /本稿由/.test(document.body.innerText),
       tail: last.slice(-220)
     };
   });
   await page.screenshot({ path: path.join(OUT, 'shot-2-verdict.png'), fullPage: true });
-  console.log(JSON.stringify({ model: MODEL, elapsedMs: Date.now() - t0, done: done, ...info, pageErrors: errs }, null, 1));
+  console.log(JSON.stringify({ model: MODEL, elapsedMs: Date.now() - t0, done: done, statuses: Array.from(statuses), ...info, pageErrors: errs }, null, 1));
   await browser.close();
 })();

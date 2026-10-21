@@ -1161,9 +1161,11 @@
     if (kind === 'net' || kind === 'html' || kind === 'empty') return true;
     if (kind !== 'api') return false;
     // 配置/请求类错误不重试：改环境变量或重排盘才能解决。
+    // UPSTREAM_RATE_LIMITED（2026-10-21 晚）：上游配额/速率用尽，重试只会同样 429，
+    // 旧版按 502 处理会空转 20 轮、三分钟才降级，用户还以为「接口没就绪」。
     // 用 pick 而非 noRetry[data.error]：error 来自服务端响应，
     // noRetry['constructor'] 会因原型属性 truthy 而把本可重试的错误误判为不重试。
-    const noRetry = { BAD_JSON: 1, NO_PAN: 1, BAD_PROVIDER: 1, BAD_MODEL: 1, NO_KEY: 1, ACCESS_REQUIRED: 1 };
+    const noRetry = { BAD_JSON: 1, NO_PAN: 1, BAD_PROVIDER: 1, BAD_MODEL: 1, NO_KEY: 1, ACCESS_REQUIRED: 1, UPSTREAM_RATE_LIMITED: 1 };
     if (data && data.error && pick(noRetry, data.error)) return false;
     if (data && (data.error === 'LLM_ERROR' || data.error === 'LLM_TIMEOUT' || data.error === 'EMPTY' || data.error === 'RATE_LIMITED')) return true;
     if (res && (res.status === 429 || res.status >= 500)) return true;

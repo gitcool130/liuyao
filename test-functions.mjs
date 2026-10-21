@@ -488,6 +488,18 @@ eq('主备皆挂 → 尝试两次后 502', [rBoth.status, gemCalls.length], [502
 eq('主备皆挂 → message 保留首次错误（503 而非备选 429）', jBoth.message, '大模型接口返回 503，请稍后重试');
 eq('主备皆挂 → 不回传上游错误体（detail 不在响应里）', 'detail' in jBoth, false);
 
+// 主备皆 429 → 透传 429（上游配额/速率用尽），不再笼统 502。
+// 旧版把 429 也归成 502，前端按「接口未就绪」重试 20 轮、耗三分钟才降级，
+// 用户看到的是「接口暂未就绪」而非真实原因（2026-10-21 实测 Gemini 配额打满）。
+gemQueue = [new Response('quota exceeded', { status: 429 }), new Response('quota exceeded', { status: 429 })];
+gemCalls.length = 0;
+const r429 = await postGem('gemini-3.8-flash');
+const j429 = await r429.json();
+eq('主备皆 429 → 状态码 429', r429.status, 429);
+eq('主备皆 429 → 错误码 UPSTREAM_RATE_LIMITED', j429.error, 'UPSTREAM_RATE_LIMITED');
+eq('主备皆 429 → 带 Retry-After', r429.headers.get('Retry-After'), '60');
+eq('主备皆 429 → 仍先试过备选（降级不跳过）', gemCalls.length, 2);
+
 // 非 gemini 供应商不做跨模型降级（无同族备选语义，防误伤 gpt/deepseek 错误透传）
 gemQueue = [new Response('gpt down', { status: 500 })];
 gemCalls.length = 0;
