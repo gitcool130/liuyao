@@ -267,6 +267,10 @@ export async function onRequestPost(context) {
   // skipCache：仅影响上游网关缓存，不影响任何生成参数。
   // 供「评测要独立样本」「截断后重试」两类场景使用；普通断卦不传，继续吃缓存。
   const skipCache = body.skipCache === true || body.skip_cache === true;
+  // 参数对照实验开关：仅在显式开启 env 时接受 body.variant（A/B/C），
+  // 否则一律按 A（旧行为）。防止外部随意改生成参数。
+  const variant = (env.LLM_DEBUG_VARIANTS === '1' && typeof body.variant === 'string')
+    ? body.variant.toUpperCase().slice(0, 1) : null;
   const history = Array.isArray(body.messages) ? body.messages.slice(-LIMITS.historyTurns) : [];
 
   const model = (body.model || '').toString();
@@ -328,8 +332,19 @@ export async function onRequestPost(context) {
       const contents = messages.filter(function (m) { return m.role !== 'system'; }).map(function (m) {
         return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] };
       });
-      const genCfg = { temperature: 0.2, thinkingConfig: { thinkingBudget: 0 } };
+      // generationConfig 三变体（2026-10-21 对照实验用）：
+      //   默认/A = thinkingBudget:0（旧行为，强行关思考）
+      //   B        = 不传 thinkingConfig（交给 gemini 3.x 自身动态思考）
+      //   C        = 不传 thinkingConfig + maxOutputTokens 8192
+      // 背景：gemini-3.6-flash 在 A 下只生成 137/405 tokens 就 finishReason=STOP，
+      // 断语断在句中且无「结论：」行；怀疑对 3.x 关思考损伤长输出。
+      // 变体只在 env.LLM_DEBUG_VARIANTS === '1' 时生效，生产默认关闭。
+      const genCfg = { temperature: 0.2 };
+      if (!variant || variant === 'A') {
+        genCfg.thinkingConfig = { thinkingBudget: 0 };
+      }
       if (maxTokens > 0) genCfg.maxOutputTokens = maxTokens;
+      if (variant === 'C') genCfg.maxOutputTokens = 8192;
       return {
         // 原生接口也走流式（alt=sse）：非流式要在服务端等整篇生成完，
         // 期间 CF 边缘无任何字节下发，长答复会撞 ~100s 的 524；流式还能让前端逐段渲染。
@@ -530,6 +545,8 @@ export async function onRequestPost(context) {
       // 初始 ping 与下方心跳同源；写入失败（客户端已断开/流已 error）必须就地吞掉，
       // 未接 catch 的 promise 会在 Workers 里冒成未处理拒绝。
       writer.write(enc.encode(': ping\n\n')).catch(function () { /* 客户端断开则忽略 */ });
+      // 对照实验：把实际生效的变体回显给调用方，免得配置没打开却以为测了 B/C
+      if (variant) writer.write(enc.encode('data: ' + JSON.stringify({ variant: variant }) + '\n\n')).catch(function () { });
 
       async function pipeMergedSSE(upstream) {
         const reader = upstream.body.getReader();

@@ -769,5 +769,39 @@ eq('STOP 但缺结论行 → INCOMPLETE_STRUCTURE 告警',
   evNoStruct.some(function (e) { return e.warn === 'INCOMPLETE_STRUCTURE'; }), true);
 globalThis.fetch = origFetch;
 
+// generationConfig 变体对照（2026-10-21）：A=thinkingBudget:0，B=不传 thinkingConfig，
+// C=不传 + maxOutputTokens 8192。仅在 LLM_DEBUG_VARIANTS=1 时接受 body.variant。
+let gwBody = null;
+globalThis.fetch = function (url, opts) {
+  gwBody = opts && opts.body ? JSON.parse(opts.body) : null;
+  const body = new ReadableStream({ start: function (c) { c.enqueue(encG.encode(sseLine('甲'))); c.close(); } });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const postVar = function (variant, env) {
+  return interpretPost({
+    request: new Request('https://x/api/interpret', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ panText: '占测试', model: 'gemini-3.6-flash', variant: variant })
+    }),
+    env: Object.assign({ GEMINI_API_KEY: 'k' }, env || {})
+  });
+};
+await (await postVar('A', { LLM_DEBUG_VARIANTS: '1' })).text();
+eq('变体 A → thinkingBudget 为 0', gwBody.generationConfig.thinkingConfig.thinkingBudget, 0);
+eq('变体 A → 不设 maxOutputTokens', gwBody.generationConfig.maxOutputTokens, undefined);
+await (await postVar('B', { LLM_DEBUG_VARIANTS: '1' })).text();
+eq('变体 B → 不传 thinkingConfig', gwBody.generationConfig.thinkingConfig, undefined);
+eq('变体 B → 不设 maxOutputTokens', gwBody.generationConfig.maxOutputTokens, undefined);
+await (await postVar('C', { LLM_DEBUG_VARIANTS: '1' })).text();
+eq('变体 C → 不传 thinkingConfig', gwBody.generationConfig.thinkingConfig, undefined);
+eq('变体 C → maxOutputTokens 给足 8192', gwBody.generationConfig.maxOutputTokens, 8192);
+await (await postVar('B', {})).text();
+eq('未开调试开关 → 变体参数被忽略（仍为 A）', gwBody.generationConfig.thinkingConfig.thinkingBudget, 0);
+const rVarEcho = await postVar('B', { LLM_DEBUG_VARIANTS: '1' });
+const evVarEcho = await readSSEEvents(rVarEcho);
+eq('变体回显事件（证明配置真生效）', evVarEcho.some(function (e) { return e.variant === 'B'; }), true);
+globalThis.fetch = origFetch;
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);
