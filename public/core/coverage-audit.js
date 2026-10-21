@@ -210,6 +210,38 @@
     });
     checked.push('结构遗漏（月破/旬空/日冲/动变/伏神/三合/刑害）');
 
+    // A3. 静爻论「受日辰月建冲动」——静态爻不因日月之冲而「动」
+    // 静爻逢日辰冲，旺相为暗动、休囚为日破；逢月建冲为月破。
+    // 「受日辰月建冲动」把三种截然不同的判定混成一团，故属概念误置。
+    // 保守边界：一句之内全部所提之爻皆静才告警；出现任一爻发动即放行。
+    if (pan && Array.isArray(pan.lines)) {
+      const POSMAP = { 初: 0, 二: 1, 三: 2, 四: 3, 五: 4, 上: 5 };
+      const EXEMPT = ['暗动', '日破', '月破', '冲空', '冲起', '冲散', '冲实', '日冲', '月冲'];
+      const sentences = src.split(/[。；！？\n]/);
+      sentences.forEach(function (sen) {
+        if (!/(日辰|月建|日月)/.test(sen)) return;
+        if (!/(受|被|遭)[^，,]{0,10}冲/.test(sen)) return;
+        if (EXEMPT.some(function (w) { return sen.indexOf(w) >= 0; })) return;
+        const posArr = [];
+        const rePos = /([初二三四五上])爻/g;
+        let pm;
+        while ((pm = rePos.exec(sen)) !== null) {
+          const p = POSMAP[pm[1]];
+          if (posArr.indexOf(p) < 0) posArr.push(p);
+        }
+        if (!posArr.length) return;
+        const li = pan.lines.filter(function (L, i) { return posArr.indexOf(i) >= 0; });
+        if (!li.length || li.some(function (L) { return L && L.moving; })) return;
+        conflicts.push({
+          type: '静爻论冲',
+          claimed: '静爻受' + (sen.indexOf('月建') >= 0 ? '日辰月建' : '日辰') + '冲动',
+          actual: '静爻不因日月之冲而动（日冲旺相为暗动、休囚为日破；月冲为月破）',
+          hint: '断语把静爻说成「受日月冲动」——静爻逢冲只有暗动 / 日破 / 月破三种判定，须按卦盘改正。'
+        });
+      });
+    }
+    checked.push('静爻不得论「受日月冲动」（须为暗动/日破/月破）');
+
     // C. 用神一致性：只审明说的取用，不说就不审。
     // 「以官鬼为忌神」「取父母为原神」说的是忌/仇/原神，不是取用——
     // 命中词后紧跟「为忌/为仇/为原」等角色词的匹配一律跳过。
@@ -235,6 +267,28 @@
       break; // 只审第一个有效取用，避免同篇多角色词互相干扰
     }
     checked.push('用神一致性（仅在断语明说取用时审）');
+
+    // C2. 取用两说：同一篇断语把「同一件事之体」判给两个不同六亲。
+    // 「取父母为用神」+「应爻官鬼为所测项目之体」——同一事共两个本体，
+    // 用神一乱，后文生克与旺衰全落空处。旧版只审第一处取用，故抓不到。
+    // 「为忌/为仇/为原/为闲」说的是忌仇原闲神，不是取用，一律豁免。
+    const ysSet = [];
+    const reTi = /(父母|兄弟|子孙|妻财|官鬼)[^。；，,]{0,10}?(?:为|作|即)[^。；，,]{0,4}?(?:之体|本体|事体|用神|用爻)/g;
+    let tm;
+    while ((tm = reTi.exec(src)) !== null) {
+      const tail2 = src.slice(tm.index + tm[0].indexOf(tm[1]) + tm[1].length, tm.index + tm[0].length);
+      if (YS_SKIP.some(function (s) { return tail2.indexOf(s) >= 0; })) continue;
+      if (ysSet.indexOf(tm[1]) < 0) ysSet.push(tm[1]);
+    }
+    if (ysSet.length >= 2) {
+      conflicts.push({
+        type: '取用两说',
+        claimed: ysSet.join(' / '),
+        actual: analysis && analysis.yongshen ? analysis.yongshen.type : '（未定）',
+        hint: '同一篇断语把「所测之事之体」判给了 ' + ysSet.join('、') + ' 两个六亲——一事两体，用神不唯一，后文生克旺衰皆无着落。'
+      });
+    }
+    checked.push('取用唯一性（同一事不得判给两个六亲为体/用）');
 
     return {
       accepted: conflicts.length === 0,

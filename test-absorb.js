@@ -250,6 +250,42 @@ eq('取用与卦盘相符→放行',
   C.auditCoverage('以' + ripo.yongshen.type + '为用神观之。', ripo).accepted, true);
 eq('未明说取用→不审（不误报）', C.auditCoverage('用神旺相，可图。', ripo).yongshen, null);
 
+// ---------- 7b. 两处真实断语硬伤（语料来自 2026-10-21 实测一次断卦） ----------
+// 坤为地（六冲）之水风井，二三五爻动；月建戌、日辰辰、旬空戌亥，
+// 用神父母巳在二爻（动、化亥回头克）。同一张盘、同一模型，两次断语结论相反
+// （平 / 凶），且第二版有两处硬伤：静爻论「受日月冲动」、一事两体（父母/官鬼）。
+// 这两类旧版审计全部放行 —— 因此在此锁定，往后必须能变红。
+const kDa = new Date(2026, 9, 21, 12, 1);
+const PDP = C.paipan([0, 6, 6, 0, 6, 0], kDa);
+const kDaA = C.analyze(PDP, '父母');
+function cov(t) { return C.auditCoverage(t, kDaA, PDP); }
+function hasType(r, t) { return r.conflicts.some(function (c) { return c.type === t; }); }
+
+eq('样本前提：本卦坤为地且为六冲', PDP.benName + '/' + (PDP.isLiuChong ? '六冲' : '非冲'), '坤为地/六冲');
+eq('样本前提：用神取父母巳在二爻', kDaA.yongshen.type + '@' + kDaA.yongshen.line.pos, '父母@1');
+eq('样本前提：初、四爻为静，三五爻为动',
+  [PDP.lines[0].moving, PDP.lines[3].moving, PDP.lines[2].moving, PDP.lines[4].moving],
+  [false, false, true, true]);
+
+// 静爻论冲 —— 静爻逢冲只有暗动/日破/月破，没有「受日月冲动」这一说
+eq('静爻说「受日辰月建冲动」→告警',
+  hasType(cov('四爻兄弟癸丑土、初爻兄弟乙未土受日辰月建冲动。'), '静爻论冲'), true);
+eq('静爻说「受日辰冲动」而判日破→放行（术语已对）',
+  hasType(cov('初爻兄弟乙未安静受日辰冲之，为日破。'), '静爻论冲'), false);
+eq('动爻说「受日辰冲动」→放行（动爻本可受冲）',
+  hasType(cov('三爻官鬼乙卯受日辰冲动。'), '静爻论冲'), false);
+eq('未提具体爻位→不审（不误报）',
+  hasType(cov('卦中静爻若受日辰月建冲动，则事有反复。'), '静爻论冲'), false);
+
+// 取用两说 —— 同一事之体判给两个六亲，用神不唯一，后文生克全落空
+eq('「父母为用神」+「应爻官鬼为所测项目之体」→告警',
+  hasType(cov('取二爻父母乙巳火为用神。应爻官鬼乙卯木为所测项目之体。'), '取用两说'), true);
+eq('只说一处取用→不告警',
+  hasType(cov('取二爻父母乙巳火为用神，观其旺衰。'), '取用两说'), false);
+eq('用神+忌神并存不算两说（角色词豁免）',
+  hasType(cov('取父母为用神，妻财为忌神。'), '取用两说'), false);
+
+
 // 结构遗漏属软提示：进 missing，不进 conflicts
 const withFu = an([1, 0, 0, 0, 0, 9], '官鬼');
 const hasFuTag = withFu.judgments.some(function (j) { return j.tag === '伏神'; });
