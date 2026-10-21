@@ -322,8 +322,32 @@ npm run verify:live               # 线上产物逐字节校验 + 隔离检查�
 > `https://cdn.jsdelivr.net/gh/idavailable/liuyao@main/public/core/calendar.js`；或直接读 Git 对象树 `git ls-tree -r --name-only origin/main`。
 
 ## 手动部署要点
-**先判断要不要部署**：只有触及 `public/`、`functions/`、`wrangler.toml` 的提交才进部署产物；
-只改 `tests/`、`tools/`、README 的提交推上去线上也不会变
+
+### 先判断要不要部署（不是每次提交都要）
+
+只有触及 `public/`、`functions/`、`wrangler.toml` 的提交才进部署产物；
+只改 `tests/`、`tools/`、`docs/`、`README.md` 的提交推上去**线上不会变**。
+
+```bash
+# 1) 取线上当前 deployment 对应的 commit（看表格第一行的 Source 列）
+npx wrangler pages deployment list --project-name=liuyao
+
+# 2) 看自那次部署以来产物有没有变（空输出 = 不需要部署）
+git diff --stat <Source列那个commit>..HEAD -- public functions wrangler.toml
+```
+
+> 实测示例（2026-10-21）：`Source` 列是 `437205a`，而 `HEAD` 已是 `4c9ca5c`；
+> 上面第 2 条命令输出为空 —— 说明中间那几次提交只动了 README/docs/tests，
+> **线上产物确实还是最新的**，不需要重新部署。
+
+> **deployment 记录的 commit 标签落后于 HEAD 是正常的，不代表漏部署。**
+> 纯文档/测试提交不触发部署，此时线上产物**仍然等于 HEAD 的 `public/`**。
+> 判据是**产物差异**，不是 commit 标签是否相等 —— 每次文档改动都重新部署一遍，
+> 只会让部署历史里塞满「什么都没变」的记录。
+>
+> 真要确认线上是不是最新，跑 `npm run verify:live`（逐字节比对），不要看标签。
+
+部署命令：
 
 ```bash
 npx wrangler pages deploy public --project-name=liuyao --branch=main \
