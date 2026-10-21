@@ -95,6 +95,16 @@ const rSilent = mk([
 eq('静默相反→仍计入 disagree（契约不是免责声明）', rSilent.metrics.trendAgreement.disagree, 1);
 eq('静默相反→一致率 0.5', rSilent.metrics.trendAgreement.rate, 0.5);
 
+// 多 case 并排：各 case 的冲突度必须独立。旧版用全局累加的表态数做分母，
+// 后一个 case 会被前面 case 的样本量稀释（v1/v2 A/B 并排跑时暴露：50% 算成 75%）。
+const rMulti = evaluateCorpus([
+  { id: 'a', chart: { vals: vals, at: at }, target: '父母', replies: [SAME[trend] + '\n结论：' + trend, SAME[trend] + '\n结论：' + trend].map(function (t) { return { text: t }; }) },
+  { id: 'b', chart: { vals: vals, at: at }, target: '父母', replies: [SAME[trend] + '\n结论：' + trend, OPPOSITE[trend] + '\n结论：' + (trend === '凶' ? '吉' : '凶')].map(function (t) { return { text: t }; }) }
+], core);
+eq('多 case 各 case 冲突度独立', rMulti.metrics.drift.perCase, [0, 0.5]);
+eq('多 case 冲突度取各 case 均值', Math.round(rMulti.metrics.drift.rate * 100) / 100, 0.25);
+eq('多 case 时第二个 case 的表态数不被前案污染', rMulti.perCase[1].stated, 2);
+
 console.log('D. 硬伤检测会红（用真实语料）');
 const corpus = JSON.parse(fs.readFileSync(path.join(here, 'corpus', '2026-10-21-kun-weijing.json'), 'utf8'));
 const real = evaluateCorpus(corpus.cases, core);

@@ -148,9 +148,13 @@ function evaluateCorpus(cases, core) {
     });
 
     const counts = { 吉: 0, 平: 0, 凶: 0 };
+    // statedLocal 必须独立于全局 stated：早先直接用全局累加值做分母，
+    // 第二个 case 的「最大方向占比」被前一个 case 的表态数稀释，
+    // 实测把 50% 冲突度算成 75%（v1/v2 并排跑时才暴露）。
+    let statedLocal = 0;
     evals.forEach(function (e) {
       replies++;
-      if (e.direction) { counts[e.direction]++; stated++; }
+      if (e.direction) { counts[e.direction]++; stated++; statedLocal++; }
       if (e.agreesTrend === true) agree++;
       else if (e.agreesTrend === false) {
         if (e.declaredDisagreement) declaredN++;   // 显式分歧：不算静默漂移
@@ -160,8 +164,8 @@ function evaluateCorpus(cases, core) {
       if (!e.boundary.clean) withDogma++;
     });
 
-    const maxShare = stated ? Math.max(counts.吉, counts.平, counts.凶) / stated : 0;
-    const drift = stated >= 2 ? 1 - maxShare : 0;   // 单条断语无「漂移」可言
+    const maxShare = statedLocal ? Math.max(counts.吉, counts.平, counts.凶) / statedLocal : 0;
+    const drift = statedLocal >= 2 ? 1 - maxShare : 0;   // 单条断语无「漂移」可言
     driftList.push(drift);
 
     perCase.push({
@@ -170,7 +174,7 @@ function evaluateCorpus(cases, core) {
       target: c.target,
       trend: ana.trend,
       counts: counts,
-      stated: stated,
+      stated: statedLocal,
       drift: drift,
       replies: evals
     });
