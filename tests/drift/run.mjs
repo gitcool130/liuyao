@@ -67,7 +67,30 @@ if (asJson) {
     console.log('');
   });
 
-  console.log('== 四指标 ==');
+  // 分代：门槛只判当期（current），legacy 留作对照与回归警报。
+  // 治理前的断语缺陷不该算进当期分子——那不是严格，是把历史当现值。
+  const cohorts = report.byCohort || {};
+  const hasSplit = Object.keys(cohorts).length > 1;
+  const judgedOn = cohorts.current ? 'current' : null;
+
+  if (hasSplit) {
+    console.log('== 分代（门槛只判 current） ==');
+    ['current', 'legacy'].forEach(function (k) {
+      const co = cohorts[k];
+      if (!co) return;
+      const tag = k === 'current' ? '当期' : '治理前';
+      console.log('  ' + tag + '（' + co.caseCount + ' case / ' + co.replies + ' 条）');
+      judge(co).forEach(function (r) {
+        const v = r.got === null ? '—' : fmtPct(r.got);
+        console.log('    ' + pad(r.label, 6) + ' ' + pad(v, 8) + (k === 'current'
+          ? ' 门槛 ' + pad(r.want, 8) + ' ' + (r.ok ? 'PASS' : 'FAIL')
+          : '（仅对照，不参与判定）'));
+      });
+    });
+    console.log('');
+  }
+
+  console.log('== 四指标（' + report.caseCount + ' case 全量，含 legacy） ==');
   rows.forEach(function (r) {
     if (r.got === null) {
       console.log('  ' + pad(r.label, 6) + ' ' + pad('—', 8) + ' ' + (r.note || ''));
@@ -76,13 +99,15 @@ if (asJson) {
     console.log('  ' + pad(r.label, 6) + ' ' + pad(fmtPct(r.got), 8) + ' 门槛 ' + pad(r.want, 8) + ' ' + (r.ok ? 'PASS' : 'FAIL'));
   });
 
-  const fails = rows.filter(function (r) { return r.ok === false; });
+  // 有分代时，达标与否以当期为准；全量数字保留可见，但不作为门禁依据。
+  const basis = judgedOn ? judge(cohorts[judgedOn]) : rows;
+  const fails = basis.filter(function (r) { return r.ok === false; });
   console.log('');
   if (fails.length) {
-    console.log('基线未达标：' + fails.map(function (r) { return r.label; }).join('、') + '。');
+    console.log((judgedOn ? '当期（current）未达标：' : '基线未达标：') + fails.map(function (r) { return r.label; }).join('、') + '。');
     console.log('（默认不阻断；指标改善后改用 --strict 把它变成门禁。改门槛须单独提交并说明理由。）');
   } else {
-    console.log('全部达到门槛。');
+    console.log(judgedOn ? '当期（current）全部达到门槛。' : '全部达到门槛。');
   }
   console.log('\n注：四指标均为下限指标——全绿只等于「没犯可判定的错」，不等于断得准。');
 }

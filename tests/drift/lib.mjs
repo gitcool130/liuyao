@@ -146,7 +146,7 @@ function evaluateReply(core, pan, ana, text) {
  * @param {object} core
  * @returns {object} 四指标聚合结果
  */
-function evaluateCorpus(cases, core) {
+function summarize(cases, core) {
   const perCase = [];
   let replies = 0, stated = 0, agree = 0, disagree = 0;
   let withError = 0, errorCount = 0;
@@ -227,6 +227,29 @@ function evaluateCorpus(cases, core) {
   };
 }
 
+// ---- 语料分代（cohort）：治理前后的断语不能共用一个分母 ----
+// 第四轮把「静爻论冲 / 取用两说」两条旧断语留在 corpus 里是对的（删掉就是
+// 「只统计成功的实验」），但它们属**治理前**产物：时任提示词没有【法理口径】，
+// 模型确实断错了。把它们的缺陷算进当期指标的分子，会让「要素错误率」永远
+// 卡在 17%，无论提示词改得多好——那不是严格，是把历史当成现值。
+// 正确做法：legacy 与 current 分开算，门槛只判 current，legacy 保留可见
+// （它一旦变差，说明审计层放行逻辑退化，仍要报警）。
+function cohortOf(c) {
+  return c && c.cohort ? c.cohort : 'current';
+}
+
+function evaluateCorpus(cases, core) {
+  const list = cases || [];
+  const all = summarize(list, core);
+  const byCohort = {};
+  ['legacy', 'current'].forEach(function (k) {
+    const sub = list.filter(function (c) { return cohortOf(c) === k; });
+    if (sub.length) byCohort[k] = summarize(sub, core);
+  });
+  all.byCohort = byCohort;
+  return all;
+}
+
 // ---- 门槛：先定死，后测。改门槛须单独提交并说明理由 ----
 const THRESHOLDS = {
   trendAgreement: { op: '>=', value: 0.80, label: '引擎一致率' },
@@ -250,4 +273,4 @@ function judge(report) {
   return out;
 }
 
-export { DIR, directionOf, boundaryOf, evaluateReply, evaluateCorpus, judge, THRESHOLDS };
+export { DIR, directionOf, boundaryOf, evaluateReply, evaluateCorpus, judge, THRESHOLDS, cohortOf };

@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { directionOf, boundaryOf, evaluateCorpus, judge } from './lib.mjs';
+import { directionOf, boundaryOf, evaluateCorpus, judge, cohortOf } from './lib.mjs';
 
 const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -111,6 +111,21 @@ const rMulti = evaluateCorpus([
 eq('多 case 各 case 冲突度独立', rMulti.metrics.drift.perCase, [0, 0.5]);
 eq('多 case 冲突度取各 case 均值', Math.round(rMulti.metrics.drift.rate * 100) / 100, 0.25);
 eq('多 case 时第二个 case 的表态数不被前案污染', rMulti.perCase[1].stated, 2);
+
+console.log('F. 语料分代（cohort）');
+// 治理前的断语不能与当期共用分母：否则「要素错误率」永远卡在历史污点上，
+// 提示词改得再好也不达标。门槛只判 current，legacy 留作对照。
+const badText = OPPOSITE[trend] + '\n结论：' + (trend === '凶' ? '吉' : '凶') + '　静爻受日辰月冲而动。';
+const rCohort = evaluateCorpus([
+  { id: 'old', cohort: 'legacy', chart: { vals: vals, at: at }, target: '父母', replies: [{ text: badText }] },
+  { id: 'new', cohort: 'current', chart: { vals: vals, at: at }, target: '父母', replies: [{ text: SAME[trend] + '\n结论：' + trend }] }
+], core);
+eq('分代后两代分别聚合', Object.keys(rCohort.byCohort).sort(), ['current', 'legacy']);
+eq('当期不受 legacy 污染物影响', rCohort.byCohort.current.metrics.elementError.rate, 0);
+eq('当期一致率 1', rCohort.byCohort.current.metrics.trendAgreement.rate, 1);
+eq('legacy 仍如实统计（不隐藏）', rCohort.byCohort.legacy.replies, 1);
+eq('全量口径仍包含 legacy', rCohort.replies, 2);
+eq('未标 cohort 的 case 默认归当期', cohortOf({ id: 'x' }), 'current');
 
 console.log('D. 硬伤检测会红（用真实语料）');
 const corpus = JSON.parse(fs.readFileSync(path.join(here, 'corpus', '2026-10-21-kun-weijing.json'), 'utf8'));
