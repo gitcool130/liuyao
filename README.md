@@ -554,7 +554,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 - 文件清单新增 `bgm.js`（琴音引擎）。
 
 > ⚠️ 注意：wrangler CLI 部署时 `wrangler.toml [vars]` 会覆盖后台同名**文本**变量（secret 不受影响）。后台改完变量后用 wrangler 重新部署一次生效。
-> ⚠️ 本项目已**禁用 GitHub 集成的自动生产部署**——git 构建会复用旧 Functions 编译缓存并抢占生产位置，导致"部署了又变回旧版"。统一用下方 wrangler 命令部署；GitHub 仓库仅作代码备份（经 Contents API 同步）。
+> ⚠️ 本项目已**启用 GitHub 集成的自动生产部署**——git 构建会复用旧 Functions 编译缓存并抢占生产位置，导致"部署了又变回旧版"。统一用下方 wrangler 命令部署；GitHub 仓库仅作代码备份（经 Contents API 同步），如不一致，请看缓存是否开启，以及手动部署了。
 
 ## 本地开发
 
