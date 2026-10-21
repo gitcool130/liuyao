@@ -264,6 +264,9 @@ export async function onRequestPost(context) {
     return json({ error: 'PAN_TOO_LONG', message: '排盘文本超长（上限 ' + LIMITS.panText + ' 字符）' }, 413);
   }
   const panText = panTextRaw;
+  // skipCache：仅影响上游网关缓存，不影响任何生成参数。
+  // 供「评测要独立样本」「截断后重试」两类场景使用；普通断卦不传，继续吃缓存。
+  const skipCache = body.skipCache === true || body.skip_cache === true;
   const history = Array.isArray(body.messages) ? body.messages.slice(-LIMITS.historyTurns) : [];
 
   const model = (body.model || '').toString();
@@ -309,6 +312,12 @@ export async function onRequestPost(context) {
     h['cf-aig-max-attempts'] = provider === 'deepseek' ? '1' : '2';
     h['cf-aig-retry-delay'] = '1000';
     h['cf-aig-backoff'] = 'constant';
+    // 逐请求跳过网关缓存。注意：网关的 cache_ttl=0 **不等于**不缓存——实测 liuyao-gw
+    // 在 cache_ttl=0 下 40 条日志仍有 27 条 cached:true（HIT 时 tokens 0、耗时 <300ms）。
+    // 缓存键是「provider+endpoint+model+鉴权头+整个请求体」的 SHA-256，故同一盘同一问
+    // 重发必命中。产品上这未必是坏事（同一卦得同一断法），但它会把**截断/失败响应
+    // 一起固化**，且让「同盘 N 次」拿不到独立样本。评测与重试用 skipCache 绕过。
+    if (skipCache) h['cf-aig-skip-cache'] = 'true';
     return h;
   }
 
@@ -530,6 +539,15 @@ export async function onRequestPost(context) {
         // .catch 静默吞掉，15s 心跳从未真正写出，思考期的 524 防护形同虚设。
         const w = writer;
         let buf = '', outLen = 0, cut = null, reasBuf = '';
+        // finishReason：上游「为什么停」。旧版完全不读——于是 MAX_TOKENS / SAFETY
+        // 截断的半个断语被当作正常完整响应交给用户，且（网关缓存开着时）该残缺响应
+        // 会被一并缓存，之后同一盘永远拿回同一段残句。实测 gemini-3.6-flash 稳定
+        // 停在 405 tokens，前端只收到 470 字符、连「结论：」行都没有。
+        let finish = null;
+        // 文末快照：用于判定「结构化结论」是否齐全。finishReason 只能反映上游怎么收尾，
+        // 反映不了「上游正常 STOP、但内容明显没写完」——gemini-3.6-flash 实测 137 tokens
+        // / 3 秒 / success:true / finishReason=STOP，正文却断在句中且无「结论：」行。
+        let tail = '';
         // 向客户端写终止/错误事件（客户端 readStreamSSE 据此 throw 触发重试）
         const writeErr = async function (code, msg) {
           try {
@@ -560,6 +578,7 @@ export async function onRequestPost(context) {
                 const j = JSON.parse(data);
                 const c = j.choices && j.choices[0];
                 const d = c && c.delta;
+                if (c && c.finish_reason) finish = c.finish_reason;
                 if (d) {
                   // 只透传最终答案（content）。reasoning_content 是模型的思考
                   // 草稿：内含未经纠正的临时判断（实测：草稿写「世在四爻妻财」，
@@ -582,6 +601,7 @@ export async function onRequestPost(context) {
                   // { candidates:[{ content:{ parts:[{ text:"…" }] } }] }
                   // thinkingBudget 已关闭，parts 里只有正文；仍按 text 逐段拼接以防多段。
                   const cand = j.candidates[0];
+                  if (cand && cand.finishReason) finish = cand.finishReason;
                   const parts = cand && cand.content && cand.content.parts;
                   if (parts) chunk = parts.map(function (p) { return (p && p.text) || ''; }).join('');
                 }
@@ -595,6 +615,8 @@ export async function onRequestPost(context) {
                   break;
                 }
                 await w.write(enc.encode('data: ' + JSON.stringify({ t: chunk }) + '\n\n'));
+                // 只留尾部 600 字符用于「结构化完整性」判定：结论四行必在文末
+                tail = (tail + chunk).slice(-600);
               }
             }
             if (cut) break;
@@ -606,6 +628,30 @@ export async function onRequestPost(context) {
           if (!cut && outLen === 0 && reasBuf) {
             try {
               await w.write(enc.encode('data: ' + JSON.stringify({ t: reasBuf }) + '\n\n'));
+            } catch (e) { /* 客户端已断开则忽略 */ }
+          }
+          // 非正常收尾必须显式告知客户端：writeErr 会让前端按「可重试」处理，
+          // 而 MODEL_TRUNCATED 不是网络问题——重试只会再撞一次同一个上限，
+          // 所以单列 warn 事件，由前端提示「本卦未完篇」而不是静默当完整断语。
+          if (!cut && finish && finish !== 'STOP' && finish !== 'stop' && finish !== 'end_turn') {
+            try {
+              await w.write(enc.encode('data: ' + JSON.stringify({
+                warn: 'MODEL_' + finish,
+                message: '上游以 ' + finish + ' 收尾，断语未完篇（已收到 ' + outLen + ' 字符）'
+              }) + '\n\n'));
+            } catch (e) { /* 客户端已断开则忽略 */ }
+          }
+          // 结构化完整性：《结论对齐》契约要求文末四行（结论/应期/验证标志/用神）。
+          // 结论行缺失即视为「没断完」，无论上游自称停得多么正常。
+          // 这一条与 finishReason 互补：前者管「上游怎么停的」，它管「产物是否成形」。
+          // 只管首次断卦（history 为空）：追问是对话式的，一句「那应期呢」的回答
+          // 本就不带四行结构，在这里告警只会变成噪声。
+          if (!cut && history.length === 0 && outLen > 30 && !/结[论局]\s*[：:]/.test(tail)) {
+            try {
+              await w.write(enc.encode('data: ' + JSON.stringify({
+                warn: 'INCOMPLETE_STRUCTURE',
+                message: '断语缺少「结论：」行，疑未写完（已收到 ' + outLen + ' 字符）'
+              }) + '\n\n'));
             } catch (e) { /* 客户端已断开则忽略 */ }
           }
         } catch (e) {

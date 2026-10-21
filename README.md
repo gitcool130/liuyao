@@ -477,6 +477,31 @@ git status -sb                    # 若显示 ahead，先推送再审计
 
 > **下一步（按优先级）**：① 先解决上游缓存——否则任何「稳定性」指标都是伪值，这比继续调断语重要得多；② 查 gemini 470 字符截断；③ 扩样本改为「每次改变输入」（如微调 panText 的无关空白）或直连供应商，才能拿到独立样本。
 
+### 第三十轮台账（2026-10-21：网关缓存坐实 + gemini 截断根因 + 完整性守卫）
+
+**输入**：上一轮把「同请求重发得到逐字节相同响应」记为疑似上游缓存，本轮直接查网关 API 落实。
+
+| # | 结论 | 证据 |
+|---|---|---|
+| ① | **缓存确实开着，且 `cache_ttl: 0` 不等于不缓存** | `GET .../ai-gateway/gateways` 显示 `liuyao-gw` 的 `cache_ttl: 0`；但该网关 40 条日志中 **27 条 `cached: true`**，HIT 时 `tokens_in/out` 均为 0、耗时 73–319 ms、cost 0 |
+| ② | 缓存键是 **provider + endpoint + model + 鉴权头 + 完整请求体** 的 SHA-256（官方文档明载） | 故同一盘同一问必命中；尾部加一个换行即换 key、返回全新响应（上一轮判别实验与此吻合） |
+| ③ | 缓存对产品**未必有害**：同一卦得同一断法，符合六爻语义，且省费 | 但会**把截断/失败响应一起固化**；且让「同盘 N 次」拿不到独立样本 |
+| ④ | gemini 截断**不是缓存、也不是传输问题** | 网关日志：`google/gemini-3.6-flash` `in/out 2846/137`、`duration 3046ms`、`success: true` —— 模型只生成 137 tokens 就正常收尾。前后两次分别 405 / 137 tokens，长度不稳，**是模型侧提前停** |
+| ⑤ | 旧版完全不读 `finishReason`，半个断语被当完整答案交付 | `grep finishReason` 在 `interpret.js` 里零命中 |
+
+**改动**：
+
+| # | 修法 | 落点 |
+|---|---|---|
+| ① | 请求体新增 `skipCache`（及别名 `skip_cache`）→ 透传 `cf-aig-skip-cache: true`。**默认不传**，普通断卦继续吃缓存；仅供评测取独立样本、截断后重试 | `functions/api/interpret.js` |
+| ② | 读取 `finish_reason` / `finishReason`（两条流式分支都读），异常收尾发 `warn: MODEL_<finish>` | 同上 |
+| ③ | 新增**结构化完整性守卫**：首轮断卦（history 为空）正文 >30 字符却无「结论：」行 → `warn: INCOMPLETE_STRUCTURE`。这条与 finishReason 互补——前者管「上游怎么停的」，它管「产物是否成形」。**只限首轮**，追问是对话式的、本就不带四行结构 | 同上 |
+| ④ | 前端收集全部 warn，文末显示「本卦断语未完篇（…）。建议重试或换模型。」 | `public/app.js` |
+
+**验证**：`test-functions.mjs` 151 → **160**（新增 8 项：skipCache 三态、finishReason 三态、缺结论行告警、齐全不告警），`absorb 194` / `core 93` / `drift selftest 41` 全绿。
+
+> **下一步**：gemini 参数适配。`thinkingConfig: { thinkingBudget: 0 }` 对 gemini 3.x 很可能不适配（强行关闭思考会损伤长输出），需做「传 0 / 不传 / 给足 maxOutputTokens」三组对照，看哪种能稳定产出完整四行结论。在此之前，**gemini 芯片对长断语不可靠，应以 deepseek 为默认**。
+
 ### 已知口径分歧（**非** Bug，勿再重报）
 
 以下各项均**非**缺陷，口径均已定，后续审计请勿重报。前两项属**流派门户之别**，本实现已选定其一；涉三合／刑害／世爻覆盖者曾为待定项，已于第六轮依经典定论。改动其一，须同步改 `aggregateTrend` 的 supports/harms 名单或判定门并补断言。列表中的删除线项为**已修项**，保留记录备查（旧版行为与修法一并留档，便于回溯）：

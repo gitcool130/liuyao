@@ -690,5 +690,84 @@ const raced = await Promise.race([
 eq('客户端断开 → 流立即收尾（旧版会挂到 300s）', raced !== '__HANG__', true);
 globalThis.fetch = origFetch;
 
+// ---------- #24 网关缓存跳过 与 finishReason 截断告知（2026-10-21） ----------
+// 实测 liuyao-gw 在网关 cache_ttl=0 下仍有 27/40 条 cached:true：缓存键是
+// provider+endpoint+model+鉴权头+整个请求体的 SHA-256，故同一盘同一问重发必命中。
+// 后果有二：① 评测拿不到独立样本；② 截断/失败响应会被一并固化。
+// skipCache 只影响上游缓存头，不改任何生成参数。
+let gwOpts = null;
+globalThis.fetch = function (url, opts) {
+  gwOpts = opts;
+  const body = new ReadableStream({ start: function (c) { c.enqueue(encG.encode(sseLine('甲'))); c.close(); } });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const envGw = {
+  DEEPSEEK_API_KEY: 'k',
+  DEEPSEEK_BASE_URL: 'https://gateway.ai.cloudflare.com/v1/acc/gw/deepseek'
+};
+const postDS = function (extra) {
+  return interpretPost({
+    request: new Request('https://x/api/interpret', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(Object.assign({ panText: '占测试', model: 'deepseek-flash' }, extra || {}))
+    }),
+    env: envGw
+  });
+};
+await (await postDS({})).text();
+eq('走网关默认不带 skip-cache（继续吃缓存）', gwOpts.headers['cf-aig-skip-cache'], undefined);
+eq('走网关仍带超时头（未破坏既有网关头）', String(gwOpts.headers['cf-aig-request-timeout']).length > 0, true);
+await (await postDS({ skipCache: true })).text();
+eq('skipCache:true → 透传 cf-aig-skip-cache', gwOpts.headers['cf-aig-skip-cache'], 'true');
+await (await postDS({ skip_cache: true })).text();
+eq('skip_cache 别名同样生效', gwOpts.headers['cf-aig-skip-cache'], 'true');
+
+// finishReason：上游以 MAX_TOKENS 收尾时必须显式告警，不得当完整断语交付。
+// 实测 gemini-3.6-flash 稳定停在 405 tokens、正文断在句中且无「结论：」行，
+// 旧版完全不读 finishReason，半个断语被当成完整答案（且会被网关缓存固化）。
+globalThis.fetch = function () {
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(encG.encode('data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ text: '半个断语' }] }, finishReason: 'MAX_TOKENS' }] }) + '\n\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const evTrunc = await readSSEEvents(await postGem('gemini-3.6-flash'));
+eq('finishReason=MAX_TOKENS → 正文仍照常下发', sseText(evTrunc), '半个断语');
+eq('finishReason=MAX_TOKENS → 发出 warn 事件', evTrunc.some(function (e) { return e.warn === 'MODEL_MAX_TOKENS'; }), true);
+eq('截断不写成 error（不应触发重试）', evTrunc.some(function (e) { return e.error; }), false);
+
+globalThis.fetch = function () {
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(encG.encode('data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ text: '一、卦象要点：用神父母巳火二爻发动。\n二、断吉凶：旺衰相半。\n三、应期：甲戌日。\n四、白话总结：可为辅助。\n结论：平' }] }, finishReason: 'STOP' }] }) + '\n\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const evStop = await readSSEEvents(await postGem('gemini-3.6-flash'));
+eq('finishReason=STOP 且结论行齐全 → 不告警（反向对照）', evStop.some(function (e) { return e.warn; }), false);
+
+// STOP 但缺「结论：」行 —— 上游自称停得正常，产物却没成形。
+// 实测 gemini-3.6-flash：137 tokens / 3 秒 / success:true / finishReason=STOP，
+// 正文断在句中。finishReason 守卫覆盖不到这类，必须靠结构化完整性判定。
+globalThis.fetch = function () {
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(encG.encode('data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ text: '一、卦象要点：用神父母巳火二爻发动，世爻子孙酉金得月建生扶。\n二、断吉凶：旺衰相半，未可遽断。\n三、应期：' }] }, finishReason: 'STOP' }] }) + '\n\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const evNoStruct = await readSSEEvents(await postGem('gemini-3.6-flash'));
+eq('STOP 但缺结论行 → INCOMPLETE_STRUCTURE 告警',
+  evNoStruct.some(function (e) { return e.warn === 'INCOMPLETE_STRUCTURE'; }), true);
+globalThis.fetch = origFetch;
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

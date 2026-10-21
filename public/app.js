@@ -1140,6 +1140,7 @@
     const dec = new TextDecoder();
     let buf = '', full = '', emitted = '';
     let lastEmit = 0, flushTimer = null;
+    let streamWarn = null;   // 上游 finishReason 异常时置位，供上层提示「未完篇」
     try {
       while (true) {
         const r = await reader.read();
@@ -1161,6 +1162,14 @@
               throw { kind: 'stream', message: j.message || j.error, code: j.error };
             }
             if (j && j.t) full += j.t;
+            // 上游非正常收尾（MAX_TOKENS / SAFETY 等）：不是网络问题，重试只会
+            // 再撞同一上限，所以不 throw（不触发重试），而是记下来交给上层提示。
+            // 旧版服务端不读 finishReason，这类半篇断语被当成完整答案交付。
+            if (j && j.warn) {
+              // 可能同时有多条（如 MODEL_MAX_TOKENS + INCOMPLETE_STRUCTURE），全部保留
+              const msg = j.message || j.warn;
+              streamWarn = streamWarn ? streamWarn + '；' + msg : msg;
+            }
           } catch (e) {
             if (e && e.kind === 'stream') throw e;
             /* 其余无法解析的分片忽略 */
@@ -1189,6 +1198,13 @@
     }
     // 收尾补发：被合并窗口压在手里的最后一小段必须落地，否则正文末尾会缺字。
     if (onStream && full && full !== emitted) { emitted = full; onStream(full); }
+    // 未完篇必须让用户看见：旧版这条信息在服务端就被丢弃了，用户拿到半篇
+    // 断语却以为已断完（实测 gemini-3.6-flash 稳定停在 405 tokens、
+    // 正文断在句中且没有「结论：」行）。
+    if (streamWarn && full) {
+      full += '\n\n> ⚠ 本卦断语未完篇（' + streamWarn + '）。建议重试或换模型。';
+      if (onStream) onStream(full);
+    }
     return full;
   }
 
