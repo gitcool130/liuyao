@@ -56,7 +56,9 @@ jobs:
           // Functions 为 ESM（含 import 声明），动态 import 既验语法也验依赖解析
           // 注：Pages Functions 的 .js 一律按 ESM 处理，与 package.json 的 type 无关，
           //     故此处仅本地探测会有 typeless 警告，运行时无影响，显式抑制
-          Promise.all(['_lib','interpret','models','records'].map(m => import('./functions/api/'+m+'.js')))
+          // _share 与 index.js 为 OG 预览新增（proposal-og-preview.md §五）：前者跨目录
+          // import public/core 五文件（打包边界实验已验证），后者是 "/" 路由
+          Promise.all(['_lib','interpret','models','records','_share'].map(m => import('./functions/api/'+m+'.js')).concat([import('./functions/index.js')]))
             .then(() => console.log('Functions ESM 语法与依赖解析 ✓'))
             .catch(e => { console.error('Functions 模块加载失败:', e.message); process.exit(1); });
           "

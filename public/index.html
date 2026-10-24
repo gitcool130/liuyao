@@ -4,10 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <!-- 分享链接的卡片预览：站点级默认值。
-     按盘定制的 og:title（如「风火家人 之 泽火革」）需要在服务端按 ?s= 解码后注入
-     （抓取器不执行 JS，客户端改 meta 对预览无效）。本轮未做——那需要在 Functions 侧
-     再实现一份 share 码解码器，与 public/core/share.js 构成两份同格式实现，
-     一旦格式演进就会静默漂移；故先只保留站点级默认值，按盘预览列入后续事项。 -->
+     按盘定制的 og:title（如「风火家人 之 天雷无妄 · 丙午年 …」）已在服务端按 ?s= 解码注入
+     （抓取器不执行 JS，客户端改 meta 对预览无效）——见 functions/index.js 与
+     docs/proposal-og-preview.md：解码复用 public/core/share.js 单一实现（经
+     functions/api/_share.js 门面，无第二份解码器）；畸形码回落本默认 meta；
+     og 文案只含盘面公共事实，不含断语。此处默认值仍是直接访问 / 畸形码的回落。 -->
 <meta name="description" content="京房纳甲六爻排盘：确定性排盘引擎 + 规则链断语 + 多模型 AI 断卦，应期给区间与置信度，附古籍卦例回归。">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="莲斋 · 六爻">
@@ -269,6 +270,9 @@
     border: 1px solid var(--line); border-radius: 6px; background: #fff;
   }
   .oc-box input { flex: 1; min-width: 160px; }
+  /* 判据对照（M17-A）：断卦时快照 vs 事后事实，只读并排；两侧同为中性色，不做对错判定 */
+  .cmp-box { margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 8px; background: #fbf8f1; }
+  .cmp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; margin-top: 6px; }
   #libStats { font-size: 13px; line-height: 1.8; }
   .pan-text {
     white-space: pre-wrap; font-family: "Courier New", monospace; font-size: 13px;
@@ -280,6 +284,8 @@
     .cast-grid { flex-direction: column; }
     table.pan { font-size: 13px; }
     .yao-sym { font-size: 13px; }
+    /* 判据对照退化单列：左右两栏改上下两块，「当时/事后」语义由行名文字承载，断行不丢语义 */
+    .cmp-grid { grid-template-columns: 1fr; }
     /* 移动端分栏纵向堆叠，360px 过高，压低滚动区 */
     .ai-col-body { min-height: 280px; max-height: 280px; }
   }

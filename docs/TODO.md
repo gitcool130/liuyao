@@ -171,33 +171,37 @@ a0eaf12  残篇自动补一次 + 括号并列不算断言
 > 本轮已落地三件并全绿（`npm test` 751、`test:fn` 180、`guji` 12144、`test:ui` 62）。
 > 评估全文见 [`docs/optimization-2026-10-24.md`](optimization-2026-10-24.md)。以下是**没做**的部分。
 
+> **2026-10-24 下午状态更新**（ZCode 分阶段实施 + 独立验收，本地 git 逐阶段提交）：
+
 ## P1 · 下一步最该做的两件
 
-### 1. 判据快照结构化（`baseline` 列）
+### 1. 判据快照结构化（`baseline` 列）—— ✅ **已完成（本地），待部署**
 
-现状：应期窗口已随 `pan_text` 落库（D1 里存着预测值），但结构不可查询——
-要算「预测区间 vs 实际应验」，得从盘面文本里回捞。
+- 五阶段全部落地并总验收通过：schema 迁移段、前端 `baselineSnapshot()` + `recordPayload` 追加、
+  服务端 INSERT/ON CONFLICT（outcome 隔离保留）、回填表单「判据对照」UI、5 条新断言。
+- 四项测试亲测全绿：**`npm test` 751 / `test:fn` 185（180+5 新增）/ `guji` 12144 / `test:ui` 62**。
+- 方案与实施细节：[`docs/proposal-baseline-column.md`](proposal-baseline-column.md)。
+- **待部署三步**（顺序不可反）：① remote D1 加列
+  `npx wrangler d1 execute liuyao-db --remote --command="ALTER TABLE casts ADD COLUMN baseline TEXT;"`
+  （先 `PRAGMA table_info(casts)` 查列，已含即跳过）→ ② push（本地 main 与 GitHub 无共同历史，需先对齐）
+  → ③ 部署。
 
-```
-ALTER TABLE casts ADD COLUMN baseline TEXT;   -- JSON: {yongshen, trend, window, confidence, spread}
-```
+### 2. 按盘 OG 预览（分享链接的最后一公里）—— ✅ **已完成（本地），与 baseline 同批待部署**
 
-写入点在 `recordPayload()`，与 `panText` 同批；回填表单应把「当时判据」与「事后事实」并排显示
-（这才是「决策留痕」的形状，而不是让用户给一个准/不准的分数）。
-
-### 2. 按盘 OG 预览（分享链接的最后一公里）
-
-现状：分享链接能还原盘面，但链接预览只有站点级默认标题。
-
-**别在 `functions/` 里再写一份解码器**——两份同格式实现会静默漂移。
-正解是把 share 码解析抽成单一实现（`functions/api/_share.js`），浏览器端打包时复用；
-或把预览渲染挪到 Worker。要先确认打包边界会不会把 `public/core/share.js` 带进 Functions。
+- 六项落地清单全部完成：`functions/api/_share.js` 零逻辑门面（直接绑定 `LY.decodeCast` 原引用，
+  同一函数引用断言钉死单一实现）、`functions/index.js` OG 注入路由、ci.yml ESM 探测扩充、
+  `test-functions.mjs` OG 测试组（`test:fn` 180 → **233**）、文档与注释更新。
+- 四项测试亲测全绿：**751 / 233 / 12144 / 62**；端到端实测：合法分享码返回按盘
+  og:title/og:description（卦名+四柱+用神+所测，无断语），畸形码原样回落站点默认 meta（HTTP 200）。
+- 方案：[`docs/proposal-og-preview.md`](proposal-og-preview.md)。
 
 ## P2 · 攒数据之前不必动
 
 - **分桶样本**：目前每个桶的样本都还不足以谈率值。先攒 3 日桶（机制最干净：日辰冲动/值日/出空）。
 - **两派并置**（取用神之争）：会动 `analyze` 主线口径，须先为每派各写一套 golden 期望跑通。
-- **规则库外化**：`coverage.mjs` 已有 82.1% 的机器可读结果，缺的只是一页 `public/rules.html`。
+  （方案 prompt 已备好，待第三波实施）
+- **规则库外化**：📚 **文档版已完成**——[`docs/rules-public.md`](rules-public.md)（对外可引用说明，
+  全部数字实跑核对）。`public/rules.html` 站内页面仍未做，属独立小任务。
 
 ## 已知边界（不是 bug，勿按缺陷重报）
 

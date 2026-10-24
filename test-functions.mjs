@@ -12,12 +12,18 @@
  *   #21 SSE 透传剥离 reasoning_content：思考草稿不得下传，防 fact-audit 假阳性（2026-10-13）
  *   #22 SSE 心跳必须真实写出（writer 释放后不可再写）+ Google 原生 alt=sse 解析（2026-10-17）
  *   #23 排盘文本超限显式 413 + 客户端断开即掐断上游（2026-10-17）
+ *   #24 按盘 OG 预览（M17-B 阶段一）：functions/index.js 按 ?s= 注入 og meta——
+ *       四锚点全或无改写、畸形码回落默认 meta（不 500）、旧格式（三段最小）码照常改写、
+ *       question 属性转义、_share 门面与 core.js 的 decodeCast 同一引用（防漂移）、
+ *       import 白名单封闭（断语层模块物理不可达）
  * 运行：npm run test:fn
  * ============================================================ */
 import { jsonWithin, safeEqual, onRequestGet, onRequestDelete, onRequestPost, sanitizeOutcome } from './functions/api/records.js';
 import { customProviders, gptModelList, isSafeModelId } from './functions/api/_lib.js';
 import { onRequestGet as modelsGet } from './functions/api/models.js';
 import { onRequestPost as interpretPost, isRateLimited, __rlState, SYSTEM_PROMPT, deltaText, deltaReasoning } from './functions/api/interpret.js';
+import { onRequestGet as ogGet } from './functions/index.js';
+import { decodeCast as facadeDecode } from './functions/api/_share.js';
 import { readFileSync } from 'node:fs';
 
 let pass = 0, fail = 0;
@@ -310,6 +316,26 @@ eq('卦例列表 SQL 含 outcome 列', /SELECT id, created_at, datetime, questio
 const dbMain = mkDb();
 await postRaw('', { panText: '排盘', tosses: [], messages: [] }, { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbMain, LIB_CODE: 'k' });
 eq('主 POST 的 INSERT 不含 outcome 列', dbMain.state.sqls[0].indexOf('outcome') < 0, true);
+
+// ---------- 判据快照（M17-A 阶段二）：baseline 随主 POST 落库，与 outcome 隔离 ----------
+// proposal-baseline-column.md §六 的五项增补（既有 180 项断言一字不动）：
+const dbBl = mkDb();
+await postRaw('', { panText: '排盘', tosses: [], messages: [],
+  baseline: { yongshen: '妻财 己卯', trend: '吉', window: null, confidence: null, spread: null } },
+  { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbBl, LIB_CODE: 'k' });
+const sqlBl = dbBl.state.sqls[0];
+eq('主 INSERT 含 baseline 列且不含 outcome', sqlBl.indexOf('baseline') >= 0 && sqlBl.indexOf('outcome') < 0, true);
+eq('ON CONFLICT 清单含 baseline 不含 outcome', sqlBl.indexOf('baseline = excluded.baseline') >= 0 && sqlBl.indexOf('excluded.outcome') < 0, true);
+eq('合法 baseline 经 jsonWithin 落库可 parse', (function () {
+  const b = dbBl.state.bound[0];
+  return parses(b[9]) && JSON.parse(b[9]).yongshen === '妻财 己卯';
+})(), true);
+const dbBadBl = mkDb();
+await postRaw('', { panText: '排盘', tosses: [], messages: [], baseline: '垃圾' }, { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbBadBl, LIB_CODE: 'k' });
+const dbArrBl = mkDb();
+await postRaw('', { panText: '排盘', tosses: [], messages: [], baseline: ['x'] }, { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbArrBl, LIB_CODE: 'k' });
+eq('非对象 baseline（字符串/数组）落库为 null', dbBadBl.state.bound[0][9] === null && dbArrBl.state.bound[0][9] === null, true);
+eq('列表 SELECT 仍不含 baseline', dbList.state.sqls[0].indexOf('baseline') < 0, true);
 
 // ---------- #17 上游超时与流式缓冲双守卫（第二十一轮 B4/B5） ----------
 // 上游是「用户自配的 OpenAI 兼容中转」，属信任边界外的输入：可能挂起不返回、也可能
@@ -870,6 +896,144 @@ const rVarEcho = await postVar('B', { LLM_DEBUG_VARIANTS: '1' });
 const evVarEcho = await readSSEEvents(rVarEcho);
 eq('变体回显事件（证明配置真生效）', evVarEcho.some(function (e) { return e.variant === 'B'; }), true);
 globalThis.fetch = origFetch;
+
+// ---------- #24 按盘 OG 预览（functions/index.js + functions/api/_share.js）----------
+// 资产桩返回真实 public/index.html：锚点正则契约直接对着部署产物钉，index.html 结构
+// 一变（锚点缺失）本组即转红，而不是对着一份测试专用假 head 自证。
+const LYcore = (await import('./core.js')).default;
+const ogHtml = readFileSync('public/index.html', 'utf8');
+const OG_ETAG = 'W/"og-stub"';
+function ogCtx(path, assetHtml) {
+  return {
+    request: new Request('https://x.test' + path),
+    env: { ASSETS: { fetch: function () {
+      return Promise.resolve(new Response(assetHtml || ogHtml, { status: 200, headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'etag': OG_ETAG,
+        'last-modified': 'Sat, 24 Oct 2026 00:00:00 GMT'
+      } }));
+    } } },
+    next: function () { return Promise.resolve(new Response('__NEXT__')); }
+  };
+}
+function ogMeta(html, prop) {
+  const m = html.match(new RegExp('<meta property="' + prop + '" content="([^"]*)">'));
+  return m ? m[1] : null;
+}
+function ogTitle(html) {
+  const m = html.match(/<title>([^<]*)<\/title>/);
+  return m ? m[1] : null;
+}
+
+// 测试向量（占时均为北京墙上 2026-10-24 8:30，期望值经 core.js 实算钉死）：
+//   [1,0,9,6,1,1] 动爻 → 风火家人 之 天雷无妄；[1,0,1,1,0,1] 静卦 → 离为火（静卦）
+const OG_DT = new Date(2026, 9, 24, 8, 30);
+OG_DT.__wall = { y: 2026, m: 10, d: 24, h: 8, min: 30 };
+const ogCode = LYcore.encodeCast({ time: OG_DT, vals: [1, 0, 9, 6, 1, 1], use: '妻财', question: '这个项目能不能成' });
+const OG_TITLE1 = '风火家人 之 天雷无妄 · 丙午年 戊戌月 辛未日 壬辰时';
+const OG_DESC1 = '所测：这个项目能不能成；用神：妻财；起卦于 2026-10-24 8:30（北京时间）';
+
+// 合法码：四锚点（og:title / og:description / <title> 三处改写 + og:site_name 结构守卫）
+const r1 = await ogGet(ogCtx('/?s=' + encodeURIComponent(ogCode)));
+const h1 = await r1.text();
+eq('合法码 → 200（不 500）', r1.status, 200);
+eq('合法码 → og:title 按盘改写', ogMeta(h1, 'og:title'), OG_TITLE1);
+eq('合法码 → <title> 同步改写', ogTitle(h1), OG_TITLE1);
+eq('合法码 → og:description 按盘改写', ogMeta(h1, 'og:description'), OG_DESC1);
+eq('合法码 → og:site_name 守卫锚保持默认', ogMeta(h1, 'og:site_name'), '莲斋 · 六爻');
+eq('合法码 → og:type 不动', ogMeta(h1, 'og:type'), 'website');
+eq('/twitter:card 保持 summary（无图文本卡）', /<meta name="twitter:card" content="summary">/.test(h1), true);
+eq('合法码 → description ≤ 200 字符兜底', ogMeta(h1, 'og:description').length <= 200, true);
+// 改写响应头：删 etag/last-modified（体已变，原 ETag 必失配），短缓存 + Content-Type 保留
+eq('改写后 etag 已删', r1.headers.get('etag'), null);
+eq('改写后 last-modified 已删', r1.headers.get('last-modified'), null);
+eq('改写后 cache-control 为 300s', r1.headers.get('cache-control'), 'public, max-age=300');
+eq('改写后 Content-Type 保留', (r1.headers.get('content-type') || '').indexOf('text/html') >= 0, true);
+
+// 静卦标题口径：与 app.js 同构（benName + '（静卦）'），四柱尾巴照带
+const ogStaticCode = LYcore.encodeCast({ time: OG_DT, vals: [1, 0, 1, 1, 0, 1], use: '', question: '' });
+const rSt = await ogGet(ogCtx('/?s=' + ogStaticCode));
+const hSt = await rSt.text();
+eq('静卦 → og:title 为「本卦（静卦）· 四柱」', ogMeta(hSt, 'og:title'),
+  '离为火（静卦） · 丙午年 戊戌月 辛未日 壬辰时');
+
+// 旧格式码（三段最小形态 1.<占时>.<六爻>，无用神/所测字段）：decoder 按可选组放行，OG 照常改写
+const ogOldCode = ogStaticCode.replace(/\.-$/, '');
+eq('旧格式码构造自证（确为三段）', ogOldCode.split('.').length, 3);
+eq('旧格式码 decode 放行', LYcore.decodeCast(ogOldCode).ok, true);
+const rOld = await ogGet(ogCtx('/?s=' + ogOldCode));
+const hOld = await rOld.text();
+eq('旧格式码 → og:title 照常改写', ogMeta(hOld, 'og:title'),
+  '离为火（静卦） · 丙午年 戊戌月 辛未日 壬辰时');
+eq('旧格式码 → 无所测显示（未注明）', ogMeta(hOld, 'og:description'),
+  '所测：（未注明）；用神：未取；起卦于 2026-10-24 8:30（北京时间）');
+
+// 畸形码：原样回落站点默认 meta（200，流式透传，原 etag 保留，不加改写缓存头）
+const rBad = await ogGet(ogCtx('/?s=' + encodeURIComponent('999.zzzz.!!!!')));
+const hBad = await rBad.text();
+eq('畸形码 → 200（不 500 / 不 404）', rBad.status, 200);
+eq('畸形码 → og:title 为站点默认', ogMeta(hBad, 'og:title'), '六爻排盘 · 莲斋');
+eq('畸形码 → <title> 为站点默认', ogTitle(hBad), '六爻排盘 · 莲斋');
+eq('畸形码 → 资产原样透传（etag 保留）', rBad.headers.get('etag'), OG_ETAG);
+eq('畸形码 → 不加改写缓存头', rBad.headers.get('cache-control'), null);
+
+// 空参 / 无参：直达资产层（context.next()），零解码开销
+eq('空参 ?s= → context.next() 直通', await (await ogGet(ogCtx('/?s='))).text(), '__NEXT__');
+eq('无 s 参数 → context.next() 直通', await (await ogGet(ogCtx('/'))).text(), '__NEXT__');
+
+// question 是用户输入：属性转义完整（无裸引号/尖括号），$& 等替换模式不被展开
+const ogEscCode = LYcore.encodeCast({ time: OG_DT, vals: [1, 0, 9, 6, 1, 1], use: '__custom__',
+  question: '"><script>alert(1)</script>靠谱吗' });
+const rEsc = await ogGet(ogCtx('/?s=' + encodeURIComponent(ogEscCode)));
+const hEsc = await rEsc.text();
+const descEsc = ogMeta(hEsc, 'og:description');
+eq('转义 → og:description 属性仍完整可解析', descEsc !== null, true);
+eq('转义 → 无裸双引号/尖括号进入属性', /["<>]/.test(descEsc.replace(/&(quot|lt|gt);/g, '')), false);
+eq('转义 → script 标签被实体化', descEsc.indexOf('&lt;script&gt;') >= 0, true);
+eq('转义 → __custom__ 用神显示为「自定义」', descEsc.indexOf('用神：自定义') >= 0, true);
+const ogDollarCode = LYcore.encodeCast({ time: OG_DT, vals: [1, 0, 9, 6, 1, 1], use: '',
+  question: '花$&钱$1行吗' });
+const rDollar = await ogGet(ogCtx('/?s=' + encodeURIComponent(ogDollarCode)));
+// 期望串含 &amp;（esc 转义）且 $&/$1 保持字面（替换用函数形式，未被当作替换模式展开）
+eq('替换用函数形式 → $& 字面保留', (await rDollar.text()).indexOf('所测：花$&amp;钱$1行吗') >= 0, true);
+
+// 防漂移：门面不得私藏第二份解码实现——与 core.js 聚合入口取到的必须是同一函数引用
+eq('_share 门面与 core.js 的 decodeCast 为同一引用', facadeDecode === LYcore.decodeCast, true);
+
+// 断语零通道（物理性）：OG 侧两个文件的 import 白名单封闭为五个确定性模块 + 门面，
+// analyze / yingqi-window / sensitive 等判读层不得出现在依赖里
+function importSpecs(src) {
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const stmts = code.match(/import\s[^;]*?from\s*['"][^'"]+['"]|import\s*['"][^'"]+['"]/g) || [];
+  return stmts.map(function (st) {
+    const m = st.match(/['"]([^'"]+)['"]/);
+    return m ? m[1] : '';
+  });
+}
+const ogSrcs = { 'functions/index.js': readFileSync('functions/index.js', 'utf8'),
+  'functions/api/_share.js': readFileSync('functions/api/_share.js', 'utf8') };
+const ALLOWED_BASE = { 'data.js': 1, 'data-jieqi.js': 1, 'calendar.js': 1, 'paipan.js': 1, 'share.js': 1, '_share.js': 1 };
+const FORBIDDEN = /analyze|yingqi-window|sensitive|domain-methods|question-shape|fact-audit|interpret|records|models/;
+let allSpecs = [];
+Object.keys(ogSrcs).forEach(function (f) {
+  const specs = importSpecs(ogSrcs[f]);
+  eq(f + ' 含 import 语句', specs.length > 0, true);
+  specs.forEach(function (sp) {
+    const base = sp.split('/').pop();
+    eq(f + ' ← ' + sp + ' 在白名单内', !!ALLOWED_BASE[base], true);
+    eq(f + ' ← ' + sp + ' 不属断语/AI 层', FORBIDDEN.test(sp), false);
+  });
+  allSpecs = allSpecs.concat(specs);
+});
+eq('白名单只有五种确定性模块 + 门面', Object.keys(ogSrcs).length >= 1 && allSpecs.length >= 6, true);
+
+// 全或无：任一锚点缺失 → 放弃改写、原样返回（不 500、etag 保留）
+const brokenHtml = ogHtml.replace(/<meta property="og:site_name"[^>]*>\n/, '');
+const rBroken = await ogGet(ogCtx('/?s=' + encodeURIComponent(ogCode), brokenHtml));
+const hBroken = await rBroken.text();
+eq('锚点缺失 → 200 回退原样（不 500）', rBroken.status, 200);
+eq('锚点缺失 → og:title 保持默认', ogMeta(hBroken, 'og:title'), '六爻排盘 · 莲斋');
+eq('锚点缺失 → 原样响应头（etag 保留）', rBroken.headers.get('etag'), OG_ETAG);
 
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

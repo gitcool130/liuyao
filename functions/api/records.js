@@ -269,11 +269,14 @@ export async function onRequestPost(context) {
   // id 策略：客户端可携带 id（复用/更新场景），但必须通过格式校验（ID_RE 见文件头）；
   // 缺失或非法一律服务端生成 UUID，杜绝空主键、超长主键与伪造覆盖
   const id = (typeof b.id === 'string' && ID_RE.test(b.id)) ? b.id : crypto.randomUUID();
+  // 判据快照（M17-A）：对象才收，其余一律 null。仅限长不做枚举白名单——
+  // baseline 只供详情页对照展示，不是统计枚举来源（统计只吃 outcome 的白名单），渲染端解析失败即降级。
+  const baseline = (b.baseline && typeof b.baseline === 'object' && !Array.isArray(b.baseline)) ? b.baseline : null;
   // 注意：ON CONFLICT 更新清单刻意不含 outcome——断卦后的自动保存不得冲掉已回填的结果回执
   await env.LIUYAO_DB.prepare(
-    'INSERT INTO casts (id, created_at, datetime, pillars, question, hex, tosses, pan_text, messages) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(id) DO UPDATE SET question = excluded.question, messages = excluded.messages'
+    'INSERT INTO casts (id, created_at, datetime, pillars, question, hex, tosses, pan_text, messages, baseline) ' +
+    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'ON CONFLICT(id) DO UPDATE SET question = excluded.question, messages = excluded.messages, baseline = excluded.baseline'
   ).bind(
     id,
     new Date().toISOString(),
@@ -283,7 +286,8 @@ export async function onRequestPost(context) {
     (b.hex || '').toString().slice(0, 80),
     jsonWithin(b.tosses || [], 4000),
     b.panText.slice(0, 8000),
-    jsonWithin(b.messages || [], 100000)
+    jsonWithin(b.messages || [], 100000),
+    baseline ? jsonWithin(baseline, 1000) : null
   ).run();
   return json({ id: id });
 }

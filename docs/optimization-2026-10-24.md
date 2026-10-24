@@ -112,9 +112,16 @@ A 是纯增量。故本轮按「A 的核心 + 六·技术 1/2」下手——这�
 
 ## 四、明确没做，以及为什么
 
+> **2026-10-24 下午更新**：下表为当日评估时的原貌，保留存档。进展见行末标注——
+> **判据快照已完成**（[`proposal-baseline-column.md`](proposal-baseline-column.md)，测试 751/185/12144/62 全绿，待部署）；
+> **OG 预览已实施**（[`proposal-og-preview.md`](proposal-og-preview.md)，打包边界实验确认可行，
+> 实施方向反转为「实现留 `public/core/share.js` + `functions/api/_share.js` 零逻辑门面」：
+> 新增 `functions/index.js` 按 `?s=` 注入 og meta，`test:fn` 185→233 全绿，待部署）；
+> **规则库外化文档版已完成**（[`rules-public.md`](rules-public.md)，`public/rules.html` 站内页面仍缺）。
+
 | 项 | 不做的理由 | 要做得先解决什么 |
 |---|---|---|
-| **按盘 OG 预览图** | 需要在 Functions 侧再实现一份 share 码解码器，与 `core/share.js` 构成两份同格式实现，格式一演进就静默漂移 | 把 share 码解析抽成 `functions/api/_share.js` 单一实现，再由浏览器端复用（需改打包边界），或改用 Worker 端渲染 |
+| **按盘 OG 预览图** | 需要在 Functions 侧再实现一份 share 码解码器，与 `core/share.js` 构成两份同格式实现，格式一演进就静默漂移 | 把 share 码解析抽成 `functions/api/_share.js` 单一实现，再由浏览器端复用（需改打包边界），或改用 Worker 端渲染。**→ 已按反转方向实施**（`functions/index.js` + 门面，见 proposal-og-preview.md §二） |
 | **B 复盘闭环（独立 readings 表 + 定时回访）** | 现有 `outcome` 已能记录成败/应期/窗口；独立表要先有「回访留存率」这个风险前提被验证 | `casts` 加 `baseline TEXT`（判据快照：用神/trend/应期区间/置信度）→ 见下 |
 | **判据快照结构化** | 本轮应期窗口已随 `pan_text` 落库（D1 里存着预测值），故非必须；且加列要手动跑 D1 迁移 | `ALTER TABLE casts ADD COLUMN baseline TEXT;` 再在 `recordPayload` 写入 `{yongshen, trend, window, confidence}` |
 | **C 规则库外化** | 资产已在（`tests/guji` + `coverage.mjs` 82.1% + README 口径登记），缺的是对外页面 | 把 `coverage.mjs` 的输出渲染成一页静态 HTML 挂到 `public/rules.html`，风险是没人看 |

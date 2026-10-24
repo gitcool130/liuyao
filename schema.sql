@@ -31,6 +31,18 @@ CREATE TABLE IF NOT EXISTS casts (
 --   window 只用于**分桶统计**：3 日与 90 日不是同一套应期机制（短线靠日辰冲动/值日/出空，
 --   长线靠月建旺衰/旬空填实/伏神出现），跨桶相加得到的「准确率」没有意义。
 
+-- 既有库补加 baseline 列（M17-A：判据快照结构化，docs/proposal-baseline-column.md）：
+--   npx wrangler d1 execute liuyao-db --local  --command="ALTER TABLE casts ADD COLUMN baseline TEXT;"
+--   npx wrangler d1 execute liuyao-db --remote --command="ALTER TABLE casts ADD COLUMN baseline TEXT;"
+-- 幂等：SQLite 不支持 ADD COLUMN IF NOT EXISTS，重复执行报 duplicate column name（无害但脏）。
+--   执行前先查列，已含 baseline 即跳过；全新空库建表后同样补这条 ALTER
+--   （CREATE TABLE IF NOT EXISTS 不会给既有表加列）：
+--   npx wrangler d1 execute liuyao-db --local --command="PRAGMA table_info(casts);"
+-- baseline 口径：JSON {yongshen, trend, window, confidence, spread}，断卦时刻判据的结构化
+--   快照，随 recordPayload 与 pan_text 同批写入（单一事实源仍是 yingqi-window.js 的
+--   换算结果，baseline 只是存档不是第二套口径）；缺失一律 null，未快照整列为 NULL。
+--   confidence 是盘面要素自洽度（高/中/低）不是命中概率；spread（2/3 日）是工程约定。
+
 CREATE INDEX IF NOT EXISTS idx_casts_created ON casts(created_at DESC);
 
 -- 既有库补加默认值（SQLite 不支持 ALTER COLUMN，需重建表迁移）：

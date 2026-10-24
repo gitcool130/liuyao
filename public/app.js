@@ -99,6 +99,8 @@
   let pan = null;
   let lastBullets = [];
   let lastAnalysis = null;
+  // 粗判走向的展示文案：renderAnalysis（粗判标题）与卦例库「判据对照」共用，不新造口径词
+  const TREND_LABEL = { '吉': '趋吉', '凶': '趋凶', '平': '持平', '待审': '待审' };
 
   // ---------- 盲摆状态机（M5/M6/M8） ----------
   // pendingToss: null | { coins, val, mode: 'blind' }
@@ -565,7 +567,6 @@
       return '<li' + (b.indexOf('⚠') >= 0 ? ' class="warn"' : '') + '>' + b + '</li>';
     }).join('');
     vBox.hidden = false;
-    const TREND_LABEL = { '吉': '趋吉', '凶': '趋凶', '平': '持平', '待审': '待审' };
     // 应期三层展示（主应期 / 辅助节点 / 风险窗口）：结构化视图优先，
     // 老版本引擎（无 yingqiLayers）自动回落到扁平线索，不因字段缺失而空白。
     const LAYER_LABEL = { main: '主应期', auxiliary: '辅助节点', risk: '风险窗口' };
@@ -1725,6 +1726,31 @@
   // 当即发送——问题进入 aiStates[m].history 无法收回，input.value 被清空丢字。
   $('#chatInput').onkeydown = function (e) { if (e.key === 'Enter' && !e.isComposing) sendChat(); };
 
+  // 判据快照：把断卦时刻的用神/粗判/应期窗口/置信度/区间宽度固化成 JSON，
+  // 随 recordPayload 与 panText 同批入库。字段来源与缺失规则见 docs/proposal-baseline-column.md §三。
+  // 缺失一律 null（不用空串/0）；无任何判据可存时整体返回 null（列保持 NULL）。
+  function baselineSnapshot() {
+    const a = lastAnalysis;
+    if (!a) return null;
+    const w = a.yingqiWindow || null;
+    const y = a.yongshen;
+    const snap = {
+      yongshen: (y && y.line) ? (y.type + ' ' + y.line.lq + y.line.zhi) : null,
+      trend: a.trend || null,
+      window: null,
+      confidence: w ? w.confidence : null,          // blocked 时照写（'低'），与 renderYingqi 显示一致
+      spread: (w && w.spread != null) ? w.spread : null
+    };
+    if (w) {
+      snap.window = (w.status === 'blocked')
+        ? { status: 'blocked', blockedBy: w.blockedBy || '', text: w.text || '' }
+        : { status: 'ok', lo: w.lo, hi: w.hi, dayLo: w.dayLo, dayHi: w.dayHi,
+            dateLo: w.dateLo, dateHi: w.dateHi, text: w.text };
+    }
+    if (!snap.yongshen && !snap.trend && !snap.window) return null;
+    return snap;
+  }
+
   function recordPayload() {
     const pil = pan.pillars;
     return {
@@ -1737,6 +1763,7 @@
       hex: pan.benName + (pan.hasBian ? ' 之 ' + pan.bianName : '（静卦）'),
       tosses: records,
       panText: buildPanText(true),
+      baseline: baselineSnapshot(),
       messages: aiStates   // { modelId: [{role, content}] }
     };
   }
@@ -1836,6 +1863,50 @@
     if (pick(OC_RESULT, o.result)) parts.push(OC_RESULT[o.result]);
     if (pick(OC_YINGQI, o.yingqi)) parts.push(OC_YINGQI[o.yingqi]);
     return '<span class="oc-badge' + cls + '" title="结果回执">' + esc(parts.join(' · ')) + '</span>';
+  }
+  // 判据快照防御解析（M17-A）：与 parseOutcome 同款——字符串先 JSON.parse，
+  // 失败或非对象一律 null；三主字段全空同样按「无快照」处理（详情页不渲染对照区）。
+  function parseBaseline(raw) {
+    if (!raw) return null;
+    let b = raw;
+    if (typeof raw === 'string') { try { b = JSON.parse(raw); } catch (e) { return null; } }
+    if (!b || typeof b !== 'object' || Array.isArray(b)) return null;
+    if (!b.yongshen && !b.trend && !b.window) return null;
+    return b;
+  }
+  // 「判据对照」块：左=断卦时存的判据快照，右=事后据实回填的事实。只读并排，无输入无按钮。
+  // 文案红线（docs/proposal-baseline-column.md §5.3）：不出现准确率/命中率类词；不渲染
+  // ✓/✗ 与「与事实一致/不一致」的机器结论；事实侧不用 oc-success/oc-fail 彩色徽标——
+  // 那两色在本页语义是「事之成败」，出现在对照区会被读成「判对了/判错了」。
+  function baselineCmpHTML(raw, oc) {
+    const bl = parseBaseline(raw);
+    if (!bl) return '<div class="muted" style="margin-top:12px;font-size:12px">此例无当时判据快照（保存于判据快照上线前）。</div>';
+    const w = (bl.window && typeof bl.window === 'object' && !Array.isArray(bl.window)) ? bl.window : null;
+    // 应期行判据侧：window.text 原文展示（去「应期：」前缀与 renderYingqi 一致），不从
+    // lo/hi 重拼；blocked 的拒答文案本身即判据，照常展示并配置信徽标（低）。
+    let yqLeft = '—';
+    if (w && w.text) {
+      yqLeft = esc(String(w.text).replace(/^应期：/, '')) +
+        (bl.confidence
+          ? '　<span class="oc-badge" title="盘面要素的自洽程度，不是命中概率">置信' +
+            esc(bl.confidence === '中' ? '中等' : bl.confidence) + '</span>'
+          : '');
+    }
+    const trendLeft = pick(TREND_LABEL, bl.trend) || '—';
+    const trendRight = (oc && pick(OC_RESULT, oc.result)) || '—';
+    const yqRight = oc
+      ? ([pick(OC_YINGQI, oc.yingqi), pick(OC_WINDOW, oc.window)].filter(Boolean).join(' · ') || '—')
+      : '—';
+    return '<div class="cmp-box"><b>判据对照</b>　<span class="muted" style="font-size:12px">左：断卦时存的判据快照　右：事后据实回填的事实</span>' +
+      '<div class="cmp-grid">' +
+      '<div class="muted">事之走向（当时粗判）</div><div class="muted">事之成败（事后）</div>' +
+      '<div>' + esc(trendLeft) + '</div><div>' + esc(trendRight) + '</div>' +
+      '<div class="muted">应期（当时判据）</div><div class="muted">应期（事后）</div>' +
+      '<div>' + yqLeft + '</div><div>' + esc(yqRight) + '</div>' +
+      '<div class="muted">用神（当时所取）</div><div class="muted"></div>' +
+      '<div>' + (bl.yongshen ? esc(bl.yongshen) : '—') + '</div><div>—</div>' +
+      '</div>' +
+      '<div class="muted" style="margin-top:4px;font-size:12px">置信度只表示盘面要素的自洽程度，不是命中概率。对照仅为决策留痕，不做对错判定。</div></div>';
   }
   // 命中率汇总：按「应验窗口」分桶报，**绝不混池**。
   // 每桶内部：事之成败（成/部分/败，判定明确者为分母）＋ 应期验证（按时/未按时）。
@@ -2005,12 +2076,16 @@
           (oc.note ? '　备注：' + oc.note : '') +
           (oc.updated_at ? '　（记于 ' + String(oc.updated_at).slice(0, 10) + '）' : '')
         : '尚未回填';
+      // 判据对照（M17-A）：断卦时存的快照 vs 事后回填的事实，插在回执区上方；
+      // 无快照（旧行/解析失败/全空）时函数自身降级为一行 muted 说明
+      const cmpHTML = baselineCmpHTML(r.baseline, oc);
       // 代际校验：在途期间用户已点开另一条，丢弃本次响应，不覆盖新详情
       if (myToken !== castToken) return;
       $('#libDetail').innerHTML = '<div class="ai-block"><b>' + esc(r.hex) + '</b>　<span class="muted">' +
         esc(r.datetime || '') + '　' + esc(r.pillars || '') + '</span>' +
         '<pre class="pan-text">' + esc(r.pan_text || '') + '</pre>' +
         '<div class="ai-cols">' + colHTML + '</div>' +
+        cmpHTML +
         '<div class="oc-box"><b>结果回执</b>　<span class="muted" id="ocNow">' + esc(ocNow) + '</span>' +
         '<div class="muted" style="margin-top:4px;font-size:12px">事后据实回填，供命中率统计；如实记录，败例同样宝贵。</div>' +
         '<div class="oc-row">' +
