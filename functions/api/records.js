@@ -187,6 +187,14 @@ async function handleOutcome(request, env) {
     .bind(oc === null ? null : JSON.stringify(oc), id).run();
   const changes = r && r.meta && typeof r.meta.changes === 'number' ? r.meta.changes : 0;
   if (!changes) return json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
+  // 回访闭环（M18）：回填成功后该卦例的待回访任务置 acted（显式清除回执不触发，
+  // 避免误关任务；失败静默——回执本体已保存，任务留到下次回填再关）。
+  if (oc !== null) {
+    try {
+      await env.LIUYAO_DB.prepare("UPDATE readings SET status = 'acted', updated_at = ? WHERE cast_id = ? AND status = 'pending'")
+        .bind(oc.updated_at, id).run();
+    } catch (e) { /* 不阻断回执主流程 */ }
+  }
   return json({ ok: true, outcome: oc });
 }
 
@@ -240,6 +248,25 @@ export async function onRequestDelete(context) {
   return json({ ok: true });
 }
 
+// ---------- 回访任务派生（M18·任务⑦，docs/proposal-readings-loop.md §2.3/§四） ----------
+// 只派生「哪条卦该回头看」，不复制正文；失败不阻断卦例本体（任务丢了可重派，幂等）。
+// 预判桶位只进 note 供展示，绝不预填、绝不替换用户回填的 outcome.window。
+function deriveReading(id, datetime, baselineRaw) {
+  if (!baselineRaw) return null;
+  let bl;
+  try { bl = JSON.parse(baselineRaw); } catch (e) { return null; }
+  const w = bl && bl.window;
+  if (!w || w.status !== 'ok' || typeof w.hi !== 'number' || !isFinite(w.hi) || w.hi < 0) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(datetime || ''));
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (isNaN(d.getTime())) return null;
+  d.setUTCDate(d.getUTCDate() + Math.floor(w.hi) + 1);   // 应期窗口走完的次日为回访日
+  const bucket = w.hi <= 3 ? 'd3' : w.hi <= 7 ? 'd7' : w.hi <= 30 ? 'd30' : 'd90';
+  const note = '当时判据预计结果落在 ' + bucket.slice(1) + ' 日内窗口（预判仅供提醒，回填以实际发生为准）';
+  return { due_at: d.toISOString().slice(0, 10), note: note.slice(0, 200) };
+}
+
 export async function onRequestPost(context) {
   const { request, env } = context;
   const denied = await writeGuard(request, env); if (denied) return denied;
@@ -289,5 +316,14 @@ export async function onRequestPost(context) {
     jsonWithin(b.messages || [], 100000),
     baseline ? jsonWithin(baseline, 1000) : null
   ).run();
+  // 回访任务派生（M18）：主写入成功后追加，INSERT OR IGNORE 幂等；失败不回滚卦例本体
+  try {
+    const rd = deriveReading(id, (b.datetime || '').toString().slice(0, 50), baseline ? jsonWithin(baseline, 1000) : null);
+    if (rd) {
+      await env.LIUYAO_DB.prepare(
+        "INSERT OR IGNORE INTO readings (cast_id, due_at, status, source, note, created_at) VALUES (?, ?, 'pending', 'baseline_window', ?, ?)"
+      ).bind(id, rd.due_at, rd.note, new Date().toISOString()).run();
+    }
+  } catch (e) { /* 派生失败不阻断主流程（任务可重派） */ }
   return json({ id: id });
 }

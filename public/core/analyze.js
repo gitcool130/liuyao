@@ -18,6 +18,15 @@
   const sheng = LY.sheng, ke = LY.ke, chong = LY.chong, liuhe = LY.liuhe;
 
   const GRADES = ['旺', '相', '休', '囚', '死'];
+  /* M18（任务⑥）：取用神两现口径开关（模式照抄 calendar.js 的 LY.nightZiMode 三件套）。
+   * LY.ysDupMode = 'priority'（默认）：两现/多现按通行次序取舍——
+   *   发动者 → 临世应者 → 旺者 → 在前之爻，空破不入取舍维度（古法次序，test-rules §11·六 锁定）。
+   * LY.ysDupMode = 'kongpo'：《增删卜易·两现章第三十二》野鹤法——两现遇空破，
+   *   「舍其不空而用旬空」「用逢破之爻」，以空破之爻为【应期之锚】；
+   *   主用爻与吉断仍按次序链，两派并置陈述（仅新增一条带门派标注的陈述层断语，
+   *   不改 pickYongshen、不改 trend——依据：01406 野鹤吉断仍用旺者未财，空者辰土承担应期）。
+   * ============================================================ */
+  LY.ysDupMode = 'priority'; // 'priority' | 'kongpo'
   const STRONG = ['旺', '相'];   // 旺相
   const WEAK = ['休', '囚', '死']; // 休囚
 
@@ -1168,6 +1177,47 @@
       layers.risk.push('忌神发动回头克：须制忌之神值班之日应');
     }
 
+    // M18（任务⑥）：两现口径 kongpo 分支——纯增量守卫，默认 'priority' 时不触发，既有路径零改动。
+    // 只新增一条陈述层断语（不入 aggregateTrend 白名单，trend 不受影响）与一条应期锚点线索。
+    // 边界（§3.3）：空破分歧才有并置；锚点地支须唯一；伏神/世爻/无分歧 → 静默回退。
+    if (LY.ysDupMode === 'kongpo' && target !== 'shi' && !L.isFu &&
+        pick.source === '两现取舍' && pick.all.length >= 2) {
+      const kong = pick.all.filter(function (x) { return pil.kong.indexOf(x.zhiIdx) >= 0; });
+      const buKong = pick.all.filter(function (x) { return pil.kong.indexOf(x.zhiIdx) < 0; });
+      const po = pick.all.filter(function (x) { return chong(x.zhiIdx, pil.monthZhi); });
+      const buPo = pick.all.filter(function (x) { return !chong(x.zhiIdx, pil.monthZhi); });
+      let anchor = null, kind = null;
+      if (kong.length && buKong.length && kong.every(function (x) { return x.zhiIdx === kong[0].zhiIdx; })) {
+        anchor = kong[0]; kind = 'kong';
+      } else if (!kong.length && po.length && buPo.length && po.every(function (x) { return x.zhiIdx === po[0].zhiIdx; })) {
+        anchor = po[0]; kind = 'po';
+      }
+      if (anchor) {
+        const dupDesc = pick.all.map(function (x) {
+          return LINE_NAMES[x.pos] + x.zhi + (pil.kong.indexOf(x.zhiIdx) >= 0 ? '值旬空' : '') +
+            (chong(x.zhiIdx, pil.monthZhi) ? '逢月破' : '') + (x.pos === L.pos ? '（主用爻）' : '');
+        }).join('、');
+        const j = kind === 'kong' ? {
+          tag: '两现', rule: '用空破者应期',
+          text: '用神' + target + '两现（' + dupDesc + '）——《增删卜易·两现章第三十二》「舍其不空而用旬空」（野鹤法）：以' +
+            anchor.zhi + '出空之日为应期之锚；主用爻仍取' + L.zhi + '（通行次序，两派并置）。',
+          basis: '《增删卜易·两现章第三十二》：「却得于辰土出空之日，此乃舍其不空而用旬空」；同章「此乃卦中用神三现，而用逢破之爻也」——LY.ysDupMode="kongpo"（野鹤法）口径；默认 LY.ysDupMode="priority" 为通行次序取舍，两派并置互不覆盖',
+          anchor: { zhi: anchor.zhi, zhiIdx: anchor.zhiIdx, kind: 'kong' }
+        } : {
+          tag: '两现', rule: '用空破者应期',
+          text: '用神' + target + '两现（' + dupDesc + '）——《增删卜易·两现章第三十二》「用逢破之爻」（野鹤法）：以' +
+            anchor.zhi + '实破（逢值）之期为应（年/月级陈述）；主用爻仍取' + L.zhi + '（通行次序，两派并置）。',
+          basis: '《增删卜易·两现章第三十二》：「两爻巳火逢月破许巳年脱厄，乃实破之年也」——LY.ysDupMode="kongpo"（野鹤法）口径；默认 LY.ysDupMode="priority" 为通行次序取舍，两派并置互不覆盖',
+          anchor: { zhi: anchor.zhi, zhiIdx: anchor.zhiIdx, kind: 'po' }
+        };
+        const clue = kind === 'kong'
+          ? '两现野鹤法：以' + anchor.zhi + '出空之日为应期之锚'
+          : '两现野鹤法：以' + anchor.zhi + '实破（逢值）之期为应';
+        judgments.push(j); bullets.push(j.text);
+        clues.push(clue); layers.main.push(clue);
+      }
+    }
+
     const agg = aggregateTrend({
       hasYongshen: true, grade: month.grade,
       daySupports: day.supports, zhenKong: xunkong.zhen, zhenYuePo: yuepo.zhen,
@@ -1182,6 +1232,7 @@
         type: target === 'shi' ? '世爻' : target,
         line: { pos: L.pos, zhi: L.zhi, wx: L.wx, lq: L.lq, moving: L.moving, isFu: !!L.isFu },
         source: pick.source,
+        dupMode: LY.ysDupMode,
         wang: month.grade
       },
       yjs: {

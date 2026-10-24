@@ -254,6 +254,40 @@ if (fs.existsSync(FCASES)) {
   console.log('\n飞伏断语层捕获率 ' + caughtF + ' / ' + totalF);
 }
 
+/* ---------- 断语断言层（M18 kongpo 两现口径）的变异验证 ---------- */
+let caughtK = 0, totalK = 0;
+
+{
+  const kdoc = JSON.parse(fs.readFileSync(path.join(__dirname, 'cases', 'zengshan-boyi.json'), 'utf8'));
+  const baseK = checkCases(kdoc);
+  console.log('\n-- 断语断言层（kongpo 两现口径）--');
+  console.log('基线：' + baseK.checks + ' 断言　' + baseK.cases + ' 条用例　失败 ' + baseK.fails);
+
+  const kmut = [
+    ['改日辰令旬空消失（01406 庚子→庚午，辰出旬，空分歧不再）', function (d) {
+      d.cases.find(function (x) { return x.id === 'zsby-1406-kongpo'; }).dayGZ = '庚午';
+    }],
+    ['改月建令月破消失（01422 亥→卯，巳不破；避子月——子会反冲午成新锚）', function (d) {
+      d.cases.find(function (x) { return x.id === 'zsby-1422-kongpo'; }).monthZhi = '卯';
+    }]
+  ];
+
+  const rowsK = [];
+  kmut.forEach(function (m) {
+    const d = clone(kdoc);
+    m[1](d);
+    const R = checkCases(d);
+    totalK++;
+    const ok = R.fails > baseK.fails || R.noDomain.length > baseK.noDomain.length;
+    if (ok) caughtK++;
+    rowsK.push('  ' + (ok ? '✓ 捕获' : '✗ 漏报') + '　' + m[0] +
+      '　（不符 ' + R.fails + ' / 无解 ' + R.noDomain.length + '）');
+  });
+  console.log('注入 ' + kmut.length + ' 类已知错误：');
+  rowsK.forEach(function (r) { console.log(r); });
+  console.log('\nkongpo 断语层捕获率 ' + caughtK + ' / ' + totalK);
+}
+
 /* ---------- 表格式语料（六神 / 伏神）的变异验证 ---------- */
 let caughtB = 0, totalB = 0;
 
@@ -341,7 +375,7 @@ if (fs.existsSync(BSC) && fs.existsSync(KNOWN_FILE)) {
   console.log('\n表格式层捕获率 ' + caughtB + ' / ' + totalB);
 }
 
-const totalCaught = caught + caughtC + caughtF + caughtB, totalMut = MUTATIONS.length + totalC + totalF + totalB;
+const totalCaught = caught + caughtC + caughtF + caughtB + caughtK, totalMut = MUTATIONS.length + totalC + totalF + totalB + totalK;
 console.log('\n合计捕获率 ' + totalCaught + ' / ' + totalMut);
 console.log('');
 if (totalCaught === totalMut) {

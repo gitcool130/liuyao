@@ -51,3 +51,32 @@ CREATE INDEX IF NOT EXISTS idx_casts_created ON casts(created_at DESC);
 --   3) DROP TABLE casts; ALTER TABLE casts_new RENAME TO casts;
 --   4) CREATE INDEX idx_casts_created ON casts(created_at DESC);
 -- 说明：本项目的写入路径始终由服务端生成/校验 id，既有库不迁移亦不影响正确性。
+
+-- ============================================================
+-- M18（任务⑦）：复盘闭环回访任务表 readings（docs/proposal-readings-loop.md §2.2）
+-- 只存「哪条卦到该回头看的时间了」，不存回执与卦例正文；
+-- 事实单一事实源仍是 casts.outcome / casts.baseline。
+-- 派生规则（source='baseline_window'，本期唯一路径）：
+--   读 casts.baseline，window.status='ok' 且 hi 为数字 →
+--   due_at = casts.datetime（北京墙上日期）+ (hi + 1) 日，即应期窗口走完的次日；
+--   baseline 缺失 / 解析失败 / window.status='blocked' → 一律不派生（不猜，宁缺勿造）。
+-- 现有历史行（无 baseline 快照）不派生任务；人工回填走既有表单，不受影响。
+-- ============================================================
+CREATE TABLE IF NOT EXISTS readings (
+  id         TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  cast_id    TEXT NOT NULL,              -- 引用 casts.id（不设外键：casts 删除后任务成孤儿，
+                                         -- 读路径 JOIN 不中即自动不显示，无需级联）
+  due_at     TEXT NOT NULL,              -- 北京日历日 'YYYY-MM-DD'（粒度=日；与全仓北京墙上
+                                         -- 时间锚点同口径，字典序即时间序）
+  status     TEXT NOT NULL DEFAULT 'pending',  -- pending | acted | dismissed
+  source     TEXT NOT NULL DEFAULT 'baseline_window',
+  note       TEXT,                       -- 派生时的判据摘要（预判桶位等），只读展示，非事实
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_readings_due ON readings(status, due_at);
+-- 部分唯一索引：一条卦例同一时刻最多一个未完结任务。
+-- 派生写入用 INSERT OR IGNORE——重复执行不报错、不产重复行（幂等的库侧保证）。
+-- acted/dismissed 是终态，同 cast 不再二次排队（重新占问同一事是新的 cast_id）。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_open ON readings(cast_id)
+  WHERE status = 'pending';

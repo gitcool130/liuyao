@@ -214,7 +214,11 @@ export function checkCases(doc) {
 
     const pan = LY.paipan(c.toss, dt);
     const pil = pan.pillars;
-    const res = LY.analyze(pan, c.target || 'shi');
+    // M18（任务⑥）：用例级两现口径开关——缺省行为不变（既有用例无此字段，路径零改动）
+    if (c.dupMode) LY.ysDupMode = c.dupMode;
+    let res;
+    try { res = LY.analyze(pan, c.target || 'shi'); }
+    finally { if (c.dupMode) LY.ysDupMode = 'priority'; }
     R.cases++;
     const key = (doc.book || '') + '·' + (c.chapter || '');
     const at = function (i) { return pan.lines[i]; };

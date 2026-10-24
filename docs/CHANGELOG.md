@@ -521,3 +521,9 @@
 - Karplus-Strong 拨弦物理建模：激励噪声三轮平滑去起音毛刺，衰减系数随频率变化（低绵长、高收敛）
 - 总线 1500Hz 低通滤波，D 宫五声音阶中低音域随机漫步成句，泛音/双音轻点缀，句间留白 5~10 秒，卷积混响
 - 零音频文件、零外部请求；默认开启，首次手势启动，切后台自动暂停
+
+## M18（2026-10-24，第三波 ⑥⑦）
+
+- **⑥ 取用神两现口径参数化**：`LY.ysDupMode`（默认 `'priority'` 逐字节不变；`'kongpo'` 依《增删卜易·两现章第三十二》野鹤法新增陈述层断语 `两现:用空破者应期` + 应期锚点线索，主用爻/trend 零改动）。test-rules 265→280；guji 新增 3 条 kongpo 用例（zsby-1406/1414/1422-kongpo），12144→12148；selftest 41→43（kongpo 层 2 类行为变异）；覆盖率 65/79=82.3%。方案：`docs/proposal-yongshen-parameterization.md`
+- **⑦ 复盘闭环（readings 回访任务表）**：新表 `readings`（只存「哪条卦该回头看」，幂等派生自 `casts.baseline` 应期窗口次日）；`/api/readings` GET 到期视图 / POST dismissed（口令与 records 同源，禁 SELECT *）；回填成功自动置 acted；卦例库顶部「回访提醒」区块。test:fn 233→254。方案：`docs/proposal-readings-loop.md`
+- **⑥阶段四（应期窗口联动）按方案「可独立砍除」条款砍除**：kongpo 空锚点暂不进窗口数字，断语与线索已完整

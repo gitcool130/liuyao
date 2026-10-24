@@ -39,7 +39,7 @@
 月破有救（假破）」「申子辰三合水局」「子卯相刑（无礼之刑）」），按 coverage.mjs 的
 静态字面量口径不入分母（coverage.mjs 文件头注释）。
 
-分母 78 条按 tag 的分布与用例覆盖情况（tag 分组数字提取自 `coverage.mjs` 的分母
+分母 79 条按 tag 的分布与用例覆盖情况（tag 分组数字提取自 `coverage.mjs` 的分母
 提取逻辑，覆盖率总数为 `node tests/guji/coverage.mjs` 实跑输出）：
 
 | tag | 含义（一句话） | 分母 rule 数 | 已覆盖 | 主要用例出处（书·章） |
@@ -54,6 +54,7 @@
 | 月建 | 用神对月建的旺衰生克 | 6 | 5 | 增删〈八宫图第三〉〈月将章第十六〉 |
 | 日冲 | 暗动 / 日破 / 冲散 | 3 | 3 | 增删诸实占卦例 |
 | 旬空 | 旬空待时 / 动不为空 / 真空 | 3 | 3 | 增删实占例；〈卜筮正宗·旬空论第十〉（修正依据） |
+| 两现 | 用空破者应期（kongpo 口径应期锚，M18 参数化 LY.ysDupMode） | 1 | 1 | 增删〈两现章第三十二〉（zsby-1406/1414/1422-kongpo 三例） |
 | 元神 | 元神识别与有力无力 | 2 | 2 | 增删〈用神元神、忌神、仇神章第九〉〈元神忌神衰旺章第十〉 |
 | 忌神 | 忌神识别与有力无力 | 2 | 2 | 增删〈元神忌神衰旺章第十〉；卜筮〈原忌仇神论第四〉 |
 | 日合 | 合起合绊 | 1 | 1 | 增删实占卦例 |
@@ -69,15 +70,15 @@ zengshan-boyi.json），只是不进静态分母。）
 ```
 node tests/guji/coverage.mjs   （实跑输出，2026-10-24）
 
-分母（引擎声明的 rule）：78
-分子（用例断言到的 rule）：64
-覆盖率：64 / 78 = 82.1%
+分母（引擎声明的 rule）：79
+分子（用例断言到的 rule）：65
+覆盖率：65 / 79 = 82.3%
 ```
 
-- **分母**＝`public/core/analyze.js` 静态声明的 rule（78 条）；**分子**＝
+- **分母**＝`public/core/analyze.js` 静态声明的 rule（79 条）；**分子**＝
   `tests/guji/cases/*.json` 用例断言到的、且在分母内的 rule（64 条）。口径详见
   coverage.mjs 文件头。
-- 分子 64 条的构成：`cases/zengshan-boyi.json` 断言到 64 个唯一 rule 名（其中 63 个
+- 分子 64 条的构成：`cases/zengshan-boyi.json` 断言到 65 个唯一 rule 名（其中 63 个
   落在分母内，`真月破` 不在静态分母）＋ `cases/bushi-zhengzong.json` 断言到 1 个
   （`伏神:伏克飞神`），合计 64（两文件内容直接统计，2026-10-24）。
 - 未覆盖的 **14 条**规则及其分类（逐条依据见 tests/guji/README.md §八，
@@ -126,7 +127,7 @@ node tests/guji/coverage.mjs   （实跑输出，2026-10-24）
 排盘对账的断言构成（来源：tests/guji/lib/check.mjs）：《增删卜易》每条断言本卦 6 爻 ×
 {纳甲地支、六亲、是否世、是否应}，卦中有动爻时再断言变卦同构字段；《卜筮正宗》表格
 断言纳甲地支与六亲（仅印日干的卦例加断六神，伏神按**值**对账）。全部语料合计断言
-**12144 项**，实跑通过 12144、失败 0（`npm run test:guji` 输出，2026-10-24）。
+**12148 项**，实跑通过 12148、失败 0（`npm run test:guji` 输出，2026-10-24）。
 
 六神一项：197 条表格卦例中 67 条未印日干（六神项略，run.mjs 实跑输出），印有日干的
 130 条共 780 项六神断言，引擎与书本一致率 98.5%，余下 12 项（2 条卦例）系该书
@@ -242,13 +243,13 @@ tests/guji 把「实现口径 vs 原书口径」的差异分成三类处理（te
 | 数字 | 来源 |
 |---|---|
 | 语料 404 条（增删 207＋卜筮 197）、断语用例 68 条（65＋3） | `npm run test:guji`（tests/guji/run.mjs）实跑输出；用例数另见 tests/guji/cases/*.json 文件本体 |
-| 断言总数 12144、通过 12144、失败 0 | `npm run test:guji` 实跑输出 |
+| 断言总数 12148、通过 12148、失败 0 | `npm run test:guji` 实跑输出 |
 | 文本缺陷 31 处（排除项计数）；登记条目 12 条 | 前者 `npm run test:guji` 实跑输出；后者 tests/guji/known-text-issues.json（books.卜筮正宗.items） |
 | 口径分歧 5 处及五个 id | `npm run test:guji` 实跑输出；明细 tests/guji/README.md §七；用例标记 tests/guji/cases/zengshan-boyi.json（knownDivergence 字段） |
-| 覆盖率 64 / 78 = 82.1%；未覆盖 14 条清单 | `node tests/guji/coverage.mjs` 实跑输出 |
+| 覆盖率 65 / 79 = 82.3%；未覆盖 14 条清单 | `node tests/guji/coverage.mjs` 实跑输出 |
 | 分母按 tag 分布（78 条 = 15 tag） | coverage.mjs 的分母提取逻辑（`tag: '…', rule: '…'` 静态字面量＋运行时拼接名展开）作用于 public/core/analyze.js |
 | 用例 expect 条目 116（113＋3）、驱动方式分布、trend 断言 8 条 | tests/guji/cases/*.json 文件本体直接统计 |
-| 变异自检 41 / 41 捕获 | `npm run test:guji:self`（tests/guji/selftest.mjs）实跑输出；分层构成见 tests/guji/README.md §十一 |
+| 变异自检 43 / 43 捕获 | `npm run test:guji:self`（tests/guji/selftest.mjs）实跑输出；分层构成见 tests/guji/README.md §十一 |
 | 六神 130 条 / 780 项 / 一致率 98.5% / 12 项 2 条矛盾 | tests/guji/README.md §5.3（「130 条印有日干」与 run.mjs 实跑输出「其中 67 条未印日干」互证） |
 | 分歧④⑤影响面 2424 判定 / 688 变化 / 109 trend 迁移；真空修正 33 迁移 / 22 trend 迁移 | tests/guji/README.md §七（登记的实测数据） |
 | 三库差分 104,780 字段零差异；六冲卦 10 / 六合卦 8 / 游魂归魂各 8 | README「三库交叉差分」「技术要点·卦型判定」 |
@@ -270,7 +271,7 @@ npm run guji:coverage    # 断卦规则覆盖率（本页 §2.2 的唯一口径�
 docs/optimization-2026-10-24.md §一「七·四件不做」行）。引用本页时请注意：
 
 1. **不宣称预测效力**：规则库保证的是确定性（同盘同解）与可溯源（逐条典据），
-   不保证也不暗示「断得准」。任何引用不得把 12144 项断言、82.1% 覆盖率、98.5%
+   不保证也不暗示「断得准」。任何引用不得把 12148 项断言、82.1% 覆盖率、98.5%
    一致率等数字表述为「准确率」——它们是**对账一致性与覆盖广度**的度量。
 2. **不做单点打分**：规则库无评分制（M3 起源码禁绝 `score`），吉凶只有
    吉/凶/平/待审四值粗判，由规则汇聚而非加权求和得出。引用时不得为其构造分数。

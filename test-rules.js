@@ -833,6 +833,68 @@ eq('临日辰路径仍生效', C.ruleDay(Lmu, mkPil({ monthZhi: 2, dayZhi: 2 }),
   eq('大过变鼎：日辰未土候选仍保留在三神结构中（from=日辰）', dgRes.yjs.jishen.some(function (c) { return c.from === '日辰'; }), true);
 })();
 
+// ---------- 12. 取用神两现口径开关 ysDupMode（M18·任务⑥，模式照抄夜子时组） ----------
+(function () {
+  // 合成盘：妻财两现（一爻午火值旬空、一爻亥水不空），六爻皆静、不临世应。
+  // 月令申：水相 / 火囚 → 通行次序取旺者亥水为主用爻；kongpo 口径下锚点为空者午火。
+  function mkDupPan(kong, monthZhi) {
+    const lines = [
+      mkLine({ pos: 0, zhi: '子', zhiIdx: 0, wx: '水', lq: '父母' }),
+      mkLine({ pos: 1, zhi: '午', zhiIdx: 5, wx: '火', lq: '妻财' }),
+      mkLine({ pos: 2, zhi: '辰', zhiIdx: 4, wx: '土', lq: '子孙' }),
+      mkLine({ pos: 3, zhi: '未', zhiIdx: 7, wx: '土', lq: '父母' }),
+      mkLine({ pos: 4, zhi: '亥', zhiIdx: 11, wx: '水', lq: '妻财' }),
+      mkLine({ pos: 5, zhi: '卯', zhiIdx: 3, wx: '木', lq: '官鬼' })
+    ];
+    return { lines: lines, shi: 0, ying: 3, pillars: mkPil({ monthZhi: monthZhi, kong: kong, kongStr: kong.length ? '甲辰旬' : '' }) };
+  }
+  const panDup = mkDupPan([5], 8); // 申月，午空
+
+  // ① 默认 priority：无「两现」断语，dupMode 照写默认值
+  C.ysDupMode = 'priority';
+  const rDefault = C.analyze(panDup, '妻财');
+  eq('默认 priority 同盘无两现断语', rDefault.judgments.filter(function (j) { return j.tag === '两现'; }).length, 0);
+  eq('默认 dupMode 字段照写', rDefault.yongshen.dupMode, 'priority');
+  eq('默认主用爻取旺者亥', rDefault.yongshen.line.zhi, '亥');
+
+  // ② kongpo 空分歧：出断语、含门派名、锚点为空者
+  try {
+    C.ysDupMode = 'kongpo';
+    const rKp = C.analyze(panDup, '妻财');
+    const dup = rKp.judgments.filter(function (j) { return j.tag === '两现' && j.rule === '用空破者应期'; });
+    eq('kongpo 空分歧出断语', dup.length, 1);
+    eq('断语文本含野鹤法门派名', dup[0].text.indexOf('野鹤法') >= 0 && dup[0].text.indexOf('两现章第三十二') >= 0, true);
+    eq('锚点为空者午', dup[0].anchor.zhi === '午' && dup[0].anchor.kind === 'kong', true);
+    eq('锚点线索入主层', rKp.yingqiLayers.main.some(function (c) { return c.indexOf('两现野鹤法') >= 0; }), true);
+    eq('主用爻仍取亥（不动）', rKp.yongshen.line.zhi, '亥');
+    eq('kongpo 下 trend 与默认相同（陈述层零迁移）', rKp.trend, rDefault.trend);
+    eq('kongpo dupMode 字段照写', rKp.yongshen.dupMode, 'kongpo');
+  } finally { C.ysDupMode = 'priority'; }
+
+  // ③ 破分歧：无空分歧而破者/不破者并存（亥月，巳火逢冲为破，午火不破）
+  const panPo = mkDupPan([], 11);
+  panPo.lines[1] = mkLine({ pos: 1, zhi: '巳', zhiIdx: 5, wx: '火', lq: '妻财' });
+  try {
+    C.ysDupMode = 'kongpo';
+    const rPo = C.analyze(panPo, '妻财');
+    const dupPo = rPo.judgments.filter(function (j) { return j.tag === '两现' && j.rule === '用空破者应期'; });
+    eq('破分歧出断语', dupPo.length, 1);
+    eq('破锚点 kind=po', dupPo[0].anchor.zhi === '巳' && dupPo[0].anchor.kind === 'po', true);
+  } finally { C.ysDupMode = 'priority'; }
+
+  // ④ 无分歧静默回退（两现但无空破）：与默认口径完全一致
+  try {
+    C.ysDupMode = 'kongpo';
+    const rSilent = C.analyze(mkDupPan([], 8), '妻财');
+    eq('无分歧静默回退', rSilent.judgments.filter(function (j) { return j.tag === '两现'; }).length, 0);
+  } finally { C.ysDupMode = 'priority'; }
+
+  // ⑤ 还原后输出与默认一致
+  const rRestore = C.analyze(panDup, '妻财');
+  eq('还原默认后断语数一致', rRestore.judgments.length, rDefault.judgments.length);
+  eq('还原默认后无两现断语', rRestore.judgments.filter(function (j) { return j.tag === '两现'; }).length, 0);
+})();
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);
 

@@ -1953,6 +1953,48 @@
       '混成一个「准确率」既不反映短线也不反映长线。样本尚少时以上只是忠实计数，不构成预测效力的证据。</div></div>';
   }
 
+  // ---------- 回访提醒（M18·任务⑦）：惰性回访，打开卦例库时拉取到期任务 ----------
+  // 文案红线：只说「已到回访期，请回填结果与应验情况」；预判桶位带「当时判据预计」前缀；
+  // 不出现「准确率/命中率/说对说错」类词；预判绝不预填回填表单。
+  function renderDueTasks(data) {
+    const box = $('#libDue');
+    if (!box) return;
+    const tasks = (data && data.tasks) || [];
+    if (!tasks.length) { box.innerHTML = ''; return; }
+    const rows = tasks.map(function (t) {
+      const label = t.question ? esc(t.question) + ' · ' + esc(t.hex || '') : '原卦例已删除（id ' + esc(t.cast_id) + '）';
+      return '<div class="lib-item" data-cast="' + escAttr(t.cast_id) + '"><span>' + label +
+        '<span class="muted">　·　' + esc(t.due_at) + ' 已到回访期，请回填结果与应验情况</span>' +
+        (t.note ? '<br><span class="muted" style="font-size:12px">' + esc(t.note) + '</span>' : '') + '</span>' +
+        '<span class="lib-side">' +
+        (t.question ? '<button class="btn" data-due-go="' + escAttr(t.cast_id) + '">去回填</button>' : '') +
+        '<button class="btn ghost" data-due-dismiss="' + escAttr(t.cast_id) + '">不再提醒</button>' +
+        '</span></div>';
+    }).join('');
+    box.innerHTML = '<div class="verdict" style="padding:10px 14px"><b>回访提醒</b>　' + tasks.length + ' 条已到回访期' +
+      '<div style="margin-top:6px">' + rows + '</div>' +
+      '<div class="muted" style="margin-top:6px;font-size:12px">回访只提醒「该回头看这条卦了」；回填与否、回填内容一律据实，以结果回执为唯一事实源。</div></div>';
+  }
+
+  async function loadDueTasks() {
+    try {
+      const res = await apiFetch('/api/readings', {});
+      if (!res.ok) { renderDueTasks({ tasks: [] }); return; }
+      renderDueTasks(await res.json());
+    } catch (e) { /* 回访提醒是辅助功能，失败静默不打断卦例库主流程 */ }
+  }
+
+  async function dismissDueTask(castId) {
+    try {
+      const res = await apiFetch('/api/readings', {
+        method: 'POST', body: JSON.stringify({ cast_id: castId, action: 'dismissed' })
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.message || '操作失败');
+      await loadDueTasks();
+    } catch (e) { alert('操作失败：' + e.message); }
+  }
+
   // 列表分页（L2）：服务端 limit 默认 100/上限 200，前端按页追加。
   // 旧版硬编码 LIMIT 100，第 101 条之后只能靠 id 直访，列表里永久不可见。
   const LIB_PAGE = 100;
@@ -2012,6 +2054,10 @@
   if (_libList) _libList.addEventListener('click', function (e) {
     const t = e.target;
     if (!t || !t.closest) return;
+    const go = t.closest('[data-due-go]');
+    if (go) { loadCast(go.dataset.dueGo); return; }
+    const dis = t.closest('[data-due-dismiss]');
+    if (dis) { dismissDueTask(dis.dataset.dueDismiss); return; }
     const del = t.closest('.lib-del');
     if (del) { e.stopPropagation(); delCast(del.dataset.del); return; }
     const more = t.closest('[data-lib-more]');
@@ -2023,6 +2069,7 @@
   $('#btnLib').onclick = async function () {
     try {
       await loadLibPage(0, false);
+      loadDueTasks();   // 回访提醒与列表并行拉取，失败静默（辅助功能不打断主流程）
     } catch (e) {
       $('#libList').innerHTML = '<div class="muted">读取失败：' + esc(e.message) + '</div>';
     }

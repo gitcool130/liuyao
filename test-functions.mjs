@@ -23,6 +23,7 @@ import { customProviders, gptModelList, isSafeModelId } from './functions/api/_l
 import { onRequestGet as modelsGet } from './functions/api/models.js';
 import { onRequestPost as interpretPost, isRateLimited, __rlState, SYSTEM_PROMPT, deltaText, deltaReasoning } from './functions/api/interpret.js';
 import { onRequestGet as ogGet } from './functions/index.js';
+import { onRequestGet as readingsGet, onRequestPost as readingsPost, beijingToday } from './functions/api/readings.js';
 import { decodeCast as facadeDecode } from './functions/api/_share.js';
 import { readFileSync } from 'node:fs';
 
@@ -1034,6 +1035,77 @@ const hBroken = await rBroken.text();
 eq('锚点缺失 → 200 回退原样（不 500）', rBroken.status, 200);
 eq('锚点缺失 → og:title 保持默认', ogMeta(hBroken, 'og:title'), '六爻排盘 · 莲斋');
 eq('锚点缺失 → 原样响应头（etag 保留）', rBroken.headers.get('etag'), OG_ETAG);
+
+// ---------- #25 readings 回访闭环（M18·任务⑦，docs/proposal-readings-loop.md） ----------
+const BL_OK = { yongshen: '妻财 妻财卯木', trend: '吉', confidence: '中', spread: 2,
+  window: { status: 'ok', lo: 2, hi: 4, dayLo: '癸未', dayHi: '乙酉', text: '应期：出空之日' } };
+const BL_BLOCKED = { yongshen: '', trend: '', confidence: '', spread: null,
+  window: { status: 'blocked', blockedBy: ['no_yongshen'], text: '拒答' } };
+
+// ① 派生：window ok + 合法 datetime → INSERT OR IGNORE，due_at = 日期 + (hi+1) 日
+const dbRd = mkDb();
+await postRaw('', { panText: '排盘', tosses: [], messages: [], datetime: '2026-10-01 10:00:00', baseline: BL_OK },
+  { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbRd, LIB_CODE: 'k' });
+const rdSqlIdx = dbRd.state.sqls.findIndex(function (s) { return s.indexOf('INSERT OR IGNORE INTO readings') >= 0; });
+eq('主 POST 后追加回访派生写入', rdSqlIdx >= 0, true);
+eq('派生 SQL 为 INSERT OR IGNORE（幂等）', dbRd.state.sqls[rdSqlIdx].indexOf('OR IGNORE') >= 0, true);
+eq('due_at = 占问日 + (hi+1) 日（10-01 + 5 = 10-06）', dbRd.state.bound[rdSqlIdx][1], '2026-10-06');
+eq('note 带「当时判据预计」前缀（预判不预填）', dbRd.state.bound[rdSqlIdx][2].indexOf('当时判据预计') === 0, true);
+eq('note 不含回填值口径（d3 字样不出现）', dbRd.state.bound[rdSqlIdx][2].indexOf('d3') < 0, true);
+
+// ② blocked baseline / 缺 datetime / 无 baseline → 一律不派生（宁缺勿造）
+const dbNo1 = mkDb();
+await postRaw('', { panText: '排盘', tosses: [], messages: [], datetime: '2026-10-01 10:00:00', baseline: BL_BLOCKED },
+  { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbNo1, LIB_CODE: 'k' });
+eq('blocked baseline 不派生', dbNo1.state.sqls.some(function (s) { return s.indexOf('readings') >= 0; }), false);
+const dbNo2 = mkDb();
+await postRaw('', { panText: '排盘', tosses: [], messages: [], baseline: BL_OK },
+  { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbNo2, LIB_CODE: 'k' });
+eq('缺 datetime 不派生（日期不可信即不猜）', dbNo2.state.sqls.some(function (s) { return s.indexOf('readings') >= 0; }), false);
+const dbNo3 = mkDb();
+await postRaw('', { panText: '排盘', tosses: [], messages: [] }, { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbNo3, LIB_CODE: 'k' });
+eq('无 baseline 不派生（历史行为不变）', dbNo3.state.sqls.some(function (s) { return s.indexOf('readings') >= 0; }), false);
+
+// ③ 回填成功 → 任务置 acted；显式清除回执不触发
+const dbAct = mkDb();
+await postRaw('?outcome=1', { id: 'ok-1', outcome: { result: 'success', yingqi: 'on_time', window: 'd3' } },
+  { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbAct, LIB_CODE: 'k' });
+const actSql = dbAct.state.sqls.filter(function (s) { return s.indexOf("UPDATE readings SET status = 'acted'") >= 0; });
+eq('回填成功后派生任务置 acted', actSql.length, 1);
+eq('acted 更新只针对 pending 且绑定 cast_id', actSql[0].indexOf("status = 'pending'") >= 0 && dbAct.state.bound[dbAct.state.bound.length - 1][1] === 'ok-1', true);
+const dbClear = mkDb();
+await postRaw('?outcome=1', { id: 'ok-1', outcome: null }, { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbClear, LIB_CODE: 'k' });
+eq('清除回执不关闭任务', dbClear.state.sqls.some(function (s) { return s.indexOf('UPDATE readings') >= 0; }), false);
+
+// ④ /api/readings GET：口令同源、禁 SELECT *、due_at 过滤
+const rdGet = function (headers, env) {
+  return readingsGet({ request: new Request('https://x/api/readings', { headers: headers || {} }), env: env || { LIUYAO_DB: mkDb(), LIB_CODE: 'k' } });
+};
+eq('readings GET 无口令 → 401', (await rdGet()).status, 401);
+const dbRg = mkDb();
+dbRg.state.rows = [{ id: 'r1', cast_id: 'ok-1', due_at: '2026-10-06', note: 'n', question: '测事', hex: '乾为天' }];
+const rRg = await rdGet({ 'X-Access-Code': 'k' }, { LIUYAO_DB: dbRg, LIB_CODE: 'k' });
+eq('readings GET 带口令 → 200', rRg.status, 200);
+eq('readings SQL 禁 SELECT *（正文不下发）', dbRg.state.sqls[0].indexOf('SELECT *') < 0 && dbRg.state.sqls[0].indexOf('pan_text') < 0, true);
+eq('readings SQL 按到期日过滤（due_at <= 北京今天）', /r\.due_at <= \?/.test(dbRg.state.sqls[0]) && dbRg.state.bound[0][0] === beijingToday(), true);
+const rRgBody = await rRg.json();
+eq('到期任务下发 question/hex 供辨认', rRgBody.tasks[0].question === '测事' && rRgBody.tasks[0].hex === '乾为天', true);
+
+// ⑤ /api/readings POST dismissed：口令、白名单、pending 限定
+const rdPost = function (body, headers, env) {
+  return readingsPost({
+    request: new Request('https://x/api/readings', { method: 'POST', headers: Object.assign({ 'content-type': 'application/json' }, headers || {}), body: JSON.stringify(body) }),
+    env: env || { LIUYAO_DB: mkDb(), LIB_CODE: 'k' }
+  });
+};
+eq('readings POST 无口令 → 401', (await rdPost({ cast_id: 'ok-1', action: 'dismissed' })).status, 401);
+eq('readings POST 非法 cast_id → 400', (await rdPost({ cast_id: 'bad id', action: 'dismissed' }, { 'X-Access-Code': 'k' })).status, 400);
+eq('readings POST 非法 action → 400', (await rdPost({ cast_id: 'ok-1', action: 'acted' }, { 'X-Access-Code': 'k' })).status, 400);
+const dbDis = mkDb();
+const rDis = await rdPost({ cast_id: 'ok-1', action: 'dismissed' }, { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbDis, LIB_CODE: 'k' });
+eq('dismissed → 200 且只关 pending', rDis.status === 200 && dbDis.state.sqls[0].indexOf("status = 'pending'") >= 0, true);
+dbDis.state.changes = 0;
+eq('无待回访任务 → 404', (await rdPost({ cast_id: 'ok-1', action: 'dismissed' }, { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbDis, LIB_CODE: 'k' })).status, 404);
 
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);
