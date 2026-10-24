@@ -27,6 +27,16 @@
   // question-shape 是后加的第五块（多选一问法检测与改写建议），
   // 同样按「缺了就降级关闭」处理，不影响断卦主流程。
   const HAS_SHAPE = typeof C.questionShape === 'function';
+  // 应期域层（core/yingqi-window.js）：把扁平应期线索换算成区间＋置信度。
+  const HAS_WINDOW = typeof C.yingqiWindow === 'function';
+  // 链接层（core/share.js）：盘面种子的序列化/反序列化（只存种子，不存断语）。
+  const HAS_SHARE = typeof C.encodeCast === 'function' && typeof C.decodeCast === 'function';
+  if (!HAS_WINDOW) {
+    console.warn('[liuyao] core/yingqi-window.js 未加载，应期区间与置信度已降级关闭（仅保留线索陈述）。');
+  }
+  if (!HAS_SHARE) {
+    console.warn('[liuyao] core/share.js 未加载，分享链接与按链接还原盘面已降级关闭。');
+  }
   if (!HAS_ABSORB) {
     console.warn('[liuyao] core/sensitive.js / domain-methods.js / fact-audit.js 未加载，' +
       '敏感分流、分析方法注入与断后事实审计已降级关闭。');
@@ -287,6 +297,12 @@
     const sb = $('#senseBox'); if (sb) { sb.hidden = true; sb.innerHTML = ''; lastSensitive = null; }
     const shb = $('#shapeBox'); if (shb) { shb.hidden = true; shb.innerHTML = ''; }
     const bnh = $('#byNameHint'); if (bnh) bnh.innerHTML = '';
+    const shh = $('#shareHint'); if (shh) shh.innerHTML = '';
+    const yqb = $('#yingqiBox'); if (yqb) { yqb.hidden = true; yqb.innerHTML = ''; }
+    // 清掉地址栏的分享参数：否则刷新页面又回到旧盘，与「重新起卦」的语义冲突
+    try {
+      if (location.search.indexOf('s=') >= 0) history.replaceState(null, '', location.pathname);
+    } catch (e) { /* file:// 或受限环境忽略 */ }
     const bai = $('#btnAI'); if (bai) bai.disabled = false;
     renderTime(); renderCoins(); renderTossHint(); renderStack();
   };
@@ -527,11 +543,13 @@
       // 清空旧分析：否则断后审查会拿「上一次所选事类」的 judgments
       // 去撞自定义事由的断语，必然误报（如旧选妻财、新问跳槽取官鬼）。
       lastAnalysis = null;
+      renderYingqi(null);
       return;
     }
     if (!pan) {
       list.innerHTML = '<li>先完成起卦，再选所测之事。</li>';
       vBox.hidden = true; lastBullets = []; lastAnalysis = null;
+      renderYingqi(null);
       return;
     }
     // 自定义事由带具体文本时，把事由一并交给规则链：「用神克世」的吉凶随占类翻转
@@ -562,6 +580,29 @@
       yq = '<div class="muted" style="margin-top:6px">应期线索：' + esc(res.yingqiClues.join('；')) + '</div>';
     }
     vBox.innerHTML = '<b>粗判（' + TREND_LABEL[res.trend] + '）</b>　' + res.verdict + yq;
+    renderYingqi(res.yingqiWindow);
+  }
+
+  // ---------- 应期窗口（core/yingqi-window.js） ----------
+  // 展示「区间 + 置信度 + 依据 + 下调原因」。与旺衰粗判分开一栏，是因为二者性质不同：
+  // 粗判答「成不成」，应期答「什么时候能验」——后者是本项目唯一可被事后核对的对象
+  // （回执分桶统计的横轴就是它）。blocked 时不写「近期」兜底，直接说明为何不立应期。
+  function renderYingqi(w) {
+    const box = $('#yingqiBox');
+    if (!box) return;
+    if (!w) { box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+    // 置信度徽标刻意不套「成/败」的红绿色：那两色在本页表示事之成败，
+    // 借来标置信会被读成吉凶（高置信≠吉）。此处只用中性徽标 + 明确措辞。
+    const badge = '<span class="oc-badge" title="盘面要素的自洽程度，不是命中概率">置信' +
+      esc(w.confidence === '中' ? '中等' : w.confidence) + '</span>';
+    box.innerHTML = '<b>应期窗口</b>　' + esc(w.text.replace(/^应期：/, '')) + '　' + badge +
+      (w.basis && w.basis.length
+        ? '<div class="muted" style="margin-top:6px">依据：' + esc(w.basis.join('；')) + '</div>' : '') +
+      (w.downgrades && w.downgrades.length
+        ? '<div class="muted" style="margin-top:4px">下调原因：' + esc(w.downgrades.join('；')) + '</div>' : '') +
+      '<div class="muted" style="margin-top:4px;font-size:12px">区间由出空／冲空／值日／出月／逢冲等盘面要素换算；' +
+      '置信度只表示要素之间的自洽程度，不是命中概率。</div>';
   }
   $('#useSelect').onchange = function () { renderAnalysis(); if ($('#useCustom').hidden === false) $('#useCustom').focus(); };
   // 自定义事由逐字输入即重算分流：写到「能不能活多久」这类词时立刻拦截，
@@ -613,6 +654,18 @@
         txt += '- ' + b.replace(/<[^>]+>/g, '') + '\n';
       });
     }
+    // 应期窗口：由规则链把出空／冲空／值日／出月／逢冲换算成具体天数。
+    // 不注入这一段时，模型只能写「近期会有变化」——线索里没有时间刻度，
+    // 它没法更具体。注入后模型的任务从「猜时间」变为「解释这个区间」。
+    if (lastAnalysis && lastAnalysis.yingqiWindow) {
+      const w = lastAnalysis.yingqiWindow;
+      txt += '\n【应期窗口（规则链换算 · 非推断）】\n' + (typeof C.yingqiText === 'function' ? C.yingqiText(w) : w.text) + '\n';
+      txt += '- 区间由盘面要素（出空／冲空／值日／出月／逢冲／引拔）换算而来；置信度表示这些要素的自洽程度，不是命中概率。\n';
+      if (forAI) {
+        txt += '- 正文与「应期」行须落在该区间内，并沿用其置信度；若认定区间有误，须指明依据与上述哪一条要素冲突，' +
+          '不得只写「近期」「不久」这类无法核对的措辞。\n';
+      }
+    }
     if (forAI && lastAnalysis && lastAnalysis.trend) {
       // 引擎判定：aggregateTrend 的确定性结论。旧版算出了 trend 却从不注入，
       // 模型无从得知，于是同一张盘、同一 provider 两次调用可断出相反结论
@@ -658,6 +711,42 @@
       navigator.clipboard.writeText(txt).then(done).catch(function () { fallbackCopy(txt); done(); });
     } else { fallbackCopy(txt); done(); }
   };
+  // ---------- 分享链接（core/share.js） ----------
+  // 只序列化「种子」：占时（北京墙上时间，分钟级）+ 六爻爻值 + 所测之事 + 用神类别。
+  // 断语不进链接：同一盘在任何浏览器重算必得同一盘（确定性），而断语是条件生成，
+  // 塞进 URL 会让链接变成「别人家模型当时怎么说的」的二手存档。
+  function currentShareCode() {
+    if (!HAS_SHARE || !pan || records.length !== 6) return '';
+    const useVal = $('#useSelect').value;
+    return C.encodeCast({
+      time: selectedDate,
+      vals: records.map(function (r) { return r.val; }),
+      use: useVal,
+      question: useVal === '__custom__' ? currentQuestion() : ''
+    });
+  }
+  $('#btnShare').onclick = function () {
+    const btn = $('#btnShare'), hint = $('#shareHint');
+    if (!pan || records.length !== 6) {
+      if (hint) hint.textContent = '先完成起卦，再分享盘面。';
+      return;
+    }
+    const code = currentShareCode();
+    if (!code) {
+      if (hint) hint.textContent = '当前盘面无法生成分享参数（占时超出 1900–2100 或爻值异常）。';
+      return;
+    }
+    const url = C.shareUrl(code);
+    const done = function () {
+      btn.textContent = '已复制 ✓';
+      if (hint) hint.textContent = '链接只含占时、爻值与所测之事，不含任何断语；打开方看到的盘与本地逐字一致。';
+      setTimeout(function () { btn.textContent = '复制分享链接'; }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(done).catch(function () { fallbackCopy(url); done(); });
+    } else { fallbackCopy(url); done(); }
+  };
+
   function fallbackCopy(txt) {
     const ta = document.createElement('textarea');
     ta.value = txt; document.body.appendChild(ta);
@@ -1003,6 +1092,13 @@
     '若认为某条判语有误，须先引古法原文说明理由，再另行推断，不得静默绕过或只字不提。',
     '【结论须带依据】每条吉凶与应期结论后，用括号注明所依据的盘面要素（用神／世应／月建／日辰／动爻／旬空）；' +
     '找不到盘面依据的推断只能标为存疑，不得写成结论。',
+    // ↓ 2026-10-24：应期须落在引擎换算出的窗口内（与 functions/api/interpret.js 逐字符一致）。
+    //   此前排盘文本只给扁平线索，模型只能写「近期会有变化」——线索里没有时间刻度，
+    //   它没法更具体；本段把「猜时间」变成「解释这个区间」。
+    '【应期按域】排盘文本已给出「应期窗口」（区间＋置信度＋依据＋下调原因），系规则链由出空／冲空／值日／出月／逢冲换算而来。' +
+    '「应期」行须落在该区间内、沿用其置信度，并写明下调原因；不得脱离区间另给时间，也不得只写「近期」「不久」「看后续」这类无法核对的措辞。' +
+    '短线（日、旬内）以日辰冲动、值日、出空为据；长线（月、年）以月建旺衰、旬空填实、伏神出现为据——两者不得互相套用。' +
+    '若认定区间有误，须指明与哪一条盘面要素冲突。',
     // ↓ 2026-10-21：断语结论须与引擎 aggregateTrend 同向（与 functions/api/interpret.js 逐字符一致）。
     //   此前只注入盘面、不注入 trend：同一张盘同一 provider 两次调用断出相反结论（平/凶），trend 算了却没人用。
     '【结论对齐】排盘文本另附「引擎判定」一行（吉／平／凶），系规则链依古法算出的确定性结果，与本提示其余判语同源。' +
@@ -1716,6 +1812,11 @@
   // 样本不足时不宣称任何预测效力（见 README M16）。
   const OC_RESULT = { success: '事已成', fail: '事败', partial: '部分应验', unclear: '成败未明' };
   const OC_YINGQI = { on_time: '应期准', missed: '应期不准', pending: '应期未至', unclear: '应期未明' };
+  // 应验窗口分桶（M17）：3 / 7 / 30 / 90 日以上。
+  // 分桶不是分类癖：短线应期靠日辰冲动、值日、出空；长线靠月建旺衰、旬空填实、伏神出现。
+  // 两者机制不同，混池求出的「准确率」既不能反映短线也不能反映长线，故统计口径一律分行报。
+  const OC_WINDOW = { d3: '3 日内', d7: '7 日内', d30: '30 日内', d90: '90 日以上' };
+  const OC_WINDOW_ORDER = ['d3', 'd7', 'd30', 'd90'];
   function parseOutcome(raw) {
     if (!raw) return null;
     let o = raw;
@@ -1736,28 +1837,49 @@
     if (pick(OC_YINGQI, o.yingqi)) parts.push(OC_YINGQI[o.yingqi]);
     return '<span class="oc-badge' + cls + '" title="结果回执">' + esc(parts.join(' · ')) + '</span>';
   }
-  // 命中率汇总：只按已回填且判定明确的样本计数；unclear/pending 属「尚无定论」，不进率值分母
+  // 命中率汇总：按「应验窗口」分桶报，**绝不混池**。
+  // 每桶内部：事之成败（成/部分/败，判定明确者为分母）＋ 应期验证（按时/未按时）。
+  // unclear / pending 属「尚无定论」，不进任何分母；未标窗口的样本单列，不计入桶。
   function renderLibStats(recs) {
     const box = $('#libStats');
     if (!box) return;
     const filled = recs.map(function (r) { return parseOutcome(r.outcome); }).filter(Boolean);
     if (!filled.length) {
       box.innerHTML = recs.length
-        ? '<div class="muted">尚无结果回执。点开卦例详情可回填「事之成败 / 应期是否按时应验」，攒够样本后可估命中率。</div>'
+        ? '<div class="muted">尚无结果回执。点开卦例详情可回填「事之成败 / 应期是否按时应验 / 应验窗口」，攒够样本后可估命中率。</div>'
         : '';
       return;
     }
-    const cnt = function (key) { return filled.filter(function (o) { return o.result === key; }).length; };
-    const ycnt = function (key) { return filled.filter(function (o) { return o.yingqi === key; }).length; };
-    const decided = cnt('success') + cnt('fail') + cnt('partial');
-    const ydecided = ycnt('on_time') + ycnt('missed');
     const pct = function (a, b) { return b ? '（' + Math.round(a * 100 / b) + '%）' : ''; };
-    box.innerHTML = '<div class="verdict" style="padding:10px 14px"><b>命中率统计</b>　已回填 ' + filled.length + ' / ' + recs.length + ' 例' +
-      '<div class="muted" style="margin-top:4px">事之成败（判定明确 ' + decided + ' 例）：成 ' + cnt('success') + pct(cnt('success'), decided) +
-      ' · 部分 ' + cnt('partial') + pct(cnt('partial'), decided) + ' · 败 ' + cnt('fail') + pct(cnt('fail'), decided) + '</div>' +
-      '<div class="muted">应期验证（应期已至 ' + ydecided + ' 例）：按时 ' + ycnt('on_time') + pct(ycnt('on_time'), ydecided) +
-      ' · 未按时 ' + ycnt('missed') + pct(ycnt('missed'), ydecided) + '；另 ' + ycnt('pending') + ' 例应期未至</div>' +
-      '<div class="muted" style="margin-top:4px">样本尚少，以上只是忠实计数，不构成预测效力的证据；Brier score 等待样本量足够后再算。</div></div>';
+
+    const rowHTML = function (label, list) {
+      if (!list.length) return '';
+      const cnt = function (k) { return list.filter(function (o) { return o.result === k; }).length; };
+      const ycnt = function (k) { return list.filter(function (o) { return o.yingqi === k; }).length; };
+      const decided = cnt('success') + cnt('fail') + cnt('partial');
+      const ydecided = ycnt('on_time') + ycnt('missed');
+      return '<div class="muted" style="margin-top:4px"><b>' + esc(label) + '</b>（n=' + list.length + '）　' +
+        '成 ' + cnt('success') + pct(cnt('success'), decided) +
+        ' · 部分 ' + cnt('partial') + ' · 败 ' + cnt('fail') + pct(cnt('fail'), decided) +
+        '　｜　应期按时 ' + ycnt('on_time') + '/' + ydecided +
+        (ycnt('pending') ? '（另 ' + ycnt('pending') + ' 例应期未至）' : '') +
+        '</div>';
+    };
+
+    let rows = '';
+    OC_WINDOW_ORDER.forEach(function (k) {
+      rows += rowHTML(OC_WINDOW[k], filled.filter(function (o) { return o.window === k; }));
+    });
+    const noWin = filled.filter(function (o) { return !pick(OC_WINDOW, o.window); });
+
+    box.innerHTML = '<div class="verdict" style="padding:10px 14px"><b>命中率统计（按应验窗口分桶）</b>　已回填 ' +
+      filled.length + ' / ' + recs.length + ' 例' +
+      (rows || '<div class="muted" style="margin-top:4px">尚未标注任何应验窗口。</div>') +
+      (noWin.length
+        ? '<div class="muted" style="margin-top:4px">未标应验窗口 ' + noWin.length + ' 例（不计入任何桶）：回执表单里选「应验窗口」后才会进分桶统计。</div>'
+        : '') +
+      '<div class="muted" style="margin-top:6px">分桶之间不可相加——3 日样本走日辰冲动／值日／出空，90 日样本走月建旺衰／填实／伏神，' +
+      '混成一个「准确率」既不反映短线也不反映长线。样本尚少时以上只是忠实计数，不构成预测效力的证据。</div></div>';
   }
 
   // 列表分页（L2）：服务端 limit 默认 100/上限 200，前端按页追加。
@@ -1879,7 +2001,7 @@
       // 天然带时间戳，不需主观标注「准不准」，只记「那天发生了没有」。
       const oc = parseOutcome(r.outcome);
       const ocNow = oc
-        ? [pick(OC_RESULT, oc.result), pick(OC_YINGQI, oc.yingqi)].filter(Boolean).join(' · ') +
+        ? [pick(OC_RESULT, oc.result), pick(OC_YINGQI, oc.yingqi), pick(OC_WINDOW, oc.window)].filter(Boolean).join(' · ') +
           (oc.note ? '　备注：' + oc.note : '') +
           (oc.updated_at ? '　（记于 ' + String(oc.updated_at).slice(0, 10) + '）' : '')
         : '尚未回填';
@@ -1896,6 +2018,9 @@
         '<option value="fail">事败</option><option value="partial">部分应验</option><option value="unclear">成败未明</option></select>' +
         '<select id="ocYingqi"><option value="">应期…</option><option value="on_time">应期准（按时应验）</option>' +
         '<option value="missed">应期不准</option><option value="pending">应期未至</option><option value="unclear">应期未明</option></select>' +
+        '<select id="ocWindow" title="结果在多久内出现？决定该样本进哪个统计桶（分桶之间不可相加）">' +
+        '<option value="">应验窗口…</option><option value="d3">3 日内</option><option value="d7">7 日内</option>' +
+        '<option value="d30">30 日内</option><option value="d90">90 日以上</option></select>' +
         '<input id="ocNote" maxlength="200" placeholder="备注（≤200 字，可留空）">' +
         '<button class="btn primary" id="btnOcSave">保存回执</button>' +
         (oc ? '<button class="btn ghost" id="btnOcClear">清除回执</button>' : '') +
@@ -1907,6 +2032,7 @@
       if (oc) {
         if (oc.result) $('#ocResult').value = oc.result;
         if (oc.yingqi) $('#ocYingqi').value = oc.yingqi;
+        if (oc.window) $('#ocWindow').value = oc.window;
         if (oc.note) $('#ocNote').value = oc.note;
       }
       const saveOutcome = async function (outcome) {
@@ -1929,7 +2055,10 @@
         } finally { if (btn) btn.disabled = false; }
       };
       $('#btnOcSave').onclick = function () {
-        const outcome = { result: $('#ocResult').value, yingqi: $('#ocYingqi').value, note: $('#ocNote').value };
+        const outcome = {
+          result: $('#ocResult').value, yingqi: $('#ocYingqi').value,
+          window: $('#ocWindow').value, note: $('#ocNote').value
+        };
         if (!outcome.result && !outcome.yingqi) { $('#ocMsg').textContent = '请至少选择「事之成败」或「应期」之一。'; return; }
         saveOutcome(outcome);
       };
@@ -1960,6 +2089,53 @@
     if (el) el.onkeydown = function (e) { if (e.key === 'Enter' && !e.isComposing) castByName(); };
   });
 
+  // ---------- 按分享链接还原盘面 ----------
+  // 一律进补录模式：现场模式会在首次摇卦时把占时锁到「此刻」，从而覆盖链接里的占时。
+  // 还原走 dateOfWall（挂 __wall 锚点），与 fourPillars 的取时口径同源——
+  // 若按 epoch 毫秒反解，UTC+8 以外的人会读出不同年月柱。
+  function restoreFromShare() {
+    if (!HAS_SHARE) return false;
+    let code = '';
+    try { code = new URLSearchParams(location.search).get('s') || ''; } catch (e) { return false; }
+    if (!code) return false;
+    const hint = $('#shareHint');
+    const d = C.decodeCast(code);
+    if (!d.ok) {
+      if (hint) hint.innerHTML = '<span class="warn">分享参数无法解析（' + esc(d.reason) + '），已按空白起卦。</span>';
+      return false;
+    }
+    timeMode = 'backfill';
+    timeLocked = false;
+    lockedDate = null;
+    selectedDate = C.dateOfWall(d.wall);
+    records = d.vals.map(function (v) {
+      const coins = coinsFromVal(v);
+      return {
+        coins: coins,
+        backs: coins.filter(function (c) { return c === '背'; }).length,
+        val: v, mode: 'share'
+      };
+    });
+    resetTossState();
+    // 末爻置为「已落」以待呈现：否则 renderTossHint 会落到「手动录入 · 后果自负」
+    // 那条分支，与「盘面由链接还原」的事实不符。
+    const lastRec = records[records.length - 1];
+    if (lastRec) revealed = { coins: lastRec.coins.slice(), val: lastRec.val };
+    if (d.use) {
+      const sel = $('#useSelect');
+      sel.value = (d.use === '__custom__' && !d.question) ? '' : d.use;
+      const uc = $('#useCustom');
+      if (d.use === '__custom__' && d.question && uc) { uc.value = d.question; uc.hidden = false; }
+    }
+    renderTime(); renderCoins(); renderTossHint(); renderStack();
+    computePan();
+    if (hint) {
+      hint.innerHTML = '已按分享链接还原盘面（' + esc(pan ? pan.benName : '') +
+        '）· 断语不在链接里，需重新断卦。';
+    }
+    return true;
+  }
+
   renderModelChips();
   loadModels();
   renderLoginBtn();
@@ -1967,4 +2143,5 @@
   renderCoins();
   renderTossHint();
   renderStack();
+  restoreFromShare();
 })();

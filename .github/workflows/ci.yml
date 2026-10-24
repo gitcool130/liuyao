@@ -50,6 +50,8 @@ jobs:
           node --check public/core/question-shape.js
           node --check public/core/fact-audit.js
           node --check public/core/coverage-audit.js
+          node --check public/core/yingqi-window.js
+          node --check public/core/share.js
           node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON -e "
           // Functions 为 ESM（含 import 声明），动态 import 既验语法也验依赖解析
           // 注：Pages Functions 的 .js 一律按 ESM 处理，与 package.json 的 type 无关，
@@ -64,7 +66,7 @@ jobs:
           // 去掉 ?v=xxx 缓存戳再比对：版本参数随时会改，但加载顺序不能变
           const s=[...html.matchAll(/<script src=\"([^\"]+)\"><\/script>/g)].map(m=>m[1].replace(/\?.*$/,''));
           // 后五个为上层契约层：依赖 paipan/analyze 的输出，必须排在 analyze.js 之后
-          const expect=['core/data.js','core/data-jieqi.js','core/calendar.js','core/paipan.js','core/analyze.js','core/sensitive.js','core/domain-methods.js','core/question-shape.js','core/fact-audit.js','core/coverage-audit.js','app.js','bgm.js'];
+          const expect=['core/data.js','core/data-jieqi.js','core/calendar.js','core/paipan.js','core/analyze.js','core/sensitive.js','core/domain-methods.js','core/question-shape.js','core/fact-audit.js','core/coverage-audit.js','core/yingqi-window.js','core/share.js','app.js','bgm.js'];
           if(JSON.stringify(s)!==JSON.stringify(expect)){console.error('脚本加载顺序错误:',s);process.exit(1)}
           console.log('脚本加载顺序 ✓');
           "

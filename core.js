@@ -8,9 +8,13 @@
  *   → public/core/sensitive.js → public/core/domain-methods.js
  *   → public/core/question-shape.js
  *   → public/core/fact-audit.js → public/core/coverage-audit.js
+ *   → public/core/yingqi-window.js → public/core/share.js
  * （public/index.html 已如此引用；本文件不参与浏览器加载链路）
  * 后五个为「上层契约层」：不参与排盘，只做分流、方法注入、问法检测
  * 与断后审计，依赖 paipan.js 的输出，故必须排在 analyze.js 之后。
+ * yingqi-window 为「应期域层」：把 analyze 的扁平线索换算成区间与置信度
+ * （analyze 里以 typeof 守卫惰性调用，缺此模块不阻断断卦）；
+ * share 为「链接层」：盘面种子的序列化/反序列化，不依赖 LY 任何模块。
  *
  * Node：require('./core.js') 聚合全部模块，对外 API 与
  * window.LY 完全一致（测试层入口）。
@@ -26,6 +30,8 @@ if (typeof window === 'undefined') {
   require('./public/core/question-shape.js');
   require('./public/core/fact-audit.js');
   require('./public/core/coverage-audit.js');
+  require('./public/core/yingqi-window.js');
+  require('./public/core/share.js');
   module.exports = globalThis.LY;
 } else {
   // 浏览器兜底：若单独引入本文件（旧页面），提示正确用法与完整顺序
@@ -41,6 +47,8 @@ if (typeof window === 'undefined') {
       '  <script src="core/question-shape.js"></script> <!-- 多选一问法检测与改写建议 -->\n' +
       '  <script src="core/fact-audit.js"></script> <!-- 断语事实审计 -->\n' +
       '  <script src="core/coverage-audit.js"></script> <!-- 断语推理审查 -->\n' +
+      '  <script src="core/yingqi-window.js"></script> <!-- 应期区间与置信度 -->\n' +
+      '  <script src="core/share.js"></script>        <!-- 盘面分享链接 -->\n' +
       '（以上路径相对部署根 public/，在仓库根运行测试请用 public/core/ 前缀）');
   }
 }

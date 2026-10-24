@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS casts (
   tosses     TEXT,   -- JSON：摇卦记录
   pan_text   TEXT,   -- 排盘文本
   messages   TEXT,   -- JSON：AI 断卦与进阶探讨对话历史
-  outcome    TEXT    -- JSON：结果回执（M16）{result, yingqi, note, updated_at}，未回填为 NULL
+  outcome    TEXT    -- JSON：结果回执（M16/M17）{result, yingqi, window, note, updated_at}，未回填为 NULL
 );
 
 -- 既有库补加 outcome 列（SQLite 支持 ALTER TABLE ADD COLUMN，无需重建表）：
@@ -26,7 +26,10 @@ CREATE TABLE IF NOT EXISTS casts (
 -- outcome 取值口径（functions/api/records.js 的 sanitizeOutcome 白名单）：
 --   result  ∈ success | fail | partial | unclear   （事之成败）
 --   yingqi  ∈ on_time | missed | pending | unclear （应期是否按时应验）
+--   window  ∈ d3 | d7 | d30 | d90                  （应验窗口分桶，M17 新增；可选）
 --   note    ≤ 200 字自由备注；updated_at 由服务端写入
+--   window 只用于**分桶统计**：3 日与 90 日不是同一套应期机制（短线靠日辰冲动/值日/出空，
+--   长线靠月建旺衰/旬空填实/伏神出现），跨桶相加得到的「准确率」没有意义。
 
 CREATE INDEX IF NOT EXISTS idx_casts_created ON casts(created_at DESC);
 

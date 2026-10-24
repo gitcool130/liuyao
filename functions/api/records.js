@@ -151,6 +151,12 @@ function noDb() {
 // 否则统计口径会被自由文本污染（「成了」「成了吧」「大概率成」无法汇总）。
 const OUTCOME_RESULTS = ['success', 'fail', 'partial', 'unclear'];   // 事之成败
 const OUTCOME_YINGQI = ['on_time', 'missed', 'pending', 'unclear'];  // 应期是否按时应验
+// 应验窗口分桶（M17）：3 日 / 7 日 / 30 日 / 90 日以上。
+// 为什么要分桶：术数里远近应期是两套机制——短线靠日辰冲动、值日、出空，
+// 长线靠月建旺衰、旬空填实、伏神出现。把两种样本混成一个「准确率」，
+// 这个数字就没有意义了（拿短线样本标定长线，是拿日辰冲动的规律去预测太岁）。
+// 故本字段只用于**分桶**，任何统计都不许跨桶相加。
+const OUTCOME_WINDOWS = ['d3', 'd7', 'd30', 'd90'];
 // 返回值三态：object = 合法回执；null = 显式清除；undefined = 非法输入（调用方应 400）
 export function sanitizeOutcome(o) {
   if (o === null) return null;
@@ -158,6 +164,7 @@ export function sanitizeOutcome(o) {
   const out = {};
   if (OUTCOME_RESULTS.indexOf(o.result) >= 0) out.result = o.result;
   if (OUTCOME_YINGQI.indexOf(o.yingqi) >= 0) out.yingqi = o.yingqi;
+  if (OUTCOME_WINDOWS.indexOf(o.window) >= 0) out.window = o.window;
   if (typeof o.note === 'string' && o.note.trim()) out.note = o.note.trim().slice(0, 200);
   if (!out.result && !out.yingqi) return undefined; // 成败与应期至少居其一
   out.updated_at = new Date().toISOString();

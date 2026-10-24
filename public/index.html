@@ -3,6 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 分享链接的卡片预览：站点级默认值。
+     按盘定制的 og:title（如「风火家人 之 泽火革」）需要在服务端按 ?s= 解码后注入
+     （抓取器不执行 JS，客户端改 meta 对预览无效）。本轮未做——那需要在 Functions 侧
+     再实现一份 share 码解码器，与 public/core/share.js 构成两份同格式实现，
+     一旦格式演进就会静默漂移；故先只保留站点级默认值，按盘预览列入后续事项。 -->
+<meta name="description" content="京房纳甲六爻排盘：确定性排盘引擎 + 规则链断语 + 多模型 AI 断卦，应期给区间与置信度，附古籍卦例回归。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="莲斋 · 六爻">
+<meta property="og:title" content="六爻排盘 · 莲斋">
+<meta property="og:description" content="京房纳甲六爻排盘，确定性引擎 + 规则链断语 + 多模型 AI 断卦。">
+<meta name="twitter:card" content="summary">
 <title>六爻排盘 · 莲斋</title>
 <style>
   :root {
@@ -326,8 +337,10 @@
     <div id="wxBlock"></div>
     <div class="btn-row">
       <button class="btn" id="btnCopy">复制排盘文本</button>
+      <button class="btn ghost" id="btnShare">复制分享链接</button>
       <button class="btn ghost" id="btnReset">重新起卦</button>
     </div>
+    <div class="muted" id="shareHint" style="margin-top:6px;font-size:12px"></div>
   </section>
 
   <!-- 断卦 -->
@@ -350,6 +363,7 @@
     <div id="shapeBox" hidden style="margin-top:12px"></div>
     <ul class="concl" id="conclList"></ul>
     <div class="verdict" id="verdictBox" hidden></div>
+    <div class="verdict" id="yingqiBox" hidden></div>
     <p class="muted" style="margin-top:12px">以上为旺衰硬规则的粗判。动爻组合、用神取舍、应期推断皆需通盘细审——可将排盘文本复制予 AI 或明师参断。</p>
   </section>
 
@@ -392,17 +406,19 @@
 
 <button id="bgmBtn" title="琴音 · 点击播放">琴</button>
 
-<script src="core/data.js?v=20261021c"></script>
-<script src="core/data-jieqi.js?v=20261021c"></script>
-<script src="core/calendar.js?v=20261021c"></script>
-<script src="core/paipan.js?v=20261021c"></script>
-<script src="core/analyze.js?v=20261021c"></script>
-<script src="core/sensitive.js?v=20261021c"></script>
-<script src="core/domain-methods.js?v=20261021c"></script>
-<script src="core/question-shape.js?v=20261021c"></script>
-<script src="core/fact-audit.js?v=20261021c"></script>
-<script src="core/coverage-audit.js?v=20261021c"></script>
-<script src="app.js?v=20261021c"></script>
-<script src="bgm.js?v=20261021c"></script>
+<script src="core/data.js?v=20261024a"></script>
+<script src="core/data-jieqi.js?v=20261024a"></script>
+<script src="core/calendar.js?v=20261024a"></script>
+<script src="core/paipan.js?v=20261024a"></script>
+<script src="core/analyze.js?v=20261024a"></script>
+<script src="core/sensitive.js?v=20261024a"></script>
+<script src="core/domain-methods.js?v=20261024a"></script>
+<script src="core/question-shape.js?v=20261024a"></script>
+<script src="core/fact-audit.js?v=20261024a"></script>
+<script src="core/coverage-audit.js?v=20261024a"></script>
+<script src="core/yingqi-window.js?v=20261024a"></script>
+<script src="core/share.js?v=20261024a"></script>
+<script src="app.js?v=20261024a"></script>
+<script src="bgm.js?v=20261024a"></script>
 </body>
 </html>

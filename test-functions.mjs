@@ -259,6 +259,18 @@ eq('回执合法全字段', (function () {
   return [o.result, o.yingqi, o.note, typeof o.updated_at];
 })(), ['partial', 'on_time', '如期', 'string']);
 
+// 应验窗口分桶（M17）：枚举白名单 + 只有窗口没有成败/应期时仍判非法。
+// 分桶口径的价值全在「桶内自洽」：3 日与 90 日是两套应期机制，跨桶相加没有意义。
+eq('回执窗口枚举内 → 保留', sanitizeOutcome({ result: 'success', window: 'd7' }).window, 'd7');
+eq('回执窗口枚举外 → 丢弃该字段但回执本身合法', (function () {
+  const o = sanitizeOutcome({ result: 'success', window: 'd5' });
+  return [o.result, o.window];
+})(), ['success', undefined]);
+eq('回执只有窗口 → 非法（窗口不能单独成回执）', sanitizeOutcome({ window: 'd3' }), undefined);
+eq('回执四档窗口全部接受', ['d3', 'd7', 'd30', 'd90'].filter(function (k) {
+  return sanitizeOutcome({ result: 'fail', window: k }).window === k;
+}).length, 4);
+
 // 回填端点：口令 / id / 回执三关各自独立拦截，且非法输入一律不下探数据库
 const postRaw = function (q, body, headers, env) {
   return onRequestPost({

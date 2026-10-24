@@ -1101,7 +1101,12 @@
       bullets.push(pick.note);
       bullets.push('【粗判】' + TREND_TEXT['待审'] + '（仅为旺衰规则粗判，非全卦结论）');
       // 形状与正常分支保持一致：消费侧可无条件读 yingqiLayers 三个数组
-      return { yongshen: null, judgments: judgments, trend: '待审', yingqiClues: [], yingqiLayers: { main: [], auxiliary: [], risk: [] }, bullets: bullets, verdict: TREND_TEXT['待审'] };
+      const outNo = { yongshen: null, judgments: judgments, trend: '待审', yingqiClues: [], yingqiLayers: { main: [], auxiliary: [], risk: [] }, bullets: bullets, verdict: TREND_TEXT['待审'] };
+      // 应期域层同样给形状（blocked: no_yongshen），消费侧不必分支
+      if (typeof LY.yingqiWindow === 'function') {
+        try { outNo.yingqiWindow = LY.yingqiWindow(pan, outNo); } catch (e) { outNo.yingqiWindow = null; }
+      }
+      return outNo;
     }
 
     const L = pick.primary;
@@ -1172,7 +1177,7 @@
     bullets.push('【粗判】' + TREND_TEXT[agg.trend] + '（由规则链汇聚，非算术评分；仅为旺衰粗判，非全卦结论）');
     if (clues.length) bullets.push('【应期线索】' + clues.join('；') + '。');
 
-    return {
+    const out = {
       yongshen: {
         type: target === 'shi' ? '世爻' : target,
         line: { pos: L.pos, zhi: L.zhi, wx: L.wx, lq: L.lq, moving: L.moving, isFu: !!L.isFu },
@@ -1199,6 +1204,15 @@
       bullets: bullets,
       verdict: TREND_TEXT[agg.trend]
     };
+
+    // 应期域层（core/yingqi-window.js）：把上面的扁平线索收敛为「区间＋置信度＋依据＋下调原因」。
+    // 可选依赖 —— 模块未加载（旧缓存页面）时保持 null，绝不阻断断卦主流程。
+    // 放在最后调用：本层读的是 out 自身的 yongshen / yjs / judgments / trend，
+    // 不参与排盘，也不改动任何既有字段（不影响 M1–M16 的任何断言）。
+    if (typeof LY.yingqiWindow === 'function') {
+      try { out.yingqiWindow = LY.yingqiWindow(pan, out); } catch (e) { out.yingqiWindow = null; }
+    }
+    return out;
   }
 
   // ---------- 导出（规则函数全部可独立单测） ----------
