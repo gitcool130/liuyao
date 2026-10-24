@@ -25,7 +25,8 @@
     "verify:live": "node tools/verify-live.mjs",
     "gen:guji": "node tools/guji-import.mjs",
     "gen:guji:bszz": "node tools/guji-import-bszz.mjs",
-    "gen:guji:all": "npm run gen:guji && npm run gen:guji:bszz"
+    "gen:guji:all": "npm run gen:guji && npm run gen:guji:bszz",
+    "test:prod": "node tools/smoke-prod.cjs"
   },
   "devDependencies": {
     "@taoracle/najia": "^0.1.0",

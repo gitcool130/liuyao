@@ -315,6 +315,7 @@ npm test                          # 快速环：基础自检 93 + 规则链 265 
 npm run test:fn                   # Functions 层单测 180 项（jsonWithin 合法性/常量时间口令/模型名白名单/去重与读鉴权/结果回执与分桶/gemini 跨模型降级）
 npm run test:paipan               # 排盘金标准回归 173 项（零依赖，只加载 core.js）
 npm run test:ui                   # UI 冒烟 62 断言（Playwright + Edge 通道，需先起本地静态服务）
+npm run test:prod -- <站点URL>     # 线上冒烟 24 断言（真实浏览器打通「起卦→应期→分享还原→重新起卦」，真域名下并检接口鉴权）
 npm run test:guji                 # 古籍卦例回归 12144 项断言（《增删卜易》207 +《卜筮正宗》197 + 断语用例 68）
 npm run test:guji:self            # 古籍回归变异自检 41 类（证明「全绿」不是空转）
 npm run guji:coverage             # 断卦规则覆盖率（当前 64/78 = 82.1%）
