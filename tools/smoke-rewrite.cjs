@@ -25,11 +25,16 @@ const FINAL = '【重写稿】坤为地，六冲之象，初阻后通。世应�
   '详解：此卦世爻旺相，忌神虽动而受制，故主先难后易。文书之事宜待出空再图，戌月之后自有转机。';
 
 (async () => {
+  // 本机网络到 CF 边缘偶发劣化（TTFB 十几秒）时，可用 SMOKE_PROXY 走本地代理：
+  //   SMOKE_PROXY=http://127.0.0.1:7890 node tools/smoke-rewrite.cjs
+  const netArgs = process.env.SMOKE_PROXY
+    ? ['--proxy-server=' + process.env.SMOKE_PROXY]
+    : ['--no-proxy-server'];
   const browser = await chromium.launch({
     channel: 'msedge', headless: true,
     // 无头环境没有音频设备，且自动播放策略会拦 Web Audio；这里放行策略，
     // 只用于验证「起播链路不抛错、按钮能进播放态」，不代表真机听感。
-    args: ['--no-proxy-server', '--autoplay-policy=no-user-gesture-required']
+    args: netArgs.concat(['--autoplay-policy=no-user-gesture-required'])
   });
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
@@ -38,7 +43,7 @@ const FINAL = '【重写稿】坤为地，六冲之象，初阻后通。世应�
   page.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
 
   console.log('== 1. 打开线上站点并起卦 ' + BASE);
-  await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 40000 });
+  await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForFunction(() => window.LY && typeof window.LY.shareUrl === 'function', null, { timeout: 20000 });
   for (let i = 0; i < 6; i++) {
     await page.click('#btnRandom'); await page.waitForTimeout(40);
@@ -144,9 +149,11 @@ const FINAL = '【重写稿】坤为地，六冲之象，初阻后通。世应�
   const s2 = await readBgm();
   ok('再点一次 → 恢复播放', s2.on === true, 'on=' + s2.on + ' / title=' + s2.title);
   console.log('  文案：初始「' + s0.title + '」→ 关「' + s1.title + '」→ 开「' + s2.title + '」');
-  // /api/records?verify=1 的 401 是「口令探测」的预期响应（无口令即 401，见 smoke-prod 的同类断言），
-  // 它会以「Failed to load resource: 401」形式落到 console，不算运行时错误。
-  const real = errs.filter(e => !/cloudflareinsights|challenge-platform|null: 401|status of 401/.test(e));
+  // console 里的「Failed to load resource」是资源加载失败（/api/records?verify=1 无口令 401、
+  // 或本机网络抖动导致的 ERR_CONNECTION_CLOSED），属预期/环境噪声，不是 JS 运行时错误；
+  // 真正的脚本异常走 pageerror，不在这里被过滤。
+  const real = errs.filter(e =>
+    !/cloudflareinsights|challenge-platform|Failed to load resource|status of 401|null: 401/.test(e));
   ok('无 JS 运行时错误', real.length === 0, real.join(' | '));
 
   await browser.close();
