@@ -38,6 +38,56 @@
     return c === actual || (c.length >= 2 && actual.indexOf(c) === 0);
   }
 
+  /** 剥掉书名号/引号/尾部「卦」，取规范卦名（sameGuaName 与卦名白名单共用） */
+  function normGuaName(s) {
+    return String(s == null ? '' : s)
+      .trim()
+      .replace(/^[《〈「『【(“‘"']+/, '')
+      .replace(/[》〉」』】)”’"']+$/, '')
+      .replace(/卦$/, '');
+  }
+
+  /* 64 卦名白名单（懒建：data.js 总在本模块之前加载）。
+   *
+   * 「本卦为X」里的 X 不一定是卦名。模型极常见的写法是
+   *   「**卦型**：本卦为六冲卦（坤为地）」
+   * 旧版把「六冲卦」当卦名直接比对盘面，于是每一篇把「卦型」写进「本卦为…」
+   * 句式的正常断语都被判成「本卦卦名：六冲卦 ≠ 坤为地」。
+   *
+   * 这条误报的代价不只是显示错：app.js 一旦收到未 accepted 的审计结果，
+   * 就会把冲突回灌给模型**整篇重写一次**，并把重写稿重新流式渲染到同一个气泡里
+   * ——用户观感正是「断语先出片段，收尾后又整篇重来一遍」。
+   * 2026-10-25 线上复现：gemini-3.8-flash 首稿 1718 字、结论四行齐全、warn 为空，
+   * 仍被判 1 处「本卦卦名：六冲卦 ≠ 坤为地」，随后触发整篇重写。
+   *
+   * 处理：只有当捕获片段确实是 64 卦名之一时才是「卦名断言」；不是就往后看一眼
+   * 括注里有没有点名真卦名（「本卦为六冲卦（坤为地）」以括号内为准），
+   * 都没有则本条不作断言——不报错，也不猜。 */
+  let GUA_NAMES = null;
+  function guaNameSet() {
+    if (!GUA_NAMES) {
+      GUA_NAMES = {};
+      const hn = LY.HEXNAMES || {};
+      for (const k in hn) { if (typeof hn[k] === 'string') GUA_NAMES[hn[k]] = true; }
+    }
+    return GUA_NAMES;
+  }
+  function isGuaName(s) {
+    const c = normGuaName(s);
+    return !!c && !!guaNameSet()[c];
+  }
+  /** 在片段里找最早出现的 64 卦名（同位置取较长者），找不到返回 '' */
+  function firstGuaNameIn(seg) {
+    const set = guaNameSet();
+    let best = '', bestAt = -1;
+    for (const n in set) {
+      const at = seg.indexOf(n);
+      if (at < 0) continue;
+      if (bestAt < 0 || at < bestAt || (at === bestAt && n.length > best.length)) { best = n; bestAt = at; }
+    }
+    return best;
+  }
+
   /**
    * 判断某个「N爻」断言说的是不是变卦。
    * 只看该断言之前最近一次出现的「变卦/之卦/变体」与「本卦/原卦」谁更近：
@@ -119,7 +169,16 @@
       const re = new RegExp(pair[0] + '(?:为|是|：|:)\\s*([^\\s，。；、（）()"\']+)', 'g');
       let mm;
       while ((mm = re.exec(src)) !== null) {
-        const claimed = mm[1];
+        let claimed = normGuaName(mm[1]);
+        // 捕获片段不是 64 卦名 → 本条说的是卦型/宫位等，不是卦名断言。
+        // 旧版拿它直接比对，是「本卦为六冲卦」一类正常写法被误报的唯一成因（见上）。
+        if (!isGuaName(claimed)) {
+          // 括注里点名了真卦名（「本卦为六冲卦（坤为地）」）时以括号内为准，
+          // 这样既不再误报「六冲卦≠坤为地」，又不放过「本卦为六冲卦（水雷屯）」这类真错。
+          const seg = src.slice(mm.index, mm.index + mm[0].length + 14);
+          claimed = firstGuaNameIn(seg);
+          if (!claimed) continue;   // 通篇没点名卦名：不作断言
+        }
         // 只比对「确实像卦名」的片段：卦名 3–5 字，过长的多半是「本卦为X之Y」这类连写
         if (claimed.length < 3 || claimed.length > 6) continue;
         // 静卦说「变卦为X」同样是凭空造盘：原实现遇 bianName 为空直接 return，

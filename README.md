@@ -314,7 +314,7 @@ CF AI Gateway 的缓存键 = provider + endpoint + model + 鉴权头 + **整个�
 ```bash
 npm install                       # 安装测试裁判库（devDependencies）
 npx wrangler pages dev public     # 本地起 Pages（部署根为 public/，需先在 wrangler.toml 绑定 D1）
-npm test                          # 快速环：基础自检 93 + 规则链 265 + 卦型判定 91 + 上层契约 201 + 应期窗口 55 + 分享链接 46（均无需裁判库）
+npm test                          # 快速环：基础自检 93 + 规则链 280 + 卦型判定 91 + 上层契约 209 + 应期窗口 55 + 分享链接 46（均无需裁判库）
 npm run test:fn                   # Functions 层单测 180 项（jsonWithin 合法性/常量时间口令/模型名白名单/去重与读鉴权/结果回执与分桶/gemini 跨模型降级）
 npm run test:paipan               # 排盘金标准回归 173 项（零依赖，只加载 core.js）
 npm run test:ui                   # UI 冒烟 62 断言（Playwright + Edge 通道，需先起本地静态服务）

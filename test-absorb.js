@@ -188,6 +188,31 @@ if (bianLine >= 0) {
     C.auditFactClaims('变卦' + P6[bianLine] + '爻为' + bLq + '，本卦' + P6[bianLine] + '爻为' + nLq + '。', panZZ).accepted, true);
 }
 
+// ---------- 5b. 卦型写进「本卦为…」句式（2026-10-25 线上误报回归） ----------
+// 模型极常见的写法是「**卦型**：本卦为六冲卦（坤为地）」。旧版把捕获到的
+// 「六冲卦」当卦名与盘面比对，于是每一篇这样写的正常断语都被判
+// 「本卦卦名：六冲卦 ≠ 坤为地」；而 app.js 收到未 accepted 的审计结果就会
+// 把冲突回灌、**整篇重写一次**并把重写稿重新流式渲染到同一个气泡里——
+// 用户观感正是「断语先出一段碎片，收尾后又整篇重来」。
+// 正解：捕获片段不在 64 卦名白名单里就不是「卦名断言」，跳过；括注里点名了
+// 真卦名（「本卦为六冲卦（坤为地）」）时以括号内为准。
+const GUA_TYPES = ['六冲卦', '六合卦', '游魂卦', '归魂卦'];
+GUA_TYPES.forEach(function (t) {
+  eq('卦型句式不误报：本卦为' + t + '（' + panZZ.benName + '）',
+    C.auditFactClaims('卦型：本卦为' + t + '（' + panZZ.benName + '）。', panZZ).accepted, true);
+});
+// 反向对照：卦型句式 + 括注里真写错卦名，仍须报——豁免不得变成整段放行。
+const WRONG_GUA = Object.keys(C.HEXNAMES).map(function (k) { return C.HEXNAMES[k]; })
+  .filter(function (n) { return n !== panZZ.benName; })[0];
+ok('取到一个与盘面不同的真卦名用于反向对照', !!WRONG_GUA);
+eq('卦型句式仍审括注卦名：本卦为六冲卦（' + WRONG_GUA + '）→报冲突',
+  C.auditFactClaims('卦型：本卦为六冲卦（' + WRONG_GUA + '）。', panZZ).accepted, false);
+// 通篇没点名任何 64 卦名 → 不作卦名断言（也不猜）。旧版会拿「静卦」去比。
+eq('「本卦为静卦」不作卦名断言', C.auditFactClaims('本卦为静卦，六爻安静。', panZZ).accepted, true);
+// 真实断语里「本卦为X，六冲卦」的并列写法照旧要审
+eq('并列写法照旧审卦名：' + WRONG_GUA,
+  C.auditFactClaims('本卦为' + WRONG_GUA + '，六冲卦。', panZZ).accepted, false);
+
 // 书名号/引号：模型引经据典时普遍写成《泽天夬》，旧版把每个正确卦名都判成不符。
 eq('卦名带书名号不误报',
   C.auditFactClaims('本卦为《' + panZZ.benName + '》，变卦为《' + panZZ.bianName + '》。', panZZ).accepted, true);

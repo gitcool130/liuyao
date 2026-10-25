@@ -1578,12 +1578,42 @@
              覆盖上去，用户最多多等一次生成，不用自己判断「是不是没写完」。
              2026-10-21 晚：补发改用兄弟模型（见 retryModelFor）——同模型重跑
              对 3.6 的 46% 残篇率没有改善，换 3.8 才拿得到完篇。
-             只补一次：再失败就保留较长的一稿并显示提示，避免反复烧调用。 */
+             只补一次：再失败就保留较长的一稿并显示提示，避免反复烧调用。
+
+             2026-10-25 重写期渲染：补全稿 / 校正稿**不再逐帧重画可见气泡**。
+             旧版把首稿用的同一个 onStream 传给重写请求，气泡从空开始重新流一遍，
+             用户看到「断语先出一段碎片，收尾后又整篇重来」——像交付了两次。
+             现在：当前稿原样保留（压暗），顶部一条状态条只更新已收到字数，
+             重写完成后由下面那次整块渲染一次性替换。 */
+          let curDraft = mdLite(reply || '');   // 每次重写前刷新为「此刻展示在气泡里的稿」
+          const rewriteView = function (label, chars) {
+            if (myGen !== aiGen) return;
+            const el = colBody(m);
+            if (!el) return;
+            let bar = el.querySelector('.rw-bar');
+            if (!bar) {
+              el.innerHTML = '<div class="rw-bar"></div>' +
+                '<div class="ai-block rw-draft">' + curDraft + '</div>';
+              bar = el.querySelector('.rw-bar');
+            }
+            if (bar) {
+              bar.textContent = '⟳ ' + label + (chars ? '（已收到 ' + chars + ' 字）' : '');
+            }
+            scrollBody(el);
+          };
+          const rwStatus = function (label) {
+            return function () { rewriteView(label, 0); };
+          };
+          const rwStream = function (label) {
+            return function (text) { rewriteView(label, text ? text.length : 0); };
+          };
+
           let retriedWith = '';
           if (reply && reply.length > 30 && !/结[论局]\s*[：:]/.test(reply)) {
             const alt = retryModelFor(m);
-            onStatus(alt !== m ? '断语未写完，改用 ' + alt + ' 重新生成…' : '断语未写完，正在重新生成…');
-            const retry = await callInterpret(alt, [], onStatus, onStream, { gen: myGen, signal: mySignal });
+            const label = alt !== m ? '断语未写完，改用 ' + alt + ' 重新生成' : '断语未写完，正在重新生成';
+            curDraft = mdLite(reply);   // 残篇也要留着现形，用户才知道「往哪儿补」
+            const retry = await callInterpret(alt, [], rwStatus(label), rwStream(label), { gen: myGen, signal: mySignal });
             if (myGen !== aiGen) return;
             const good = !!retry && (/结[论局]\s*[：:]/.test(retry) || retry.length > reply.length);
             if (good) {
@@ -1604,12 +1634,13 @@
                 const list = fa.errors.slice(0, 6).map(function (e) {
                   return (e.at ? e.at + '：' : e.type + '：') + '断语作「' + e.claimed + '」，卦盘实为「' + e.actual + '」';
                 }).join('；');
-                onStatus('发现 ' + fa.errors.length + ' 处与卦盘不符，按盘面校正中…');
+                const label = '发现 ' + fa.errors.length + ' 处与卦盘不符，按盘面校正中';
+                curDraft = mdLite(reply);   // 展示的就是这一稿（可能已是补全稿）
                 reply = await callInterpret(m, [
                   { role: 'assistant', content: reply },
                   { role: 'user', content: '上一稿有 ' + fa.errors.length + ' 处与卦盘不符：' + list +
                     '。请严格对照盘面全文重写，保持原有结构，不得保留上述错误表述，也不要解释修改过程。' }
-                ], onStatus, onStream, { gen: myGen, signal: mySignal });
+                ], rwStatus(label), rwStream(label), { gen: myGen, signal: mySignal });
                 corrected = true;
               }
             } catch (e) { /* 审计或重写失败：保留首稿，不打断 */ }
