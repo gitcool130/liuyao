@@ -4,7 +4,7 @@
 
 # ── 静态资源 ──
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; media-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://cloudflareinsights.com; media-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
@@ -22,3 +22,11 @@
 # ③ 真正兜住的是**外联与回传**：connect-src 'self' 阻断把卦例/提示词 exfil 到外域，
 #    script-src 'self' 阻断加载外部脚本。这两条是本项目最需要的。
 # ④ media-src / worker-src / object-src 均为 'none'：本项目确实不用。
+# ⑤ 例外（2026-10-25）：`static.cloudflareinsights.com` + `cloudflareinsights.com` 已放行。
+#    原因是 Cloudflare 会给本 zone 的 HTML **自动注入** RUM 探测器
+#    （/cdn-cgi/challenge-platform + beacon.min.js），CSP 拦住后浏览器控制台每条页面
+#    都报一条 CSP 违规，看着像站点自己出错，线上冒烟也把它算成「JS 运行时错误」。
+#    只钉这一个 CF 自有主机（不加通配、不加其他第三方），且流量本来就全程过 Cloudflare，
+#    不引入新的第三方；页面 URL（含 ?s= 卦码）本就在 CF 边缘可见，隐私面无增量。
+#    若不想要这个脚本：请到 Cloudflare 后台关掉 Web Analytics，**不要**靠 CSP 去拦——
+#    拦了只留噪音不留安全收益（脚本仍被请求，只是执行被拒）。
