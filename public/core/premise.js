@@ -69,12 +69,14 @@
   // ---- 时间跨度词表 ----
   // 顺序即优先级：先命中的更具体（「这学期」不能被「学期」以外的东西抢走，
   // 「半个月」不能被「月」抢走，「半年」属季而非年）。
+  // 补词纪律（M21c）：只收**无歧义**的词——「这阵子」「等消息」类模糊词刻意不收，
+  // 硬指派刻度等于替用户假定前提（违反本层自己的原则），落 unknown 走兜底才对。
   const SPAN_RULES = [
-    { unit: 'day', re: /今[天日夜晚]|明[天日]|后天|当天|当日|这几个小时|一会儿/ },
-    { unit: 'xun', re: /这周|本周|下周|周末|这旬|下旬|上旬|中旬|近几[天日]|这几[天日]|半个月|十天内|一周|一个礼拜/ },
+    { unit: 'day', re: /今[天日夜晚]|明[天日晚]|后天|当天|当日|这两天|这几个小时|一会儿/ },
+    { unit: 'xun', re: /这周|本周|下周|周末|这旬|下旬|上旬|中旬|近几[天日]|这几[天日]|半个月|十天内|一周|两周|一个礼拜|三五天|十来天/ },
     { unit: 'season', re: /本学[期年]|这学[期年]|下学[期年]|季度|上半年|下半年|半年|一个季度|三个月/ },
     { unit: 'month', re: /本月|这个月|下个月|下月|月底|月初|月内|几个月|一两个月|一个月|两个月|近期/ },
-    { unit: 'year', re: /今年|明年|后年|去年|本年|年度|年内|年底|过年|未来一年|一年内|两三年|几年|一年/ }
+    { unit: 'year', re: /今年|明年|后年|去年|本年|年度|年内|年底|过年|未来一年|一年内|两三年|几年|一年|两年|三年|三五年|五年|十年/ }
   ];
 
   // 日历刻度词：用这些词时，若领域包声明了「非日历锚点」（如招生年度、结算周期），
@@ -158,11 +160,21 @@
     }
   ];
 
+  // 数组并集（保序，先 a 后 b）
+  function union(a, b) {
+    const out = a.slice();
+    for (let i = 0; i < b.length; i++) if (out.indexOf(b[i]) < 0) out.push(b[i]);
+    return out;
+  }
+
   /**
    * 取领域适配包。领域包 = core/domain-methods.js 的 premise 字段（按用神分），
    * 自定义所测（__custom__）再按事由关键词挑一个（KEYWORD_PACKS）。
+   * 用神包与事由关键词包不一致时（M21c）：decisive/anchors 取**并集**（只增不减、
+   * 宁严勿漏），刻度语义以事由为准——「选父母问官司」时，事的刻度来自官司，
+   * 不来自父母。
    * @param {string} domainKey #useSelect 的 value
-   * @param {string} [question] 所测之事原文（自定义时用于挑包）
+   * @param {string} [question] 所测之事原文（用于挑关键词包）
    */
   function packOf(domainKey, question) {
     const M = LY.DOMAIN_METHODS || {};
@@ -181,18 +193,28 @@
       typicalSpan: DEFAULT_PACK.typicalSpan,
       spanNote: DEFAULT_PACK.spanNote
     };
-    // 自定义所测没有领域信息：按事由关键词挑包（命中不了就用通用包）。
     const q = String(question == null ? '' : question);
-    if ((domainKey === '__custom__' || !p) && q) {
+    if (q) {
       for (let i = 0; i < KEYWORD_PACKS.length; i++) {
         const kp = KEYWORD_PACKS[i];
-        if (kp.re.test(q)) {
+        if (!kp.re.test(q)) continue;
+        if (domainKey === '__custom__' || !p) {
+          // 自定义所测（或该用神值无 premise 字段）：事由包整体接管。
           base = {
             label: kp.name, anchors: kp.pack.anchors.slice(), decisive: kp.pack.decisive.slice(),
             typicalSpan: kp.pack.typicalSpan, spanNote: kp.pack.spanNote, matchedBy: kp.name
           };
-          break;
+        } else {
+          base = {
+            label: base.label,
+            anchors: union(base.anchors, kp.pack.anchors),
+            decisive: union(base.decisive, kp.pack.decisive),
+            typicalSpan: kp.pack.typicalSpan,
+            spanNote: kp.pack.spanNote || base.spanNote,
+            matchedBy: kp.name
+          };
         }
+        break;
       }
     }
     return base;
@@ -378,6 +400,17 @@
   const YEAR_GRAIN_RE = /\d+\s*年|明年|后年|今年|年内|年度/;
   // 粗刻度：月份（含「7月上旬」）、季度、流程节点（出分／公布／批次／节点…）
   const COARSE_GRAIN_RE = /\d+\s*月|[一二三四五六七八九十]月|[上中下]旬|季度|上半[年季]|下半[年季]|流程|批次|节点|出分|公布|录取|签约|开庭|判决/;
+  const SEASON_GRAIN_RE = /季度|[春夏秋冬]季|上半[年季]|下半[年季]/;
+  const GRAIN_LABEL = { 1: '日', 2: '旬', 3: '月', 4: '季', 5: '年' };
+
+  // 应期文本的刻度：取命中的**最粗**一档（应期常「粗刻度＋日级节点」并写，主刻度看最粗者）。
+  function yqGrainRank(t) {
+    if (YEAR_GRAIN_RE.test(t)) return 5;
+    if (SEASON_GRAIN_RE.test(t)) return 4;
+    if (MONTH_GRAIN_RE.test(t)) return 3;
+    if (DAY_GRAIN_RE.test(t)) return 1;
+    return 0;
+  }
 
   /**
    * 应期同域校验：应期粒度不得细于事项的时间跨度。
@@ -421,6 +454,19 @@
         ok: false, code: 'YINGQI_TOO_COARSE', level: 'warn',
         msg: '应期写成' + (YEAR_GRAIN_RE.test(t) ? '年' : '月') + '级（' + t + '），而此事是' + label + '内之事——尺度过粗，起不到可核对的作用。'
       };
+    }
+    // 中档偏差（M21c）：月／季刻度之事给「年」级应期——粗两档以上同样不可核对。
+    // 只发 warn、不出撤回模板：撤回留给「细于跨度」的硬冲突；粗粒度先提醒，
+    // 样本够了再谈是否升级（见 docs/TODO.md「前提层遗留」）。
+    if (rank >= 3) {
+      const gr = yqGrainRank(t);
+      if (gr - rank >= 2) {
+        return {
+          ok: false, code: 'YINGQI_TOO_COARSE', level: 'warn',
+          msg: '应期刻度为「' + GRAIN_LABEL[gr] + '」（' + t + '），比此事跨度「' + label +
+            '」粗两档以上——起不到可核对的作用，请落到同域粒度。'
+        };
+      }
     }
     return { ok: true, code: 'OK', level: 'ok', msg: '' };
   }

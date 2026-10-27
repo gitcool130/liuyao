@@ -44,6 +44,20 @@ eq('跨度·命中词回填', P.spanOf('今年能不能考上市重点').hit, '�
 eq('跨度·日历词标记', P.spanOf('今年能不能考上市重点').calendar, true);
 eq('跨度·非日历词不标记', P.spanOf('半年内能回本吗').calendar, false);
 
+// M21c 补词：只收无歧义词，每词一条断言；「这阵子」「等消息」类模糊词**刻意不收**——
+// 硬指派刻度等于替用户假定前提（违反本层原则），落 unknown 走兜底才是正确行为。
+eq('跨度·明晚→日', P.spanOf('明晚能见分晓吗').unit, 'day');
+eq('跨度·这两天→日', P.spanOf('这两天能收到回复吗').unit, 'day');
+eq('跨度·两周→旬（不被「两个月」抢走）', P.spanOf('两周内能出结果吗').unit, 'xun');
+eq('跨度·三五天→旬', P.spanOf('三五天能到货吗').unit, 'xun');
+eq('跨度·十来天→旬', P.spanOf('十来天能批下来吗').unit, 'xun');
+eq('跨度·两三个月→季（经「三个月」命中）', P.spanOf('两三个月能回本吗').unit, 'season');
+eq('跨度·三年→年', P.spanOf('三年能晋升吗').unit, 'year');
+eq('跨度·十年→年', P.spanOf('十年能还清吗').unit, 'year');
+eq('跨度·三五年→年', P.spanOf('三五年能翻身吗').unit, 'year');
+eq('跨度·模糊词「这阵子」刻意不收→unknown', P.spanOf('这阵子能成吗').unit, 'unknown');
+eq('跨度·模糊词「等消息」刻意不收→unknown', P.spanOf('还在等消息，能成吗').unit, 'unknown');
+
 // ---------- §2 五类槽位与缺项分级（多领域，防单领域硬编码） ----------
 // 升学案例：span=年、目标只见「考上」未见门槛、有口径歧义。
 // 2026-10-27 修订：此处原断言「无高风险缺项（不拦结论）」，与需求相反——
@@ -91,6 +105,22 @@ eq('目标类·高风险=目标标准', P.judge('下个月能签合同吗', '父
 // 反向对照：同样缺门槛，但不是目标类问法 → 不升高风险。
 eq('对照·非目标类不升高风险', P.judge('下个月他会主动联系我吗', '父母').high.length, 0);
 
+// ---------- §2b 用神包 × 事由关键词包并集合并（M21c） ----------
+// 选「官鬼」却问升学：事由才是「事」的刻度来源。decisive/anchors 取并集（只增不减、
+// 宁严勿漏），typicalSpan/spanNote 以事由包为准。
+const mix = P.judge('今年能不能考上市重点', '官鬼');
+eq('合并·事由包命中并记录', mix.pack.matchedBy, '升学');
+eq('合并·decisive 为并集（含 process 与 standard）',
+  ['timeSpan', 'process', 'standard'].every(function (k) { return mix.pack.decisive.indexOf(k) >= 0; }), true);
+eq('合并·anchors 为并集（含招生年度与审理周期）',
+  mix.pack.anchors.join('|').indexOf('招生年度') >= 0 && mix.pack.anchors.join('|').indexOf('审理') >= 0, true);
+eq('合并·高风险含 阶段/标准/进程（并集生效）',
+  ['stage', 'standard', 'process'].every(function (k) { return mix.high.some(function (s) { return s.id === k; }); }), true);
+eq('合并·口径歧义仍成立（锚点并集后命中）', !!mix.ambiguity, true);
+// 反向守护：事由不含任何领域词时，用神包原样生效——不合并、不串味。
+eq('合并·无命中时用神包原样', P.judge('这周会不会来电', '父母').pack.matchedBy, undefined);
+eq('合并·无命中时高风险仍为空', P.judge('这周会不会来电', '父母').high.length, 0);
+
 // 空题面：不注入、不抛。
 eq('空题面·block 返回空串', P.block('  ', '父母'), '');
 eq('空题面·judge 不抛', (function () { try { P.judge('', '父母'); return 'ok'; } catch (e) { return 'throw'; } })(), 'ok');
@@ -115,6 +145,15 @@ eq('同域·月+裸干支日=警告', P.checkYingqi('甲子日', monthSpan).leve
 eq('同域·月+干支日带公历区间=通过', P.checkYingqi('癸未日前后（第12–14日，11月5日—11月7日）', monthSpan).ok, true);
 eq('同域·旬+干支日=通过', P.checkYingqi('甲子日', xunSpan).ok, true);
 eq('同域·旬+年份=尺度过粗', P.checkYingqi('2027年', xunSpan).code, 'YINGQI_TOO_COARSE');
+// 中档偏差（M21c）：月／季刻度之事给「年」级应期，粗两档以上 → warn（不触发撤回）。
+const seasonSpan = P.spanOf('这学期成绩能提上来吗');
+eq('同域·月+年份=过粗警告（中档偏差）', P.checkYingqi('明年内', monthSpan).code, 'YINGQI_TOO_COARSE');
+eq('同域·月+年份仍属 warn 非 violation', P.checkYingqi('明年内', monthSpan).level, 'warn');
+eq('同域·月+2028年=过粗警告', P.checkYingqi('2028年前后', monthSpan).code, 'YINGQI_TOO_COARSE');
+eq('同域·季+年份差一档=通过', P.checkYingqi('明年上半年', seasonSpan).ok, true);
+eq('同域·季+季度=通过', P.checkYingqi('下季度', seasonSpan).ok, true);
+eq('同域·月+季度差一档=通过', P.checkYingqi('下季度签约', monthSpan).ok, true);
+eq('同域·年+年份=通过（不自己打自己）', P.checkYingqi('明年招生年度录取批次', yearSpan).ok, true);
 eq('同域·空应期不报', P.checkYingqi('', yearSpan).ok, true);
 eq('同域·null 不抛', P.checkYingqi(null, yearSpan).ok, true);
 eq('同域·未知跨度不报', P.checkYingqi('甲子日', { unit: 'unknown' }).ok, true);
@@ -169,6 +208,9 @@ const htmlSrc = fs.readFileSync(path.join(__dirname, 'public/index.html'), 'utf8
 });
 has('两份提示词都要求输出前提完整性行', promptSrc, "'前提完整性：");
 has('app.js 也要求输出前提完整性行', appSrc, "'前提完整性：");
+// M21c：两份提示词的【应期同域】都补了「过粗亦不可核对」的反向约束。
+has('interpret.js 提示词含过粗反向约束', promptSrc, '粗两档以上');
+has('app.js 提示词含过粗反向约束', appSrc, '粗两档以上');
 has('结构化结论为五行', promptSrc, '另起五行');
 // 通用段不得把升学写成规范槽位表：必须有「领域适配包」与「示例只示范写法」的限定。
 has('通用段声明由领域适配包实例化', promptSrc, '领域适配包');
