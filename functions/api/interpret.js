@@ -19,8 +19,14 @@
  *   RATE_LIMIT_PER_MIN 选填，按访客 IP 的每分钟请求上限（**未设置则不限流**）。
  *                      仅本 isolate 内计数，属「降低」而非「根治」。
  *                      **生产当前未设 → 实际不限流**（2026-09-28 曾设 =20，同日按用户要求撤销）。
- *   LLM_TIMEOUT_MS    选填，上游大模型请求的硬超时（毫秒），默认 300000（5 分钟）。
+ *   LLM_TIMEOUT_MS    选填，上游大模型请求的**总**硬超时（毫秒），默认 300000（5 分钟）。
  *                      覆盖「建立连接 + 读完整个流」，防止上游挂起（不返回也不断开）时请求悬置。
+ *                      注意它**不是**首字节约束：首字节由 LLM_FIRST_BYTE_MS 单独管。
+ *   LLM_FIRST_BYTE_MS 选填，上游「吐首字节」的独立上限（毫秒），默认 80000（80 秒）。
+ *                      为何单独设：CF 边缘约 100s 无数据即 524/reset，而 DeepSeek 经网关
+ *                      首字节实测常 60~90s。旧版只有总超时（300s），永远轮不到自己报错，
+ *                      用户拿到的是边缘 reset（AI Gateway 侧表现为 499/连接中断）。
+ *                      设得比边缘阈值略低，才能在断连前由我们自己下发可读的终止事件。
  *   SSE_HEARTBEAT_MS  选填，SSE 空闲心跳间隔（毫秒），默认 15000，下限 1000（测试用）。
  *                      上游思考期可能数十秒无输出，CF 边缘约 100s 无数据即 524。
  *   LLM_MAX_TOKENS    选填，单次生成上限；未设置则不传（由上游按自身默认值裁定）。
@@ -468,6 +474,19 @@ export async function onRequestPost(context) {
   let timerHandedOff = false;
   let heartbeat = null;
 
+  // 首字节独立守卫（2026-10-27）。旧版只有上面的总超时（默认 300s），而 CF 边缘在
+  // 「约 100s 无任何字节」时就会 reset —— 于是 300s 那条永远轮不到触发，用户拿到的是
+  // 一条没有任何 JSON 的断连。DeepSeek 经网关首字节实测 60~90s（探针：76s 后被 reset、
+  // 收到 0 字节），正落在这个窗口里。这里把首字节单独设上限（默认 80s < 边缘阈值），
+  // 让我们能在边缘动手之前自己下发可读的终止事件。
+  const firstByteMs = Math.max(1000, parseInt(env.LLM_FIRST_BYTE_MS || '80000', 10) || 80000);
+  let firstByteTimedOut = false;
+  // 先发首字节的阈值：上游若在此时间内给出响应（正常流头 / 4xx / 5xx），沿用原有
+  // 「直接返回 JSON 或流」的路径，错误语义与状态码一律不变；超过则先建 SSE 再等，
+  // 使等待期不再是零字节（详见下方 FAST_HEADER_MS 分流）。
+  const FAST_HEADER_MS = 1500;
+  function wait(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
+
   // 单次上游尝试。成功 → { reply, cut }；失败 → { fail: { status, detail, retryable } }。
   // retryable=false 表示 4xx 客户端错误（模型名非法/请求体错误等），换模型重试无意义；
   // 429/5xx 与网络错误视为可恢复，允许跨模型降级。
@@ -482,7 +501,9 @@ export async function onRequestPost(context) {
         signal: ctrl.signal
       });
     } catch (e) {
-      if (timedOut || clientGone) throw e;   // 硬超时 / 客户端断开交由外层统一处理
+      // 硬超时 / 首字节超时 / 客户端断开交由外层统一处理（不可当成可重试的上游失败，
+      // 否则会在同一 ctrl 已被 abort 的前提下再发一次注定失败的请求）
+      if (timedOut || clientGone || firstByteTimedOut) throw e;
       return { fail: { status: 0, detail: e.message, retryable: true } };
     }
     if (!resp.ok) {
@@ -520,9 +541,296 @@ export async function onRequestPost(context) {
     return { reply: reply.slice(0, SSE_MAX_REPLY), cut: reply.length > SSE_MAX_REPLY ? 'REPLY_OVERFLOW' : null };
   }
 
+  // ---- SSE 会话样板 ----
+  // 快速路径（上游在 FAST_HEADER_MS 内响应）与慢速路径（先建流再等上游）共用，
+  // 差别只在「谁先建立响应」。首字节、心跳、计时器、writer 收尾集中在这里，
+  // 避免两处各写一份又漂移（旧版心跳就曾挂在已 releaseLock 的 writer 上而全程失效）。
+  const SSE_HEADERS = {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive'
+  };
+  let firstByteTimer = null;
+
+  function openSession() {
+    const { readable, writable } = new TransformStream();
+    const enc = new TextEncoder();
+    const writer = writable.getWriter();
+    // 首字节：SSE 注释行，客户端解析器直接跳过；作用是让边缘/网关立刻看到数据。
+    writer.write(enc.encode(': ping\n\n')).catch(function () { /* 客户端已断开则忽略 */ });
+    if (variant) {
+      // 对照实验：把实际生效的变体回显给调用方，免得配置没打开却以为测了 B/C
+      writer.write(enc.encode('data: ' + JSON.stringify({ variant: variant }) + '\n\n')).catch(function () { });
+    }
+    // 周期心跳：每 hbMs（默认 15s）写一次注释行。上游思考期（DeepSeek 可数十秒无输出）
+    // 超过 CF 边缘 ~100s 无数据即 524 断连，故必须持续写。与正文共用同一 writer：
+    // 写入按调用顺序排队，每个 ping 都是完整 SSE 帧，不会与其他帧撕裂。
+    heartbeat = setInterval(function () {
+      writer.write(enc.encode(': ping\n\n')).catch(function () { /* 客户端断开则停 */ });
+    }, hbMs);
+    let finished = false;
+    function finish() {
+      if (finished) return;
+      finished = true;
+      if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+      clearTimeout(timer);
+      if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
+      // close() 返回 promise：流已 error 时以存储错误拒绝，同步 try/catch 接不住
+      try { writer.close().catch(function () { /* 已关闭则忽略 */ }); } catch (e) { /* 已释放 */ }
+    }
+    return {
+      enc: enc, writer: writer, finish: finish,
+      response: new Response(readable, { headers: SSE_HEADERS })
+    };
+  }
+
+  // 上游 SSE → 客户端 SSE。守卫①②、finishReason、完整性告警、收流日志都在这里。
+  // 与旧版的差别只有两处：
+  //   ① 思考草稿以 {"r":"…"} **实时**下发（前端只作进度显示，绝不进正文，
+  //      原因见上方 deltaText 注释里的 6 处 fact-audit 假阳性）；
+  //   ② 跑完整条流仍一个字都没有时，显式下发 {"error":"EMPTY_UPSTREAM"}。
+  async function pipeUpstreamSSE(upstream, w, enc) {
+    const reader = upstream.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', outLen = 0, cut = null, reasBuf = '';
+    // 思考片段计数（仅观测，不改输出）：Google 原生流里思考内容以
+    // parts[{ text, thought:true }] 返回，而下方统一按 p.text 拼接。
+    let thoughtLen = 0;
+    // finishReason：上游「为什么停」。旧版完全不读——于是 MAX_TOKENS / SAFETY
+    // 截断的半个断语被当作正常完整响应交给用户。
+    let finish = null;
+    // 文末快照：用于判定「结构化结论」是否齐全（结论四行必在文末）。
+    let tail = '';
+    const writeErr = async function (code, msg) {
+      try {
+        await w.write(enc.encode('data: ' + JSON.stringify({ error: code, message: msg }) + '\n\n'));
+      } catch (e) { /* 客户端已断开则忽略 */ }
+    };
+    try {
+      while (true) {
+        const r = await reader.read();
+        if (r.done) break;
+        buf += dec.decode(r.value, { stream: true });
+        // 守卫①：上游持续发送不含换行的数据，行缓冲永不切分。撞上即判定为异常流并断开。
+        if (buf.length > SSE_MAX_LINE) {
+          cut = 'LINE_OVERFLOW';
+          await writeErr(cut, '上游单行数据异常，已中断');
+          break;
+        }
+        let idx;
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line || line.indexOf(':') === 0) continue;
+          if (line.indexOf('data:') !== 0) continue;
+          const data = line.slice(5).trim();
+          if (!data || data === '[DONE]') continue;
+          let chunk = '';
+          try {
+            const j = JSON.parse(data);
+            const c = j.choices && j.choices[0];
+            const d = c && c.delta;
+            if (c && c.finish_reason) finish = c.finish_reason;
+            if (d) {
+              // 只把最终答案（content）当正文。reasoning_content 是模型的思考草稿：
+              // 内含未纠正的临时判断（实测：草稿写「世在四爻妻财」，正式稿为「三爻」），
+              // 一旦并进正文会造成 fact-audit 假阳性、追问历史被污染、用户先读一大段独白。
+              chunk += deltaText(d);
+              if (!chunk) {
+                const rc = deltaReasoning(d);
+                if (rc && reasBuf.length <= SSE_MAX_REPLY) {
+                  reasBuf += rc;
+                  // 实时下发思考进度（独立字段 r）：既让用户在 60~90s 的思考期看到
+                  // 「还在动」，也让这条 TCP 流持续有帧，不会因长时间静默被中间层掐断。
+                  try {
+                    await w.write(enc.encode('data: ' + JSON.stringify({ r: rc }) + '\n\n'));
+                  } catch (e) { /* 客户端已断开则忽略 */ }
+                }
+              }
+            } else if (c && c.message && c.message.content) {
+              chunk = c.message.content;
+            } else if (j.candidates) {
+              // Google 原生 SSE（streamGenerateContent?alt=sse）：
+              // { candidates:[{ content:{ parts:[{ text:"…" }] } }] }
+              const cand = j.candidates[0];
+              if (cand && cand.finishReason) finish = cand.finishReason;
+              const parts = cand && cand.content && cand.content.parts;
+              if (parts) {
+                const body = [];
+                for (let pi = 0; pi < parts.length; pi++) {
+                  const p = parts[pi];
+                  if (p && p.thought && typeof p.text === 'string') {
+                    // 思考片段（thinkingConfig 被忽略时 gemini 3.x 会真的吐草稿）：
+                    // 旧版把它按 p.text 一并拼进正文 —— 正是 2026-10-13 fact-audit
+                    // 6 处假阳性的成因。现在与 OpenAI 的 reasoning_content 同待遇：
+                    // 只走 r 通道，不进正文。
+                    thoughtLen += p.text.length;
+                    if (p.text) {
+                      try {
+                        await w.write(enc.encode('data: ' + JSON.stringify({ r: p.text }) + '\n\n'));
+                      } catch (e) { /* 客户端已断开则忽略 */ }
+                    }
+                    continue;
+                  }
+                  body.push((p && p.text) || '');
+                }
+                chunk = body.join('');
+              }
+            }
+          } catch (e) { /* 忽略无法解析的分片 */ }
+          if (chunk) {
+            outLen += chunk.length;
+            // 守卫②：正文总长上限，防上游不限流数据打爆 isolate 内存
+            if (outLen > SSE_MAX_REPLY) {
+              cut = 'REPLY_OVERFLOW';
+              await writeErr(cut, '上游返回过长，已截断');
+              break;
+            }
+            await w.write(enc.encode('data: ' + JSON.stringify({ t: chunk }) + '\n\n'));
+            // 只留尾部 600 字符用于「结构化完整性」判定：结论四行必在文末
+            tail = (tail + chunk).slice(-600);
+          }
+        }
+        if (cut) break;
+      }
+      // 兜底补发：全程只有 reasoning_content、没有任何 content（个别中转/模型
+      // 把最终答案也放进思考字段）时，流末一次性补发，避免客户端按「空响应」
+      // 重试或报 EMPTY。走到这里只可能是 r.done 正常收流。
+      if (!cut && outLen === 0 && reasBuf) {
+        try {
+          await w.write(enc.encode('data: ' + JSON.stringify({ t: reasBuf }) + '\n\n'));
+          // 补发的是**思考草稿**，也必须计入正文长度与尾部快照。
+          outLen += reasBuf.length;
+          tail = reasBuf.slice(-600);
+        } catch (e) { /* 客户端已断开则忽略 */ }
+      }
+      // 空流必须显式告知（2026-10-27）：旧版 outLen===0 且无草稿时直接关流，
+      // 客户端只看到「流结束、一个字没有」，判为空响应后静默重试 —— AI Gateway
+      // 日志里那串 1s 请求就是这么来的（指数退避打满 180s、18 次），用户侧
+      // 全程只看到「推卦中…」。现在给它一个明确的终止事件，前端能立刻换模型。
+      if (!cut && outLen === 0) {
+        await writeErr('EMPTY_UPSTREAM', '上游整条流未返回任何内容（finish=' + (finish === null ? 'none' : finish) + '）');
+      }
+      // 非正常收尾必须显式告知客户端：MODEL_TRUNCATED 不是网络问题——重试只会
+      // 再撞一次同一个上限，所以单列 warn 事件，由前端提示「本卦未完篇」。
+      if (!cut && finish && finish !== 'STOP' && finish !== 'stop' && finish !== 'end_turn') {
+        try {
+          await w.write(enc.encode('data: ' + JSON.stringify({
+            warn: 'MODEL_' + finish,
+            message: '上游以 ' + finish + ' 收尾，断语未完篇（已收到 ' + outLen + ' 字符）'
+          }) + '\n\n'));
+        } catch (e) { /* 客户端已断开则忽略 */ }
+      }
+      // 结构化完整性：《结论对齐》契约要求文末四行。结论行缺失即视为「没断完」，
+      // 无论上游自称停得多么正常。只管首次断卦（history 为空）。
+      if (!cut && history.length === 0 && outLen > 30 && !/结[论局]\s*[：:]/.test(tail)) {
+        try {
+          await w.write(enc.encode('data: ' + JSON.stringify({
+            warn: 'INCOMPLETE_STRUCTURE',
+            message: '断语缺少「结论：」行，疑未写完（已收到 ' + outLen + ' 字符）'
+          }) + '\n\n'));
+        } catch (e) { /* 客户端已断开则忽略 */ }
+      }
+      /* 收流留痕：finish(null 也是有效值)/字符数/思考片段长度一并落日志，
+         之后统计即可区分「模型自己停」与「流被提前关闭」，不必再靠猜参数。 */
+      try {
+        console.log(JSON.stringify({
+          ev: 'stream_end',
+          finish: finish === null ? null : String(finish),
+          chars: outLen,
+          thought: thoughtLen,
+          cut: cut || null,
+          empty: outLen === 0,
+          first: history.length === 0,
+          ms: Date.now() - startedAt
+        }));
+      } catch (e) { /* 日志失败不影响响应 */ }
+    } catch (e) {
+      // 上游断连 / abort（含超时）：告知客户端这是中断而非完篇
+      await writeErr(timedOut || firstByteTimedOut ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_STREAM_ERROR',
+        timedOut || firstByteTimedOut
+          ? ('上游 ' + Math.round((firstByteTimedOut ? firstByteMs : timeoutMs) / 1000) + ' 秒内未返回内容')
+          : ('上游连接中断：' + (e && e.message ? e.message : '未知原因')));
+    } finally {
+      // cancel() 返回 promise：流已 error 时以存储错误拒绝，必须挂 .catch
+      try { reader.cancel().catch(function () { /* 上游已断开则忽略 */ }); } catch (e) { /* 已释放 */ }
+    }
+  }
+
+  // 慢速会话：先建 SSE（首字节 + 心跳立即生效），再去等上游落地。
+  // 这正是「请求一堆却没有内容」的根治点：旧版把等待留在 Response 返回之前，
+  // 客户端在 60~90s 内收到的是零字节，边缘 reset 后前端只能判失败并重试。
+  function slowSession(pending, usedModel) {
+    timerHandedOff = true;
+    const s = openSession();
+    const w = s.writer, enc = s.enc;
+    const frame = function (obj) {
+      return w.write(enc.encode('data: ' + JSON.stringify(obj) + '\n\n')).catch(function () { /* 客户端已断开 */ });
+    };
+    (async function () {
+      try {
+        let r = await pending;
+        if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
+        // 与快速路径同一条跨模型降级规则（gemini 侧 high demand 持续 503）
+        if (r.fail && r.fail.retryable && provider === 'gemini') {
+          const alt = wl.gemini.filter(function (m) { return m !== model; })[0];
+          if (alt) {
+            const r2 = await attempt(alt);
+            if (!r2.fail) { usedModel = alt; r = r2; }
+          }
+        }
+        if (r.fail) {
+          if (r.fail.status === 0) {
+            console.error('[liuyao] 上游连接失败:', r.fail.detail);
+            await frame({ error: 'NET_ERROR', message: '无法连接大模型服务，请稍后重试' });
+            return;
+          }
+          console.error('[liuyao] 上游返回 ' + r.fail.status + ':', r.fail.detail);
+          // 429 单独映射：配额用尽不是本服务故障，不能按「接口未就绪」重试
+          if (r.fail.status === 429) {
+            await frame({ error: 'UPSTREAM_RATE_LIMITED', message: '上游模型配额或速率已用尽（429），请换一个模型或稍后再试' }); return;
+          }
+          await frame({ error: 'LLM_ERROR', message: '大模型接口返回 ' + r.fail.status + '，请稍后重试' }); return;
+        }
+        if (r.stream) { await pipeUpstreamSSE(r.stream, w, enc); return; }
+        if (!r.reply) { await frame({ error: 'EMPTY_UPSTREAM', message: '大模型返回为空' }); return; }
+        // 上游忽略了 stream 参数、直接回整段 JSON：同样以 SSE 下发（头已经发出，回不了 JSON）
+        await frame({ t: r.reply });
+        if (r.cut) await frame({ warn: r.cut, message: '上游返回过长，已截断' });
+      } catch (e) {
+        if (clientGone) return;
+        await frame({
+          error: (timedOut || firstByteTimedOut) ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_STREAM_ERROR',
+          message: (timedOut || firstByteTimedOut)
+            ? ('上游 ' + Math.round((firstByteTimedOut ? firstByteMs : timeoutMs) / 1000) + ' 秒内未返回内容')
+            : ('上游连接中断：' + (e && e.message ? e.message : '未知原因'))
+        });
+      } finally {
+        s.finish();
+      }
+    })();
+    return s.response;
+  }
+
   try {
     let usedModel = model;
-    let r = await attempt(usedModel);
+    // 立刻发起上游请求（同步启动 fetch）：分流判定期间不浪费任何时间
+    const pending = attempt(usedModel);
+    firstByteTimer = setTimeout(function () { firstByteTimedOut = true; ctrl.abort(); }, firstByteMs);
+    /* 快速/慢速分流（2026-10-27 重构的入口）：
+       上游若在 FAST_HEADER_MS 内响应（正常流头 / 4xx / 5xx），走**原有**路径——
+       错误照旧返回 JSON、状态码照旧（401/404/429/502），前端契约一行不动。
+       超过 FAST_HEADER_MS 仍未响应，说明撞上了「慢思考」模型（DeepSeek 实测
+       60~90s 不吐首字节），此时立刻建立 SSE 并下发首字节 + 心跳，再去等上游。
+       这样等待期不再有「零字节窗口」，边缘不会 reset，用户也能马上看到进度。 */
+    const fast = await Promise.race([
+      pending.then(function (v) { return { v: v }; }, function (e) { return { e: e }; }),
+      wait(FAST_HEADER_MS).then(function () { return null; })
+    ]);
+    if (!fast) return slowSession(pending, usedModel);
+    if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
+    if (fast.e) throw fast.e;
+    let r = fast.v;
     // gemini 跨模型降级（2026-10-12）：所选模型可恢复性失败（429/5xx/网络错误）时，
     // 自动落到同族备选模型重试一次。起因：gemini-3.8-flash 常因 Google 侧 high demand
     // 整段 503（AI Gateway 日志自 2026-10-01 起反复出现），网关 3 次重试盖不住持续拥塞；
@@ -561,212 +869,15 @@ export async function onRequestPost(context) {
       return json({ error: 'LLM_ERROR', message: '大模型接口返回 ' + r.fail.status + '，请稍后重试' }, 502);
     }
     if (r.stream) {
-      // 透传 SSE 流到客户端。三个关键点：
-      // ① 计时器托管：return 会触发 finally，此处置位使 finally 不清除 timer，
-      //    由 pipeMergedSSE 在流结束时清除——否则上游挂起时请求无限悬挂。
-      // ② 周期心跳：开头那一次 : ping 只是「首字节」，不构成心跳；上游思考期
-      //    （DeepSeek 可数十秒无输出）超过 CF 边缘 100s 无数据即遭 524 断连，
-      //    故每 15s 主动写一次注释行，保持连接活跃。
-      // ③ 守卫与终止语义：把 readSSE（已弃用死代码）的 SSE_MAX_* 双守卫迁到这里，
-      //    撞限或上游中断时向下游写 data:{"error":...} 终止事件，客户端据此区分
-      //    「正常完篇」与「中途断流」并走重试；旧版 .catch(()=>{}) 静默吞错后
-      //    w.close() 正常关闭，客户端会把无声截断的半篇当作完整答案渲染。
+      // 透传 SSE 流到客户端。会话样板（首字节 / 心跳 / 计时器托管 / writer 收尾）已抽到
+      // openSession()，解析与守卫在 pipeUpstreamSSE()，此处只做接线——旧版把这三件事
+      // 混在一个分支里，才有「心跳挂在已释放 writer 上」那类只在生产才暴露的失效。
       timerHandedOff = true;
-      const { readable, writable } = new TransformStream();
-      const enc = new TextEncoder();
-      const writer = writable.getWriter();
-      // 初始 ping 与下方心跳同源；写入失败（客户端已断开/流已 error）必须就地吞掉，
-      // 未接 catch 的 promise 会在 Workers 里冒成未处理拒绝。
-      writer.write(enc.encode(': ping\n\n')).catch(function () { /* 客户端断开则忽略 */ });
-      // 对照实验：把实际生效的变体回显给调用方，免得配置没打开却以为测了 B/C
-      if (variant) writer.write(enc.encode('data: ' + JSON.stringify({ variant: variant }) + '\n\n')).catch(function () { });
-
-      async function pipeMergedSSE(upstream) {
-        const reader = upstream.body.getReader();
-        const dec = new TextDecoder();
-        // 与心跳共用同一个 writer。旧版在这里另取一个 getWriter()，心跳却挂在
-        // 已被 releaseLock() 的旧 writer 上——write() 返回 rejected promise 被
-        // .catch 静默吞掉，15s 心跳从未真正写出，思考期的 524 防护形同虚设。
-        const w = writer;
-        let buf = '', outLen = 0, cut = null, reasBuf = '';
-        // 思考片段计数（仅观测，不改输出）：Google 原生流里思考内容以
-        // parts[{ text, thought:true }] 返回，而下方统一按 p.text 拼接。
-        // 若上游的 thinkingBudget:0 被忽略（gemini 3.x 可能强制最小思考），
-        // 思考就会被当成正文下发——这正是 2026-10-13 事实审计 6 处假阳性的成因。
-        // 此处只统计字符数并写进日志，不放行/不拦截，先把「有没有」测出来。
-        let thoughtLen = 0;
-        // finishReason：上游「为什么停」。旧版完全不读——于是 MAX_TOKENS / SAFETY
-        // 截断的半个断语被当作正常完整响应交给用户，且（网关缓存开着时）该残缺响应
-        // 会被一并缓存，之后同一盘永远拿回同一段残句。实测 gemini-3.6-flash 稳定
-        // 停在 405 tokens，前端只收到 470 字符、连「结论：」行都没有。
-        let finish = null;
-        // 文末快照：用于判定「结构化结论」是否齐全。finishReason 只能反映上游怎么收尾，
-        // 反映不了「上游正常 STOP、但内容明显没写完」——gemini-3.6-flash 实测 137 tokens
-        // / 3 秒 / success:true / finishReason=STOP，正文却断在句中且无「结论：」行。
-        let tail = '';
-        // 向客户端写终止/错误事件（客户端 readStreamSSE 据此 throw 触发重试）
-        const writeErr = async function (code, msg) {
-          try {
-            await w.write(enc.encode('data: ' + JSON.stringify({ error: code, message: msg }) + '\n\n'));
-          } catch (e) { /* 客户端已断开则忽略 */ }
-        };
-        try {
-          while (true) {
-            const r = await reader.read();
-            if (r.done) break;
-            buf += dec.decode(r.value, { stream: true });
-            // 守卫①：上游持续发送不含换行的数据，行缓冲永不切分。撞上即判定为异常流并断开。
-            if (buf.length > SSE_MAX_LINE) {
-              cut = 'LINE_OVERFLOW';
-              await writeErr(cut, '上游单行数据异常，已中断');
-              break;
-            }
-            let idx;
-            while ((idx = buf.indexOf('\n')) >= 0) {
-              const line = buf.slice(0, idx).trim();
-              buf = buf.slice(idx + 1);
-              if (!line || line.indexOf(':') === 0) continue;
-              if (line.indexOf('data:') !== 0) continue;
-              const data = line.slice(5).trim();
-              if (!data || data === '[DONE]') continue;
-              let chunk = '';
-              try {
-                const j = JSON.parse(data);
-                const c = j.choices && j.choices[0];
-                const d = c && c.delta;
-                if (c && c.finish_reason) finish = c.finish_reason;
-                if (d) {
-                  // 只透传最终答案（content）。reasoning_content 是模型的思考
-                  // 草稿：内含未经纠正的临时判断（实测：草稿写「世在四爻妻财」，
-                  // 正式稿实为「世在三爻」），旧版把草稿一并拼接下传，后果有三：
-                  // ① 断语正文被独白污染，用户先读一大段「我们需要回答用户……」；
-                  // ② 断后 fact-audit 对全文字面匹配，把草稿里的临时错判当真
-                  //    断语校对，误报 6 处「与卦盘不符」；
-                  // ③ 追问历史（records 落库）存进带草稿的版本，后续追问被污染。
-                  // 草稿仅缓冲不发送；仅当整条流没有任何 content 时，流末兜底
-                  // 补发（见下方 reasBuf 补发段）。
-                  chunk += deltaText(d);
-                  if (!chunk) {
-                    const rc = deltaReasoning(d);
-                    if (rc && reasBuf.length <= SSE_MAX_REPLY) reasBuf += rc;
-                  }
-                } else if (c && c.message && c.message.content) {
-                  chunk = c.message.content;
-                } else if (j.candidates) {
-                  // Google 原生 SSE（streamGenerateContent?alt=sse）：
-                  // { candidates:[{ content:{ parts:[{ text:"…" }] } }] }
-                  // thinkingBudget 已关闭，parts 里只有正文；仍按 text 逐段拼接以防多段。
-                  const cand = j.candidates[0];
-                  if (cand && cand.finishReason) finish = cand.finishReason;
-                  const parts = cand && cand.content && cand.content.parts;
-                  if (parts) {
-                    for (let pi = 0; pi < parts.length; pi++) {
-                      const p = parts[pi];
-                      if (p && p.thought && typeof p.text === 'string') thoughtLen += p.text.length;
-                    }
-                    chunk = parts.map(function (p) { return (p && p.text) || ''; }).join('');
-                  }
-                }
-              } catch (e) { /* 忽略无法解析的分片 */ }
-              if (chunk) {
-                outLen += chunk.length;
-                // 守卫②：正文总长上限，防上游不限流数据打爆 isolate 内存
-                if (outLen > SSE_MAX_REPLY) {
-                  cut = 'REPLY_OVERFLOW';
-                  await writeErr(cut, '上游返回过长，已截断');
-                  break;
-                }
-                await w.write(enc.encode('data: ' + JSON.stringify({ t: chunk }) + '\n\n'));
-                // 只留尾部 600 字符用于「结构化完整性」判定：结论四行必在文末
-                tail = (tail + chunk).slice(-600);
-              }
-            }
-            if (cut) break;
-          }
-          // 兜底补发：全程只有 reasoning_content、没有任何 content（个别中转/模型
-          // 把最终答案也放进思考字段）时，流末一次性补发，避免客户端按「空响应」
-          // 重试或报 EMPTY。走到这里只可能是 r.done 正常收流（撞守卫已 break 且被
-          // !cut 挡下），正常有 content 的流 outLen > 0 同样不触发。
-          if (!cut && outLen === 0 && reasBuf) {
-            try {
-              await w.write(enc.encode('data: ' + JSON.stringify({ t: reasBuf }) + '\n\n'));
-              // 补发的是**思考草稿**，也必须计入正文长度与尾部快照。
-              // 旧版补发后 outLen 仍为 0，下面「首轮缺结论行」的完整性检查
-              // 因 outLen > 30 不成立而直接跳过 —— 实测 2026-10-21：补全请求
-              // 回 745 字符纯草稿、无任何 warn，用户看到的是半截思考过程。
-              outLen += reasBuf.length;
-              tail = reasBuf.slice(-600);
-            } catch (e) { /* 客户端已断开则忽略 */ }
-          }
-          // 非正常收尾必须显式告知客户端：writeErr 会让前端按「可重试」处理，
-          // 而 MODEL_TRUNCATED 不是网络问题——重试只会再撞一次同一个上限，
-          // 所以单列 warn 事件，由前端提示「本卦未完篇」而不是静默当完整断语。
-          if (!cut && finish && finish !== 'STOP' && finish !== 'stop' && finish !== 'end_turn') {
-            try {
-              await w.write(enc.encode('data: ' + JSON.stringify({
-                warn: 'MODEL_' + finish,
-                message: '上游以 ' + finish + ' 收尾，断语未完篇（已收到 ' + outLen + ' 字符）'
-              }) + '\n\n'));
-            } catch (e) { /* 客户端已断开则忽略 */ }
-          }
-          // 结构化完整性：《结论对齐》契约要求文末四行（结论/应期/验证标志/用神）。
-          // 结论行缺失即视为「没断完」，无论上游自称停得多么正常。
-          // 这一条与 finishReason 互补：前者管「上游怎么停的」，它管「产物是否成形」。
-          // 只管首次断卦（history 为空）：追问是对话式的，一句「那应期呢」的回答
-          // 本就不带四行结构，在这里告警只会变成噪声。
-          if (!cut && history.length === 0 && outLen > 30 && !/结[论局]\s*[：:]/.test(tail)) {
-            try {
-              await w.write(enc.encode('data: ' + JSON.stringify({
-                warn: 'INCOMPLETE_STRUCTURE',
-                message: '断语缺少「结论：」行，疑未写完（已收到 ' + outLen + ' 字符）'
-              }) + '\n\n'));
-            } catch (e) { /* 客户端已断开则忽略 */ }
-          }
-          /* 收流留痕（2026-10-21 补）：finishReason 只对「非正常收尾」下发 warn，
-             STOP 与「压根没收到 finishReason」在客户端完全一样——可两者的处置方向
-             相反：前者是模型自己停，后者是流被提前关闭（网关超时/上游断连）。
-             实测 gemini-3.6-flash 未成篇样本只有 INCOMPLETE_STRUCTURE、没有任何
-             MODEL_*，无法判断属于哪一种，故此前「根因未定」。这一行日志把
-             finish(null 也是有效值)/字符数/思考片段长度一并落库，之后统计即可
-             定论，不必再靠猜参数。字段名短是给 CF 日志检索用的。 */
-          try {
-            console.log(JSON.stringify({
-              ev: 'stream_end',
-              finish: finish === null ? null : String(finish),
-              chars: outLen,
-              thought: thoughtLen,
-              cut: cut || null,
-              first: history.length === 0,
-              ms: Date.now() - startedAt
-            }));
-          } catch (e) { /* 日志失败不影响响应 */ }
-        } catch (e) {
-          // 上游断连 / abort（含超时）：告知客户端这是中断而非完篇
-          await writeErr(timedOut ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_STREAM_ERROR',
-            timedOut ? '上游响应超时' : ('上游连接中断：' + (e && e.message ? e.message : '未知原因')));
-        } finally {
-          if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
-          clearTimeout(timer);
-          // cancel()/close() 返回 promise：流已 error 时 cancel 会以存储的错误拒绝，
-          // 同步 try/catch 接不住，必须挂 .catch，否则变成未处理拒绝冒到 isolate 外。
-          try { reader.cancel().catch(function () { /* 上游已断开则忽略 */ }); } catch (e) { /* 已释放 */ }
-          try { w.close().catch(function () { /* 已关闭则忽略 */ }); } catch (e) { /* 已释放 */ }
-        }
-      }
-
-      // 周期心跳：每 hbMs（默认 15s）写一次注释行。SSE 注释行以 : 开头，客户端解析器跳过。
-      // 与正文共用同一 writer：写入按调用顺序排队，每个 ping 都是完整 SSE 帧，不会与其他帧撕裂。
-      heartbeat = setInterval(function () {
-        writer.write(enc.encode(': ping\n\n')).catch(function () { /* 客户端断开则停 */ });
-      }, hbMs);
-      pipeMergedSSE(r.stream).catch(function () { /* 错误已在 pipeMergedSSE 内处理并写终止事件 */ });
-      return new Response(readable, {
-        headers: {
-          'Content-Type': 'text/event-stream; charset=utf-8',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive'
-        }
-      });
+      const session = openSession();
+      pipeUpstreamSSE(r.stream, session.writer, session.enc)
+        .catch(function () { /* 错误已在 pipeUpstreamSSE 内处理并写终止事件 */ })
+        .then(session.finish, session.finish);
+      return session.response;
     }
     if (!r.reply) return json({ error: 'EMPTY', message: '大模型返回为空' }, 502);
     // 被守卫截断时仍返回已收到的部分答复，并带上原因（truncated 缺省时不出现在 JSON 里）；
@@ -777,16 +888,25 @@ export async function onRequestPost(context) {
     if (clientGone) {
       return json({ error: 'CLIENT_ABORTED', message: '客户端已断开' }, 499);
     }
+    // 首字节超时单列：它与「总超时」的处置不同——总超时是上游整篇没救，
+    // 首字节超时是「上游一个字都没吐」，改换更快的模型往往就能过。
+    if (firstByteTimedOut) {
+      return json({
+        error: 'UPSTREAM_FIRST_BYTE_TIMEOUT',
+        message: '上游 ' + Math.round(firstByteMs / 1000) + ' 秒内未返回首字节，请换一个更快的模型'
+      }, 504);
+    }
     if (timedOut) {
       return json({ error: 'LLM_TIMEOUT', message: '大模型 ' + Math.round(timeoutMs / 1000) + ' 秒内未返回完整响应，请重试或改用更快的模型' }, 504);
     }
     return json({ error: 'NET_ERROR', message: '无法连接大模型服务：' + e.message }, 502);
   } finally {
-    // 流式路径的计时器与心跳都已托管给 pipeMergedSSE（其 finally 负责清除），
+    // 流式路径的计时器与心跳都已托管给 openSession()（其 finish() 负责清除），
     // 此处必须跳过——否则 return Response 时外层 finally 会立刻清掉刚建好的
     // setInterval，心跳一次都发不出（与 writer 释放叠加，构成双重失效）。
     if (!timerHandedOff) {
       clearTimeout(timer);
+      if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
       if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
     }
   }

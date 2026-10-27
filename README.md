@@ -231,7 +231,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | `test-diff.mjs` | 三库交叉差分（4096 组合 + 历法时点 + 夜子时双流派 + 节气全量，10 万+字段） |
 | `tests/drift/` | **断语质量基线**（四指标：引擎一致率 / 同盘冲突率 / 要素错误率 / 边界遵守率）。`lib.mjs` 指标定义、`run.mjs` 报告、`selftest.mjs` 反向对照 29 项、`corpus/*.json` 真实断语语料。默认不阻断，基线改善后改 `--strict` 进门禁 |
 | `tools/gen-jieqi.js` | 节气表离线生成器（lunar-javascript → 差分压缩表） |
-| `functions/api/interpret.js` | 断卦接口（多供应商路由 + 流式 SSE 透传（思考草稿剥离）+ gemini 跨模型降级：主模型 429/5xx/网络错误自动落同族备选，响应带 `fallback` 字段） |
+| `functions/api/interpret.js` | 断卦接口（多供应商路由 + 流式 SSE 透传（思考草稿走独立 `r` 通道、不进正文）+ **先发首字节再等上游**（慢模型不再出现零字节窗口）+ gemini 跨模型降级：主模型 429/5xx/网络错误自动落同族备选，响应带 `fallback` 字段） |
 | `functions/api/models.js` | 模型清单接口（内置三条取自 `_lib.js` 的 `BUILTIN_MODELS`，与白名单同一份，不本地硬编码） |
 | `functions/api/records.js` | 卦例库接口（id 服务端校验/生成，防伪造覆盖；`?outcome=1` 结果回执回填，只写 outcome 列） |
 | `functions/api/_lib.js` | 供应商解析共享层（`_` 前缀不路由，白名单与清单共用一口径） |
@@ -271,7 +271,8 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | `GPT_BASE_URL` | 接口地址，默认官方（中转站改这里） |
 | `GPT_MODELS` | 逗号分隔模型清单，如 `gpt-6-luna,gpt-6-sol`（`gpt-5.2` 类签到送流量但请求不到模型的中转站已被代码层禁用） |
 | `GPT_EFFORT` | 选填，gpt-5/o 系推理强度（minimal/low/medium/high），默认 low |
-| `LLM_TIMEOUT_MS` | 选填，上游大模型请求硬超时（毫秒），默认 `300000`。覆盖「建连 + 读完整流」，防上游挂起时请求悬置；超时返回 `504 LLM_TIMEOUT` |
+| `LLM_TIMEOUT_MS` | 选填，上游大模型请求**总**硬超时（毫秒），默认 `300000`。覆盖「建连 + 读完整流」，防上游挂起时请求悬置；超时返回 `504 LLM_TIMEOUT` |
+| `LLM_FIRST_BYTE_MS` | 选填，上游**首字节**独立上限（毫秒），默认 `80000`。CF 边缘约 100s 无数据即 reset，而 DeepSeek 经网关首字节实测 60~90s，只有这条比边缘阈值略低的守卫能在断连前给出可读错误（`504 UPSTREAM_FIRST_BYTE_TIMEOUT`） |
 | `LLM_MAX_TOKENS` | 选填，单次生成上限。未设置则不传，由上游按自身默认值裁定（避免写死导致长断语被截断或短答复浪费配额） |
 | `SSE_HEARTBEAT_MS` | 选填，SSE 空闲心跳间隔（毫秒），默认 `15000`，下限 `1000`。上游思考期无输出时靠注释行保活，防 CF 边缘 ~100s 无数据 524 |
 | `LLM_CACHE_FIRST` | 选填，设为 `1` 时**首轮断卦也走网关缓存**（旧行为）。默认不设 = 首轮跳过缓存，见下方说明 |

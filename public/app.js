@@ -1262,7 +1262,7 @@
     // 旧版按 502 处理会空转 20 轮、三分钟才降级，用户还以为「接口没就绪」。
     // 用 pick 而非 noRetry[data.error]：error 来自服务端响应，
     // noRetry['constructor'] 会因原型属性 truthy 而把本可重试的错误误判为不重试。
-    const noRetry = { BAD_JSON: 1, NO_PAN: 1, BAD_PROVIDER: 1, BAD_MODEL: 1, NO_KEY: 1, ACCESS_REQUIRED: 1, UPSTREAM_RATE_LIMITED: 1 };
+    const noRetry = { BAD_JSON: 1, NO_PAN: 1, BAD_PROVIDER: 1, BAD_MODEL: 1, NO_KEY: 1, ACCESS_REQUIRED: 1, UPSTREAM_RATE_LIMITED: 1, UPSTREAM_FIRST_BYTE_TIMEOUT: 1 };
     if (data && data.error && pick(noRetry, data.error)) return false;
     if (data && (data.error === 'LLM_ERROR' || data.error === 'LLM_TIMEOUT' || data.error === 'EMPTY' || data.error === 'RATE_LIMITED')) return true;
     if (res && (res.status === 429 || res.status >= 500)) return true;
@@ -1272,14 +1272,18 @@
   // 读取服务端透传的 SSE 流。服务端已把上游 delta.content 归一为简单
   // data: {"t":"..."} 行（reasoning_content 思考草稿在服务端剥离，不透传），
   // 客户端只需累加 t 字段。
+  // 2026-10-27 起新增 data: {"r":"..."} —— 思考草稿的独立通道：只作进度显示，
+  // 绝不进正文（草稿含未纠正的临时判断，混进正文会让 fact-audit 误报）。
+  // 这条通道同时解决了「思考期 60~90s 界面全空、连接被中间层掐断」的观感与稳定性。
   // 流式渲染合并窗口：60ms ≈ 16 帧/秒，肉眼仍是连续的，但 innerHTML 重建次数降一个量级。
   const STREAM_RENDER_MS = 60;
-  async function readStreamSSE(res, onStream) {
+  async function readStreamSSE(res, onStream, onThink) {
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = '', full = '', emitted = '';
     let lastEmit = 0, flushTimer = null;
     let streamWarn = null;   // 上游 finishReason 异常时置位，供上层提示「未完篇」
+    let thinkLen = 0, lastThink = 0;
     try {
       while (true) {
         const r = await reader.read();
@@ -1301,6 +1305,12 @@
               throw { kind: 'stream', message: j.message || j.error, code: j.error };
             }
             if (j && j.t) full += j.t;
+            // 思考进度：节流 250ms 更新一次状态条，不必逐片重画
+            if (j && j.r) {
+              thinkLen += j.r.length;
+              const nowT = Date.now();
+              if (onThink && nowT - lastThink >= 250) { lastThink = nowT; onThink(thinkLen); }
+            }
             // 上游非正常收尾（MAX_TOKENS / SAFETY 等）：不是网络问题，重试只会
             // 再撞同一上限，所以不 throw（不触发重试），而是记下来交给上层提示。
             // 旧版服务端不读 finishReason，这类半篇断语被当成完整答案交付。
@@ -1357,6 +1367,10 @@
     const details = [];
     let lastErr = null;
     let attempt = 0;
+    // 连续「上游整条流没有内容」的次数。2026-10-27：旧版对它一视同仁地重试，
+    // 极端情况打满 18 次、耗 180s（AI Gateway 日志里那串 1s 请求），用户全程呆看。
+    // 连续两次空稿基本可判定与该模型/该时段无关，直接收手让用户换模型。
+    let emptyHits = 0;
     // 排盘文本在进入重试循环前快照一次：旧版每轮 attempt 重建 buildPanText(true)，
     // 重试期间用户改事类/时间，后续 attempt 会发出与首次不同的盘面（对话历史还是旧的）。
     const panTextSnapshot = buildPanText(true);
@@ -1405,7 +1419,12 @@
             Math.max(1000, AI_RETRY_DEADLINE - (Date.now() - start)));
           let text;
           try {
-            text = await readStreamSSE(res, onStream);
+            // 思考进度回调：DeepSeek 的首字节能到 60~90s，期间正文一个字都没有，
+            // 旧版界面只显示静止的「推卦中…」，用户以为卡死。现在把草稿字数实时显示出来。
+            text = await readStreamSSE(res, onStream, function (n) {
+              if (!onStatus) return;
+              onStatus('模型思考中… 已输出 ' + (n > 999 ? (n / 1000).toFixed(1) + 'k' : n) + ' 字');
+            });
           } finally {
             clearTimeout(streamTimeout);
           }
@@ -1430,9 +1449,24 @@
         // 外部取消（重新起卦/重新断卦）直接抛出，不走重试也不渲染失败框
         if (outerSignal && outerSignal.aborted) throw { kind: 'aborted', message: '已取消' };
         const isAbort = netErr.name === 'AbortError';
+        // 流内错误码（服务端 data:{"error":...}）要按类型分流：配额/配置类重试毫无意义。
+        // 2026-10-27 前服务端只在「响应头之前的失败」返回 JSON，这类错误天然走 API 分支；
+        // 现在慢上游会先发 SSE 头，错误只能以流内事件送达，故这里必须补一份同样的分类规则。
+        const sCode = (netErr && netErr.code) || '';
+        const noRetryStream = { UPSTREAM_RATE_LIMITED: 1, NO_KEY: 1, BAD_MODEL: 1, ACCESS_REQUIRED: 1 };
+        const sMsg = (netErr && netErr.message) || '未知原因';
+        if (pick(noRetryStream, sCode)) {
+          throw { kind: 'api', message: sMsg, detail: '', code: sCode };
+        }
+        if (sCode === 'EMPTY_UPSTREAM') {
+          emptyHits++;
+          if (emptyHits >= 2) {
+            throw { kind: 'api', message: '大模型连续两次没有返回内容，请换一个模型或稍后再试', detail: '', code: sCode };
+          }
+        }
         const msg = isAbort ? '请求超时'
-          : (netErr.kind === 'stream' ? ('断卦流中断：' + netErr.message)
-            : ('网络请求失败：' + netErr.message));
+          : (netErr.kind === 'stream' ? ('断卦流中断：' + sMsg)
+            : ('网络请求失败：' + sMsg));
         details.push('第' + attempt + '次：' + msg);
         lastErr = { kind: 'net', message: msg };
         const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));

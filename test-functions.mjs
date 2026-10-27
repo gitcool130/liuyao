@@ -1107,5 +1107,138 @@ eq('dismissed → 200 且只关 pending', rDis.status === 200 && dbDis.state.sql
 dbDis.state.changes = 0;
 eq('无待回访任务 → 404', (await rdPost({ cast_id: 'ok-1', action: 'dismissed' }, { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbDis, LIB_CODE: 'k' })).status, 404);
 
+// ---------- #25 「先发首字节」重构 + 思考进度通道 + 空流终止（2026-10-27） ----------
+// 线上实症：DeepSeek 经网关首字节 60~90s，旧版把这段等待留在 Response 返回之前，
+// 客户端全程零字节 → CF 边缘 ~100s 无数据即 reset（curl 实测 76s、0 字节）→
+// 前端判失败、指数退避重试 18 次（AI Gateway 日志里那串 1s 请求），用户只看到「推卦中…」。
+// 四条契约在此固化：慢上游立刻回 SSE 头、思考草稿走 r 通道、空流显式报错、首字节单独超时。
+const postGpt = function (extra, envExtra) {
+  return interpretPost({
+    request: new Request('https://x/api/interpret', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(Object.assign({ panText: '占测试', provider: 'gpt', model: 'gpt-6-luna' }, extra || {}))
+    }),
+    env: Object.assign({}, ENV_GPT, envExtra || {})
+  });
+};
+
+// ① 慢上游（2.2s 才响应）：响应头必须立即返回，且首帧可读
+globalThis.fetch = function () {
+  return new Promise(function (resolve) {
+    setTimeout(function () {
+      const body = new ReadableStream({
+        start: function (c) { c.enqueue(encG.encode(sseLine('慢响应'))); c.close(); }
+      });
+      resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    }, 2200);
+  });
+};
+const tSlow = Date.now();
+const rSlow = await postGpt();
+const slowHeadMs = Date.now() - tSlow;
+eq('慢上游 → 响应头不等上游（<1.8s 返回）', slowHeadMs < 1800, true);
+eq('慢上游 → 直接给 SSE 200', rSlow.status, 200);
+eq('慢上游 → Content-Type 仍是 event-stream', /text\/event-stream/.test(rSlow.headers.get('content-type')), true);
+const rdSlow = rSlow.body.getReader();
+const firstSlow = await rdSlow.read();
+const slowFirstMs = Date.now() - tSlow;
+eq('首字节在响应头之后立刻可读（<300ms，旧版此处要等满 2.2s）', slowFirstMs - slowHeadMs < 300, true);
+const decSlow = new TextDecoder();
+let slowAll = decSlow.decode(firstSlow.value);
+while (true) { const rr = await rdSlow.read(); if (rr.done) break; slowAll += decSlow.decode(rr.value); }
+eq('首帧是 SSE 注释（心跳），不是正文', /^: /.test(slowAll.trim()), true);
+eq('上游落地后正文照常下发', /\{"t":"慢响应"\}/.test(slowAll), true);
+
+// ② 慢上游 5xx：头已发出，回不了 JSON，必须改用流内 error（前端据此重试/换模型）
+globalThis.fetch = function () {
+  return new Promise(function (resolve) {
+    setTimeout(function () { resolve(new Response('boom', { status: 500 })); }, 2000);
+  });
+};
+const rSlowFail = await postGpt();
+eq('慢上游 5xx → 状态码只能 200（头已发出）', rSlowFail.status, 200);
+const evSlowFail = await readSSEEvents(rSlowFail);
+eq('慢上游 5xx → 流内 error=LLM_ERROR', evSlowFail.some(function (e) { return e.error === 'LLM_ERROR'; }), true);
+
+// ③ 思考草稿走独立 r 通道：实时下发、绝不混进正文（防 fact-audit 假阳性复发）
+globalThis.fetch = function () {
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(encG.encode('data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: '思考甲' } }] }) + '\n'));
+      c.enqueue(encG.encode('data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: '思考乙' } }] }) + '\n'));
+      c.enqueue(encG.encode(sseLine('正文丙')));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const evThink = await readSSEEvents(await postGpt());
+const rPool = evThink.filter(function (e) { return typeof e.r === 'string'; }).map(function (e) { return e.r; }).join('');
+eq('思考草稿实时下发（r 通道）', rPool, '思考甲思考乙');
+eq('思考草稿不混进正文', sseText(evThink), '正文丙');
+eq('有正文时不补发草稿、也不报空', evThink.some(function (e) { return e.error === 'EMPTY_UPSTREAM'; }), false);
+
+// ④ 空流：上游正常关闭但一个字都没有 → 必须显式终止（旧版静默关流，前端空转 18 轮）
+globalThis.fetch = function () {
+  const body = new ReadableStream({ start: function (c) { c.enqueue(encG.encode('data: [DONE]\n')); c.close(); } });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const evEmpty = await readSSEEvents(await postGpt());
+eq('空流 → 显式 error=EMPTY_UPSTREAM', evEmpty.some(function (e) { return e.error === 'EMPTY_UPSTREAM'; }), true);
+eq('空流 → 不再静默（至少有一个事件）', evEmpty.length > 0, true);
+
+// ⑤ 只有草稿没有任何正文：沿用兜底补发，且不报 EMPTY（个别中转把答案塞在思考字段）
+globalThis.fetch = function () {
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(encG.encode('data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: '只有草稿' } }] }) + '\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const evOnlyReas = await readSSEEvents(await postGpt());
+eq('纯草稿流 → 流末兜底补发为正文', sseText(evOnlyReas), '只有草稿');
+eq('纯草稿流 → 不误报 EMPTY_UPSTREAM', evOnlyReas.some(function (e) { return e.error === 'EMPTY_UPSTREAM'; }), false);
+
+// ⑥ 首字节独立超时：LLM_FIRST_BYTE_MS 到点即 504，不再让边缘先 reset
+globalThis.fetch = function (url, opts) {
+  return new Promise(function (resolve, reject) {
+    const sig = opts && opts.signal;
+    if (sig) sig.addEventListener('abort', function () {
+      const e = new Error('The operation was aborted'); e.name = 'AbortError'; reject(e);
+    });
+  });
+};
+const hdrT = Date.now();
+const hdrR = await postGpt({}, { LLM_FIRST_BYTE_MS: '300' });
+const hdrJ = await hdrR.json();
+eq('首字节超时 → 504', hdrR.status, 504);
+eq('首字节超时 → 错误码 UPSTREAM_FIRST_BYTE_TIMEOUT', hdrJ.error, 'UPSTREAM_FIRST_BYTE_TIMEOUT');
+eq('首字节超时 → 不等满总超时（<1.5s 返回）', Date.now() - hdrT < 1500, true);
+eq('首字节超时 → 文案提示换更快的模型', /更快/.test(hdrJ.message), true);
+
+// ⑦ Google 原生流里的 thought 片段：与 reasoning_content 同待遇，只走 r 通道。
+// 背景：thinkingConfig:thinkingBudget=0 并不总被 gemini 3.x 采纳，实测会真的吐
+// parts[{text, thought:true}]；旧版按 p.text 一并拼进正文 → 2026-10-13 fact-audit
+// 6 处「与卦盘不符」的假阳性。这条断言把「草稿不得进正文」在 gemini 侧也钉死。
+globalThis.fetch = function () {
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(encG.encode('data: ' + JSON.stringify({
+        candidates: [{ content: { parts: [{ text: ' Gemini 草稿', thought: true }, { text: ' Gemini 正文' }] } }]
+      }) + '\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const evGemThink = await readSSEEvents(await postGem('gemini-3.6-flash'));
+eq('gemini thought 片段走 r 通道', evGemThink.filter(function (e) { return e.r; }).map(function (e) { return e.r; }).join(''), ' Gemini 草稿');
+eq('gemini thought 片段不进正文', sseText(evGemThink), ' Gemini 正文');
+
+globalThis.fetch = origFetch;
+
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

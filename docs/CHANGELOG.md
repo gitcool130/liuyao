@@ -529,3 +529,44 @@
 - **⑥ 取用神两现口径参数化**：`LY.ysDupMode`（默认 `'priority'` 逐字节不变；`'kongpo'` 依《增删卜易·两现章第三十二》野鹤法新增陈述层断语 `两现:用空破者应期` + 应期锚点线索，主用爻/trend 零改动）。test-rules 265→280；guji 新增 3 条 kongpo 用例（zsby-1406/1414/1422-kongpo），12144→12148；selftest 41→43（kongpo 层 2 类行为变异）；覆盖率 65/79=82.3%。方案：`docs/proposal-yongshen-parameterization.md`
 - **⑦ 复盘闭环（readings 回访任务表）**：新表 `readings`（只存「哪条卦该回头看」，幂等派生自 `casts.baseline` 应期窗口次日）；`/api/readings` GET 到期视图 / POST dismissed（口令与 records 同源，禁 SELECT *）；回填成功自动置 acted；卦例库顶部「回访提醒」区块。test:fn 233→254。方案：`docs/proposal-readings-loop.md`
 - **⑥阶段四（应期窗口联动）按方案「可独立砍除」条款砍除**：kongpo 空锚点暂不进窗口数字，断语与线索已完整
+
+## M20（2026-10-27，线上「请求一堆却没有内容」根治）
+
+线上实症（用户截图 + AI Gateway 日志 + curl 探针共同确认）：
+① AI Gateway 里 `deepseek/deepseek-flash` 出现一串间隔 1.2→2.4→4.8→6s 的请求（指数退避），
+   每条 duration ≈1s、tokens 为 `-`，同时前端一直显示「推卦中…」；
+② `curl` 直打线上 `/api/interpret`（deepseek）**76 秒后连接被 reset，收到 0 字节**；
+③ 同条件 `gemini-3.6-flash` 正常吐正文（402B 时仍在生成）——接口与 key 没问题。
+
+根因四条，全部落在 `functions/api/interpret.js`：
+
+- **A. 首字节前没有任何数据**：旧版 `await attempt()` 要等上游响应头才 `return new Response(...)`，
+  首字节 `: ping` 与 15s 心跳都在那之后才写。DeepSeek 前 60~90s 只吐 `reasoning_content`，
+  客户端全程零字节 → CF 边缘 ~100s 无数据即 reset。**用户看到的「没内容」是边缘 reset，不是模型没答**。
+- **B. `LLM_TIMEOUT_MS`（默认 300s）永远轮不到**：它大于边缘阈值，模型挂起时先撞边缘，
+  代码里设计好的 504 根本发不出去。
+- **C. 思考草稿只在「正常收流」时兜底补发**：流被 abort 就一个字节都补不上，客户端拿空。
+- **D. 空流（`outLen===0` 且无草稿）直接 `w.close()`，不写任何终止事件**：前端判 `empty` →
+  指数退避重试 18 次、耗满 180s 截止 —— 就是 AI Gateway 那串 1s 请求的来历。
+
+修复（`tests` 覆盖见 `test-functions.mjs` #25，断言 254 → 275）：
+
+1. **先发首字节再打上游**：新增 `FAST_HEADER_MS = 1500` 分流。上游 1.5s 内响应（正常流头 / 4xx / 5xx）
+   走原路径，**错误仍返回 JSON、状态码不变**（前端契约一行不动）；超过则 `slowSession()` 立刻建 SSE、
+   下发 `: ping` + 心跳，再去等上游。等待期不再是零字节，边缘不会再 reset。
+2. **首字节独立守卫** `LLM_FIRST_BYTE_MS`（默认 80s < 边缘阈值），到点返回
+   `504 UPSTREAM_FIRST_BYTE_TIMEOUT`，前端列为**不重试**（重试同一个慢模型毫无意义）。
+3. **思考草稿走独立通道 `data:{"r":"…"}`**：实时下发但绝不混进正文（草稿含未纠正的临时判断，
+   混进去会复发 2026-10-13 那 6 处 fact-audit 假阳性）；前端只拿它更新「模型思考中… 已输出 N 字」，
+   同时让 TCP 流持续有帧。
+4. **空流显式终止**：`outLen===0` 时下发 `{"error":"EMPTY_UPSTREAM"}`，前端立即换模型/提示，不再空转 18 轮。
+5. **会话样板收敛**：`openSession()` / `pipeUpstreamSSE()` 两处复用，杜绝「心跳挂在已 releaseLock 的
+   writer 上」这类只在生产暴露的失效。
+6. **顺便修掉 gemini 侧的同类问题**：`thinkingBudget:0` 并不总被 gemini 3.x 采纳，实测会真吐
+   `parts[{text, thought:true}]`，旧版按 `p.text` 一并拼进正文（2026-10-13 那 6 处假阳性的另一半成因）。
+   现在 thought 片段与 `reasoning_content` 同待遇：只走 `r` 通道，不进正文。
+
+**AI Gateway 里没有 gemini 日志**（同日排查）：代码只有在 `GEMINI_BASE_URL` 含 `google-ai-studio` 时
+才走网关原生路径，否则回退 `generativelanguage.googleapis.com` 直连 —— 直连不经过网关，自然一条日志都没有。
+该变量是 Pages secret，**改完必须重新部署**（Functions 持旧环境快照）；本地 `wrangler pages dev`
+没有 `.dev.vars`，因此本地恒为直连、恒无日志，且 Worker 的 `fetch()` 不读 `HTTP_PROXY`（挂 7890 也没用）。
