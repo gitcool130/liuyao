@@ -35,26 +35,34 @@
   // ---- 五类通用槽位（与领域无关）----
   // risk 是**默认**等级；领域包用 decisive 数组把某几项提为高风险，
   // 其余缺项按低风险处理（只标注、不拦结论）。
+  // 每槽位除工程字段外，附一条**古法出处**（source）：
+  // 预检块在高风险缺项时把原文一并给出，模型据此判定而非据「工程规则」判定。
+  // 引文按通行本大意，版本字句待校（见 docs/proposal-premise-metadata.md「古法出处」）。
   const SLOTS = [
     {
       id: 'timeSpan', label: '时间范围', risk: 'mid',
-      ask: '此事的判定跨度是什么（这几天／这个月／今年）'
+      ask: '此事的判定跨度是什么（这几天／这个月／今年）',
+      source: '「远事定之以年月，近事应之于日时」（远近当分）'
     },
     {
       id: 'stage', label: '对象阶段', risk: 'mid',
-      ask: '当事人此刻处在哪个阶段（未开始／进行中／已出结果待揭晓）'
+      ask: '当事人此刻处在哪个阶段（未开始／进行中／已出结果待揭晓）',
+      source: '「远事定之以年月，近事应之于日时」——不知阶段则远近无从定'
     },
     {
       id: 'standard', label: '目标标准', risk: 'mid',
-      ask: '要达成的具体目标与门槛是什么'
+      ask: '要达成的具体目标与门槛是什么',
+      source: '「须指其所疑之事而占之」——目标不具体，吉凶无从判'
     },
     {
       id: 'process', label: '进程状态', risk: 'mid',
-      ask: '事情推进到哪一步了（还没开始／已提交／已出结果）'
+      ask: '事情推进到哪一步了（还没开始／已提交／已出结果）',
+      source: '「卦之恍惚者，再占一卦，不可妄断」'
     },
     {
       id: 'rules', label: '规则环境', risk: 'low',
-      ask: '有哪些外部规则、政策或条件会影响结果'
+      ask: '有哪些外部规则、政策或条件会影响结果',
+      source: '只影响细节，不夺吉凶主线'
     }
   ];
 
@@ -109,14 +117,14 @@
     {
       name: '升学', re: /升学|考学|考研|考公|中考|高考|考上|考试|备考|报名|录取|招生|志愿|分数线|上岸|复读|择校|学位|学校|转学/,
       pack: {
-        anchors: ['招生年度／考期'], decisive: ['timeSpan', 'standard'], typicalSpan: 'month',
+        anchors: ['招生年度／考期'], decisive: ['timeSpan', 'standard', 'stage'], typicalSpan: 'month',
         spanNote: '升学、招考以「招生年度／考期」为刻度，不等同于自然年；录取以流程节点（出分、投档、录取）为刻度。'
       }
     },
     {
       name: '求职', re: /求职|面试|入职|跳槽|招聘|升职|晋升|调岗|裁员|试用期|offer|简历|编制|上岸/i,
       pack: {
-        anchors: ['招聘批次'], decisive: ['timeSpan', 'process'], typicalSpan: 'month',
+        anchors: ['招聘批次'], decisive: ['timeSpan', 'process', 'stage'], typicalSpan: 'month',
         spanNote: '求职以招聘批次与流程节点（投递／面试／发offer）为刻度；进程状态直接决定断法。'
       }
     },
@@ -252,7 +260,14 @@
         const needs = pack.decisive.indexOf(s.id) >= 0;
         const goalish = s.id === 'standard' ? GOAL_RE.test(q) : true;
         risk = (needs && goalish && s.id !== 'timeSpan') ? 'high' : (s.id === 'standard' ? 'mid' : 'low');
-      } else if (partial) risk = 'mid';
+      } else if (partial) {
+        // 部分明示（只说目标、未给门槛）：若本类确实以门槛为定性关键、且问法是
+        // 「达成某结果」，则**仍是高风险**——「能不能考上」而不知录取线与名额，
+        // 吉凶方向本就无法定。旧版一律降 mid，于是最该拦的案例（今年考某校）
+        // 反倒只给「如需补充」，模型照样给单一结论。
+        const needs = pack.decisive.indexOf(s.id) >= 0;
+        risk = (needs && GOAL_RE.test(q)) ? 'high' : 'mid';
+      }
       return { id: s.id, label: s.label, ask: s.ask, known: known, hit: hit, partial: partial, risk: risk };
     });
     const missing = slots.filter(function (s) { return !s.known; });
@@ -316,6 +331,20 @@
     if (j.high.length) {
       out += '- 高风险缺项：' + j.high.map(function (s) { return s.label; }).join('、') +
         '——缺之会改变结论方向或应期量级：首轮不得给出单一吉凶与单一应期，须先说明缺什么、为何影响判断，再按可能情形给条件分支。\n';
+      // 古法依据：把缺项对应到书上的原话，而不是只说「工程规则要求」。
+      // 措辞注明「用于判断，不必写入正文」，避免模型把这段原样搬进断语。
+      const srcs = [];
+      for (let i = 0; i < j.high.length; i++) {
+        for (let k = 0; k < SLOTS.length; k++) {
+          if (SLOTS[k].id === j.high[i].id && SLOTS[k].source) {
+            srcs.push(j.high[i].label + '：' + SLOTS[k].source);
+          }
+        }
+      }
+      if (srcs.length) {
+        out += '- 古法依据（用于判断，不必写入正文）：' + srcs.join('；') +
+          '。缺项即「所疑之事」未说清，古法不许含糊，故须先澄清、再断。\n';
+      }
     }
     const lowMissing = j.missing.filter(function (s) { return s.risk === 'low'; });
     if (lowMissing.length) {
