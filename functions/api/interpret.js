@@ -239,6 +239,9 @@ function inferProvider(model, wl) {
 
 export async function onRequestPost(context) {
   const { request, env } = context;
+  // Pages Functions 的 waitUntil：慢路径必须先返回响应、再等上游落地，
+  // 而 handler 返回后「游离 Promise」上的 fetch 会被运行时取消（见 slowSession 注释）。
+  const waitUntil = typeof context.waitUntil === 'function' ? context.waitUntil.bind(context) : null;
 
   if (isRateLimited(request, env)) {
     return json({ error: 'RATE_LIMITED', message: '请求过于频繁，请稍后重试' }, 429);
@@ -484,7 +487,8 @@ export async function onRequestPost(context) {
   // 先发首字节的阈值：上游若在此时间内给出响应（正常流头 / 4xx / 5xx），沿用原有
   // 「直接返回 JSON 或流」的路径，错误语义与状态码一律不变；超过则先建 SSE 再等，
   // 使等待期不再是零字节（详见下方 FAST_HEADER_MS 分流）。
-  const FAST_HEADER_MS = 1500;
+  // 可临时用 LLM_FAST_HEADER_MS=1 把**所有**请求赶进慢路径，用于压测/回归那条分支。
+  const FAST_HEADER_MS = Math.max(1, parseInt(env.LLM_FAST_HEADER_MS || '1500', 10) || 1500);
   function wait(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
 
   // 单次上游尝试。成功 → { reply, cut }；失败 → { fail: { status, detail, retryable } }。
@@ -767,7 +771,7 @@ export async function onRequestPost(context) {
     const frame = function (obj) {
       return w.write(enc.encode('data: ' + JSON.stringify(obj) + '\n\n')).catch(function () { /* 客户端已断开 */ });
     };
-    (async function () {
+    const task = (async function () {
       try {
         let r = await pending;
         if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
@@ -809,6 +813,13 @@ export async function onRequestPost(context) {
         s.finish();
       }
     })();
+    /* 没有这一行，慢路径必崩：handler 一返回，运行时就把上面这个「游离」的 fetch 取消掉，
+       于是出现「响应头 1.5s 就到了、紧接着上游被掐」的 499（dur≈1.5s），客户端只拿到空流，
+       按 6s 退避重试十几次——正是 2026-10-27 15:00 那批日志的形状。
+       waitUntil 把这条任务挂在请求生命周期上，fetch 才会继续跑完。 */
+    if (waitUntil) {
+      try { waitUntil(task); } catch (e) { /* 运行时无此能力则退化为原行为 */ }
+    }
     return s.response;
   }
 

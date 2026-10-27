@@ -1238,7 +1238,56 @@ const evGemThink = await readSSEEvents(await postGem('gemini-3.6-flash'));
 eq('gemini thought 片段走 r 通道', evGemThink.filter(function (e) { return e.r; }).map(function (e) { return e.r; }).join(''), ' Gemini 草稿');
 eq('gemini thought 片段不进正文', sseText(evGemThink), ' Gemini 正文');
 
+// ⑧ 慢路径必须登记 waitUntil（2026-10-27 二次修，线上 499 的真凶）。
+// 慢路径是「先返回响应、再等上游落地」：handler 一返回，运行时就会取消挂在
+// 游离 Promise 上的 fetch —— 网关侧表现为 499 + dur≈FAST_HEADER_MS，
+// 客户端只拿到空流，按 6s 退避重试十几次。没有 waitUntil 就必然复现。
+globalThis.fetch = function () {
+  return new Promise(function (resolve) {
+    setTimeout(function () {
+      const body = new ReadableStream({
+        start: function (c) { c.enqueue(encG.encode(sseLine('慢但活着'))); c.close(); }
+      });
+      resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    }, 1900);
+  });
+};
+let waitedTask = null;
+const rWait = await interpretPost({
+  request: new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panText: '占测试', provider: 'gpt', model: 'gpt-6-luna' })
+  }),
+  env: ENV_GPT,
+  waitUntil: function (p) { waitedTask = p; }
+});
+eq('慢路径 → 登记了 waitUntil（否则 fetch 会被运行时取消）', typeof waitedTask === 'object' && waitedTask !== null, true);
+const evWait = await readSSEEvents(rWait);   // 必须先消费，否则写入方被背压挂住
+eq('慢路径 → waitUntil 落地后正文照常送达', sseText(evWait), '慢但活着');
+
+// 反向对照：没有 waitUntil 时也不能抛错（老运行时/单测环境）
+globalThis.fetch = function () {
+  return new Promise(function (resolve) {
+    setTimeout(function () {
+      const body = new ReadableStream({ start: function (c) { c.enqueue(encG.encode(sseLine('无 waitUntil'))); c.close(); } });
+      resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    }, 1600);
+  });
+};
+const rNoWait = await interpretPost({
+  request: new Request('https://x/api/interpret', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panText: '占测试', provider: 'gpt', model: 'gpt-6-luna' })
+  }),
+  env: ENV_GPT
+});
+const evNoWait = await readSSEEvents(rNoWait);
+eq('缺 waitUntil 的运行时 → 仍 200 且不抛错', rNoWait.status, 200);
+eq('缺 waitUntil 的运行时 → 正文仍能送达', sseText(evNoWait), '无 waitUntil');
+
 globalThis.fetch = origFetch;
+if (fail > 0) process.exit(1);
 
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);
