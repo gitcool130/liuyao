@@ -172,6 +172,11 @@ has('app.js 展示撤回模板', appSrc, 'C.premise.withdraw');
 has('app.js 注入前提预检块', appSrc, 'C.premiseBlock(');
 has('app.js 追问带前提变动提示', appSrc, 'followUpHint');
 has('index.html 挂载 core/premise.js', htmlSrc, 'core/premise.js');
+// 流式守卫（2026-10-27 二次修正）：思考期可超 180s，不能再用绝对上限掐断活着的流。
+has('app.js 流式用空闲超时', appSrc, 'AI_STREAM_IDLE_MS');
+has('app.js 流式另设硬上限', appSrc, 'AI_STREAM_MAX_MS');
+has('app.js 按字节重置空闲计时', appSrc, 'onTick');
+has('app.js 区分「只想不答」', appSrc, 'REASONING_ONLY');
 
 console.log('PASS:', pass, ' FAIL:', fail);
 if (fail > 0) process.exit(1);

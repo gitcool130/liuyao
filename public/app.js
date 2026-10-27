@@ -1303,6 +1303,14 @@
   const AI_RETRY_MIN_DELAY = 1200;
   const AI_RETRY_MAX_DELAY = 6000;
   const AI_RETRY_MIN_TIMEOUT = 15000;
+  // 流式阶段的守卫改为「空闲超时」而非「总时长上限」（2026-10-27）。
+  // 旧版按「距 AI_RETRY_DEADLINE 的剩余量」做绝对上限，问题在于**数据还在流**时
+  // 也会被掐：DeepSeek Flash 的思考期实测可超 150s（垃圾输入下 150s 仍在 reasoning、
+  // 正文一个字没有），到点 abort 后前端又从头重试，用户只看到「思考中 N 字」反复归零。
+  // 现在只要上游还在吐帧（思考或正文）就重新计时；总时长另设硬上限，与函数侧
+  // LLM_TIMEOUT_MS（默认 300s）对齐，避免真的无限等。
+  const AI_STREAM_IDLE_MS = 65000;
+  const AI_STREAM_MAX_MS = 330000;
 
   function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
@@ -1329,7 +1337,7 @@
   // 这条通道同时解决了「思考期 60~90s 界面全空、连接被中间层掐断」的观感与稳定性。
   // 流式渲染合并窗口：60ms ≈ 16 帧/秒，肉眼仍是连续的，但 innerHTML 重建次数降一个量级。
   const STREAM_RENDER_MS = 60;
-  async function readStreamSSE(res, onStream, onThink) {
+  async function readStreamSSE(res, onStream, onThink, onTick) {
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = '', full = '', emitted = '';
@@ -1340,6 +1348,8 @@
       while (true) {
         const r = await reader.read();
         if (r.done) break;
+        // 有字节到达就重置空闲计时（含 `: ping` 心跳帧）：上游在动，就不该判超时。
+        if (onTick) { try { onTick(); } catch (e) { /* 计时回调失败不影响读流 */ } }
         buf += dec.decode(r.value, { stream: true });
         let idx;
         while ((idx = buf.indexOf('\n')) >= 0) {
@@ -1471,20 +1481,42 @@
           // 之前）算的，未扣除建连耗时，直接复用会让总截止被超出建连耗时
           // 那么久，与「与总截止口径一致」的意图相反（2026-10-21 审计修正）。
           clearTimeout(timer);
-          const streamTimeout = setTimeout(function () { ctrl.abort(); },
-            Math.max(1000, AI_RETRY_DEADLINE - (Date.now() - start)));
+          // 空闲超时（2026-10-27 二次修正）：不再用「距 180s 截止的剩余量」做绝对上限。
+          // 实测 DeepSeek Flash 在含混题面下思考可超 150s、正文一字未出，绝对上限会把
+          // 「还在正常思考」的请求掐掉，前端随后从头重试——用户看到的就是「请求十几次
+          // 没有结果」。改为「65s 无任何字节才超时」，同时设 330s 硬上限兜底。
+          let idleTimer = null;
+          const armIdle = function () {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(function () { ctrl.abort(); }, AI_STREAM_IDLE_MS);
+          };
+          const hardCap = setTimeout(function () { ctrl.abort(); }, AI_STREAM_MAX_MS);
+          armIdle();
           let text;
+          let thinkLen = 0;   // 本轮收到的思考草稿字数（用于区分「空响应」与「只想不答」）
           try {
             // 思考进度回调：DeepSeek 的首字节能到 60~90s，期间正文一个字都没有，
             // 旧版界面只显示静止的「推卦中…」，用户以为卡死。现在把草稿字数实时显示出来。
             text = await readStreamSSE(res, onStream, function (n) {
+              thinkLen = n;
               if (!onStatus) return;
               onStatus('模型思考中… 已输出 ' + (n > 999 ? (n / 1000).toFixed(1) + 'k' : n) + ' 字');
-            });
+            }, armIdle);
           } finally {
-            clearTimeout(streamTimeout);
+            if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+            clearTimeout(hardCap);
           }
           if (text) return text;
+          // 「只想不答」不是网络抖动，重试只会再来一轮长思考：直接给结论让用户换模型。
+          // 实测 DeepSeek Flash 在题面含混时会一直写 reasoning（>150s）而不产出正文，
+          // 旧版把它归入「返回为空」一路退避重试，用户看到的正是「请求十几次没有结果」。
+          if (thinkLen > 500) {
+            throw {
+              kind: 'api', code: 'REASONING_ONLY',
+              message: '模型思考了 ' + (thinkLen > 999 ? (thinkLen / 1000).toFixed(1) + 'k' : thinkLen) +
+                ' 字却没有给出正文（思考型模型偶发），请换一个模型或把所测之事写得更具体'
+            };
+          }
           // 流结束但内容为空，按空响应重试
           details.push('第' + attempt + '次：大模型返回为空');
           lastErr = { kind: 'empty', message: '大模型返回为空' };
