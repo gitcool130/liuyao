@@ -1371,6 +1371,10 @@
     // 极端情况打满 18 次、耗 180s（AI Gateway 日志里那串 1s 请求），用户全程呆看。
     // 连续两次空稿基本可判定与该模型/该时段无关，直接收手让用户换模型。
     let emptyHits = 0;
+    // 连续「断卦流中断」次数。2026-10-27：服务端在流内报错时前端会一路重试到 180s 截止，
+    // 期间用户只看到「推卦中…」——正是「请求了十几次没有结果」的观感来源。
+    // 流中断属于上游/链路问题，连撞三次基本可判定不是抖动，直接给结论让用户换模型。
+    let streamFails = 0;
     // 排盘文本在进入重试循环前快照一次：旧版每轮 attempt 重建 buildPanText(true)，
     // 重试期间用户改事类/时间，后续 attempt 会发出与首次不同的盘面（对话历史还是旧的）。
     const panTextSnapshot = buildPanText(true);
@@ -1462,6 +1466,12 @@
           emptyHits++;
           if (emptyHits >= 2) {
             throw { kind: 'api', message: '大模型连续两次没有返回内容，请换一个模型或稍后再试', detail: '', code: sCode };
+          }
+        }
+        if (netErr.kind === 'stream') {
+          streamFails++;
+          if (streamFails >= 3) {
+            throw { kind: 'api', message: '断卦流连续三次中断（' + sMsg + '），请换一个模型或稍后再试', detail: '', code: sCode };
           }
         }
         const msg = isAbort ? '请求超时'
