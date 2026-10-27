@@ -559,7 +559,9 @@ globalThis.fetch = origFetch;
 // 两份提示词是同一契约的两个副本（app.js 那份用于「复制请求内容手动断卦」的降级路径）。
 // 任一侧漏改都会让「手动断卦」与「线上断卦」口径分叉，故此处逐段比对契约标记。
 const CONTRACT_MARKS = ['【盘面事实不可改写】', '【主次次序】', '【追问沿用原盘】', '【现实边界】',
-  '【法理口径】', '【多选一问法】', '【结论对齐】'];
+  '【法理口径】', '【多选一问法】', '【结论对齐】',
+  // M21（2026-10-27）：前提与应期四段——缺项分级、应期同域、应期撤回，加通用槽位段。
+  '【前提元数据】', '【缺项分级】', '【应期同域】', '【应期撤回】'];
 const appSrc = readFileSync(new URL('./public/app.js', import.meta.url), 'utf8');
 CONTRACT_MARKS.forEach(function (m) {
   eq('app.js 含契约段 ' + m, appSrc.indexOf(m) >= 0, true);
@@ -567,7 +569,7 @@ CONTRACT_MARKS.forEach(function (m) {
 });
 eq('两份提示词同引经据典口径', appSrc.indexOf('引经据典') >= 0 && SYSTEM_PROMPT.indexOf('引经据典') >= 0, true);
 // 反向对照：契约段一旦被删，本组断言必须变红（防止断言写成恒真）
-eq('对照：契约段总数应为 7', CONTRACT_MARKS.length, 7);
+eq('对照：契约段总数应为 11', CONTRACT_MARKS.length, 11);
 
 // 全文一致：上面的断言只查 4 个标记「各自存在」，两份提示词正文分叉（一侧多/少一段
 // 说明、改了措辞）仍会全绿。这里从 app.js 源码取出数组字面量求值（纯字符串元素，
@@ -584,6 +586,41 @@ eq('对照：契约段总数应为 7', CONTRACT_MARKS.length, 7);
   eq('app.js 的 SYSTEM_PROMPT 可求值', typeof appPrompt, 'string');
   eq('两份 SYSTEM_PROMPT 全文逐字符一致', appPrompt, SYSTEM_PROMPT);
 })();
+
+// ---------- 前提预检兜底（M21） ----------
+// 前端会在排盘文本里注入「【前提预检（…）】」块（core/premise.js 的确定性命中）。
+// 直接用 API 打 /api/interpret 的调用方没有这一段，若服务端不补，缺项分级与应期同域
+// 就只剩系统提示里的原则，模型容易退回「默认一个时间跨度」——正是 2026-10-27 那次
+// 「跨年之事给日级应期」的复发路径。
+{
+  const seen = [];
+  const origF = globalThis.fetch;
+  globalThis.fetch = function (url, opt) {
+    seen.push(JSON.parse(opt.body));
+    return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content: '结论：平' } }] }),
+      { status: 200, headers: { 'content-type': 'application/json' } }));
+  };
+  const callPan = function (panText) {
+    return interpretPost({
+      request: new Request('https://x/api/interpret', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ panText: panText, provider: 'gpt', model: 'gpt-6-luna' })
+      }),
+      env: { GPT_API_KEY: 'k', GPT_MODELS: 'gpt-6-luna' }
+    });
+  };
+  await callPan('【六爻排盘】所测：这事能成吗');
+  const noPre = seen[0].messages[1].content;
+  eq('缺预检块 → 服务端补兜底', noPre.indexOf('【前提预检 · 缺失】') >= 0, true);
+  eq('兜底要求声明假设', noPre.indexOf('写明所设假设') >= 0, true);
+  eq('兜底禁止无跨度给干支日', noPre.indexOf('不得给具体干支日') >= 0, true);
+  await callPan('【六爻排盘】所测：这事能成吗\n【前提预检（规则链 · 非推断）】\n- 时间范围：题面「今年」');
+  const withPre = seen[1].messages[1].content;
+  eq('已带预检块 → 不重复追加', withPre.indexOf('【前提预检 · 缺失】'), -1);
+  eq('已带预检块 → 原文保留', withPre.indexOf('题面「今年」') >= 0, true);
+  globalThis.fetch = origF;
+}
 
 // ---------- #21 SSE 透传剥离 reasoning_content（2026-10-13） ----------
 // 事故复盘：百炼思考模型把 reasoning_content（思考草稿）与 content（最终答案）

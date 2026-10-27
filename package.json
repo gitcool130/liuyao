@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node test-core.js && node test-rules.js && node test-gua-types.js && node test-absorb.js && node test-yingqi.js && node test-share.js",
+    "test": "node test-core.js && node test-rules.js && node test-gua-types.js && node test-absorb.js && node test-yingqi.js && node test-share.js && node test-premise.js",
     "test:fn": "node test-functions.mjs",
     "test:absorb": "node test-absorb.js",
     "test:all": "npm test && npm run test:fn && npm run test:diff && npm run test:guji && npm run test:guji:self && npm run test:paipan && npm run test:verify && npm run test:drift",
@@ -26,7 +26,8 @@
     "gen:guji": "node tools/guji-import.mjs",
     "gen:guji:bszz": "node tools/guji-import-bszz.mjs",
     "gen:guji:all": "npm run gen:guji && npm run gen:guji:bszz",
-    "test:prod": "node tools/smoke-prod.cjs"
+    "test:prod": "node tools/smoke-prod.cjs",
+    "test:premise": "node test-premise.js"
   },
   "devDependencies": {
     "@taoracle/najia": "^0.1.0",

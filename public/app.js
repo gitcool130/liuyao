@@ -44,6 +44,12 @@
   if (!HAS_SHAPE) {
     console.warn('[liuyao] core/question-shape.js 未加载，多选一问法检测已降级关闭。');
   }
+  // 前提预检层（core/premise.js）：五类通用前提 + 缺项分级 + 应期同域。
+  // 与 question-shape 同一降级策略——缺了只关闭本层能力，断卦主流程照旧。
+  const HAS_PREMISE = !!(C.premise && typeof C.premiseBlock === 'function');
+  if (!HAS_PREMISE) {
+    console.warn('[liuyao] core/premise.js 未加载，前提预检与应期同域校验已降级关闭。');
+  }
 
   const LINE_NAMES = ['初爻', '二爻', '三爻', '四爻', '五爻', '上爻'];
   const TOSS_MEAN = {
@@ -618,6 +624,10 @@
   };
 
   // ---------- 排盘文本（复制与 AI 共用） ----------
+  // 同盘追问时给模型的提示（R5）：上一轮已给的应期 + 本轮补充把跨度改成了什么。
+  // 由 sendChat 在发请求前写入、断卦入口清空——buildPanText 本身不知道该不该带历史。
+  let followUpNote = '';
+
   function buildPanText(forAI) {
     const pil = pan.pillars;
     let txt = '【六爻排盘】\n';
@@ -676,6 +686,18 @@
       txt += '- 由规则链 aggregateTrend 依本仓已定流派口径算出，与上「旺衰粗判」同源；正文「结论」行须与之同向。\n';
       txt += '- 若认定该判定有误，须先引古法原文说明理由，并在结论行后括注「（与引擎分歧：引擎判' +
         lastAnalysis.trend + '，此处判X）」，不得静默给出相反结论。\n';
+    }
+    if (forAI && followUpNote) txt += '\n' + followUpNote + '\n';
+    if (forAI && HAS_PREMISE) {
+      // 前提预检（core/premise.js）：五类通用前提的明示/缺项、口径歧义与应期刻度。
+      // 只陈述「题面命中了什么词」，不做推断；模型据此决定要不要给条件分支。
+      // 放在领域方法之前：先定「这件事的时间刻度与缺项」，再谈看盘次序。
+      // 第三参：本次盘面是否带了引擎的日级节点窗口（有则预检块补一行「窗口是节点、不是应期」，
+      // 否则模型要么违背窗口、要么把节点当日期，前端一致性校验会判它冲突）。
+      const w = lastAnalysis && lastAnalysis.yingqiWindow;
+      const pb = C.premiseBlock(currentQuestion(), $('#useSelect').value,
+        { dayNodeWindow: !!(w && (w.dayLo || w.dayHi)) });
+      if (pb) txt += '\n' + pb;
     }
     if (forAI && HAS_ABSORB) {
       // 领域分析方法注入：只规定看盘次序与常见误判，不预设吉凶，也不得被当成古籍引文。
@@ -905,6 +927,10 @@
 
   let selModels = loadSelModels();
   let aiStates = {};   // { modelId: { history: [] } }
+  // 各模型最近一轮的结构化结论（trend/yingqi/yongshen/verify/premise）。
+  // 提为模块级：追问要据此判断「原应期是否还成立」（R5 应期撤回），
+  // 旧版只在断卦处理函数内可见，追问拿不到。
+  let concl = {};
   let lastVerify = ''; // 本轮断语给出的「验证标志」；重新起卦时清空
   let castId = null;
   // AI 请求代际管理：每次「开始断卦」递增代数并新建 AbortController；
@@ -970,7 +996,7 @@
     aiGen++;
     if (aiAbort) { try { aiAbort.abort(); } catch (e) { /* 已 abort 则忽略 */ } }
     aiAbort = null;
-    aiStates = {}; castId = null; lastVerify = '';
+    aiStates = {}; concl = {}; castId = null; lastVerify = '';
     $('#aiReply').innerHTML = '';
     const cs = $('#aiConsensus'); if (cs) { cs.hidden = true; cs.innerHTML = ''; }
     const box = $('#chatBox'); if (box) box.hidden = true;
@@ -1115,16 +1141,39 @@
     '取象推断须与旺衰生克之断分开表述，不得把象写成盘面事实。',
     '【前提未定】病之近久、事之进程等直接决定断法的前提，题面未给出时不得单引一诀下断' +
     '（如近病久病未定，不得径引「逢冲则愈/则凶」），须先声明前提未定，再按两种前提分别推断。',
+    // ↓ 2026-10-27（M21）：前提元数据 / 缺项分级 / 应期同域 / 应期撤回。
+    //   起因：「今年能不能考上市重点」这类问，题面没给时间范围与目标标准，模型直接把
+    //   「今年」当本招生年度、把应期写成「甲子日」——跨年之事给了日级应期。修法不是把
+    //   升学槽位写进通用规则，而是「原则驱动 + 领域包实例化」：本段只写与领域无关的
+    //   五类槽位与两级风险，具体叫法由 core/domain-methods.js 的 premise 字段实例化。
+    '【前提元数据】断卦前先核对五类通用前提，缺哪一类直接决定结论与应期怎么写：' +
+    '① 时间范围——此事以什么跨度判定（日／旬／月／季／年）；' +
+    '② 对象阶段——当事人此刻处在哪个阶段（未开始／进行中／已出结果待揭晓）；' +
+    '③ 目标标准——要达成的具体目标与门槛；④ 进程状态——事情推进到哪一步；' +
+    '⑤ 规则环境——决定成败的外部规则、政策或条件。五类与领域无关，具体叫法由「领域适配包」实例化。' +
+    '（示例只示范写法，不是通用槽位表：问「今年能不能考上市重点」，时间范围＝本招生年度、' +
+    '对象阶段＝应届在读、目标标准＝该校录取线、进程状态＝未开考、规则环境＝当地招生政策。）',
+    '【缺项分级】缺项按影响分两级，不得一律回避也不得一律追问：' +
+    '高风险（缺了会改变结论方向或应期量级——时间范围、进程状态、目标标准、对象阶段）——' +
+    '首轮不得给出单一吉凶与单一应期，须先用一句话说明缺什么、为何影响判断，再按可能情形给条件分支，并提示用户补充；' +
+    '低风险（只影响细节与措辞）——标注「前提未定」照常输出结论，可给条件性判断，但须写明所设假设。' +
+    '不得替用户假定未说出的前提（如把某一年的考试默认为今年、把「今年」默认为会计年度或自然年）。',
+    '【应期同域】应期粒度不得细于事项的时间跨度：跨月跨年之事只能给月／季／年或流程节点，' +
+    '不得用日、旬或具体干支日；只有短期消息、旬内之事可用日旬。尺度取「此事的结论何时可能揭晓」，不取起卦日。' +
+    '用户补充的信息一旦改变时间跨度，原应期即失效，须按【应期撤回】处理，不得改写后继续沿用。',
+    '【应期撤回】已给出的应期被新前提证伪时，按此模板撤回，不得静默改写，也不得只字不提：' +
+    '「原应期 X 作废：与（哪条前提或盘面要素）冲突；在新前提下应期应落在（同域粒度），需另起一卦重断」。',
     '【多选一问法】所测若为「A还是B还是C」式多选一：卦面无专爻代表各选项，不得强制站队单选其一；' +
     '按「当前态势 → 可核对的节点（出空、填实、值日等） → 各选项适用的条件分支」输出条件决策树，每个分支注明盘面依据。',
     '【输出自检】正文写完后逐条核对：卦名、世应、动爻、旬空是否与排盘一致；所引口诀的前提是否成立；' +
     '应期是否与空破冲合一一对应；吉凶主线是否与世应生克自相矛盾（如世克用却断大吉、用旺无伤却断大凶）。' +
     '发现矛盾即改，不得带着矛盾交稿。',
-    '【结构化结论】正文写完后另起四行，单独成行、不加粗、不编号、不加解释：',
+    '【结构化结论】正文写完后另起五行，单独成行、不加粗、不编号、不加解释：',
     '结论：吉｜凶｜平（只填一个词）',
-    '应期：<干支日或节气节点>（约 <公历区间，形如 10月20日—10月26日>）',
+    '应期：<与事项跨度同域的粒度>（约 <公历区间，形如 10月20日—10月26日>）；跨月跨年之事不得写成具体干支日',
     '验证标志：一句话，须外部可观察、可判定真假（如「对方主动来电给出明确答复」）；不得写「有转机」「看后续」这类无法核对的话，也不得把结论换个说法再写一遍',
     '用神：六亲＋地支＋卦位',
+    '前提完整性：完整｜缺失（先列缺失项，再给分支）｜前提未定（列分支）',
 
   ].join('\n');
 
@@ -1193,7 +1242,10 @@
         if (/看后续|有转机|待观察|视情况|自行判断|难以判断|无法判断|顺其自然/.test(t)) return '';
         return t;
       })(last(/验证标志\s*[:：]\s*([^\n]{1,100})/)),
-      yongshen: last(/用神\s*[:：]\s*([^\n]{1,60})/)
+      yongshen: last(/用神\s*[:：]\s*([^\n]{1,60})/),
+      // 前提完整性（M21）：模型须自报五类前提是完整、缺失还是前提未定。
+      // 它是「结论可信度」的元信息，不参与吉凶判断；缺失或与引擎预检矛盾时在卡片上标出来。
+      premise: last(/前提完整性\s*[:：]\s*([^\n]{1,80})/)
     };
   }
 
@@ -1591,12 +1643,13 @@
       const myGen = aiGen;
       const mySignal = aiAbort.signal;
       aiStates = {};
+      followUpNote = '';   // 新卦不继承上一卦的应期与前提
       renderCols();
       selModels.forEach(function (m) {
         const el = colBody(m);
         if (el) el.innerHTML = '<div class="loading">推卦中…</div>';
       });
-      const concl = {};
+      concl = {};
       await Promise.all(selModels.map(async function (m) {
         try {
           const onStatus = function (msg) {
@@ -1693,14 +1746,51 @@
 
           const cc = parseConclusion(reply);
           if (cc.verify) lastVerify = cc.verify;
+          // 输出前一致性校验（M21 · 应期同域）：模型给的「应期」粒度不得细于事项跨度。
+          // 这一步是确定性的——引擎已判出跨度，模型写日级应期就是自相矛盾，
+          // 与其让用户事后发现，不如此刻把冲突与撤回模板一并摆出来。
+          let yqCheck = null, pj = null;
+          if (HAS_PREMISE) {
+            try {
+              pj = C.premise.judge(currentQuestion(), $('#useSelect').value);
+              yqCheck = C.premise.checkYingqi(cc.yingqi, pj);
+              cc.spanUnit = pj.effUnit;
+              cc.premiseJudge = pj;
+            } catch (e) { yqCheck = null; }
+          }
           concl[m] = cc;
           aiStates[m] = { history: [{ role: 'assistant', content: reply }] };
           const bodyEl = colBody(m);
           if (bodyEl) {
+            // 前提完整性徽标：完整→灰；缺失/前提未定→黄（不是错误，是「这份断语在哪种前提下成立」）。
+            let premiseLine = '';
+            if (cc.premise) {
+              const okP = /^\s*完整/.test(cc.premise);
+              premiseLine = '<div class="' + (okP ? 'muted' : 'warn') + '" style="margin-top:4px;font-size:12px">前提 ' +
+                esc(cc.premise) + '</div>';
+            } else if (pj && pj.high.length) {
+              // 模型漏报前提完整性，而引擎判定有高风险缺项：这是契约未遵守，须显式提示。
+              premiseLine = '<div class="warn" style="margin-top:4px;font-size:12px">前提 未申报（引擎预检：' +
+                esc(pj.high.map(function (x) { return x.label; }).join('、')) + '属高风险缺项）</div>';
+            }
+            let yqLine = '';
+            if (yqCheck && !yqCheck.ok) {
+              const hard = yqCheck.level === 'violation';
+              const why = yqCheck.code === 'YINGQI_TOO_FINE'
+                ? ('应期粒度细于事项跨度（' + pj.effLabel + '）')
+                : ('应期粒度与事项跨度不符（' + pj.effLabel + '）');
+              // 撤回模板只在硬冲突时给：「原应期作废」是很重的话，软提示滥用会让它失去分量。
+              const tpl = hard && HAS_PREMISE && C.premise.withdraw
+                ? C.premise.withdraw(cc.yingqi, why, pj.effLabel) : '';
+              yqLine = '<div class="' + (hard ? 'warn' : 'muted') + '" style="margin-top:4px;font-size:12px">' +
+                (hard ? '⚠ ' : '· ') + esc(yqCheck.msg) +
+                (tpl ? '<div style="margin-top:2px">' + esc(tpl) + '</div>' : '') + '</div>';
+            }
             const card = cc.trend
               ? '<div class="verdict" style="font-size:13px;margin-bottom:6px">结论 <b>' + esc(cc.trend) + '</b>' +
                 (cc.yingqi ? ' ｜ 应期 ' + esc(cc.yingqi) : '') +
                 (cc.yongshen ? ' ｜ 用神 ' + esc(cc.yongshen) : '') +
+                premiseLine + yqLine +
                 (cc.verify ? '<div style="margin-top:4px">验证 <b>' + esc(cc.verify) + '</b></div>'
                   : '<div class="muted" style="margin-top:4px;font-size:12px">此卦未给出可核对标志，事后无法回填</div>') +
                 '</div>'
@@ -1758,6 +1848,19 @@
           '<div class="msg user"><b>问：</b>' + mdLite(q) + '</div><div class="msg ai" id="' + chatId + '"><span class="loading">推敲中…</span></div>');
         scrollBody(el);
       });
+      // 同盘追问的前提变动提示（R5）：用户补充的信息可能把时间跨度改掉
+      //（如补一句「是明年考」）。旧版全程不提示，模型会静默把原应期改写成新的日级日期，
+      // 用户以为断的是同一件事。这里把「原应期 + 跨度变化」摆到它面前，逼它走撤回模板。
+      followUpNote = '';
+      if (HAS_PREMISE && C.premise.followUpHint) {
+        const prev = concl[active[0]];
+        if (prev && prev.yingqi) {
+          try {
+            const hint = C.premise.followUpHint(prev, currentQuestion() + ' ' + q);
+            if (hint) followUpNote = '【同盘追问 · 前提变动】' + hint;
+          } catch (e) { /* 预检失败不影响追问主流程 */ }
+        }
+      }
       await Promise.all(active.map(async function (m) {
         const loadEl = document.getElementById(chatIds[m]);
         // 本次追问已入栈，须整段送出：旧版 slice(0,-1) 把刚入栈的问题切掉，大模型收不到追问
