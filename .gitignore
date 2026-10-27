@@ -4,3 +4,9 @@ node_modules/
 
 # 古籍原文（公有领域，但体积大且非本仓库产物）：由 npm run gen:guji 自动获取缓存
 tests/guji/_src/
+
+# 本地探针/临时请求体（勿提交）
+live*.txt
+live*.meta
+body_*.json
+pan_full.txt
