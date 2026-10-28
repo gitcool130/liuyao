@@ -920,6 +920,25 @@ eq('纯草稿兜底 → 补发的正文帧带 draft:true', draftFrame.draft, tru
 eq('纯草稿兜底 → 发出 DRAFT_ONLY 告警',
   evDraftOnly.some(function (e) { return e.warn === 'DRAFT_ONLY'; }), true);
 
+// 上游静默挂死（2026-10-28）：流开了头、吐了思考，然后既不发字节也不 close。
+// 实测 deepseek-flash 的形态：4KB 思考后整条流彻底静默，连 r.done 都收不到；
+// 而服务端每 15s 的 `: ping` 心跳会让客户端那条「无输出超时」永远续命，
+// 只能干等到 330s 硬顶。必须由服务端按「上游多少秒没有字节」独立判死。
+globalThis.fetch = function () {
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(encG.encode('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: '先核盘' }, finish_reason: null }] }) + '\n\n'));
+      // 故意不 close、不再 enqueue：模拟上游挂死
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const evStall = await readSSEEvents(await postDS({ skip_cache: true }, { UPSTREAM_IDLE_MS: '1000' }));
+eq('上游静默超时 → 下发 UPSTREAM_STALL（不再等客户端硬顶）',
+  evStall.some(function (e) { return e.error === 'UPSTREAM_STALL'; }), true);
+eq('上游静默超时 → 不把半截草稿补发成正文',
+  evStall.some(function (e) { return typeof e.t === 'string'; }), false);
+
 // STOP 但缺「结论：」行 —— 上游自称停得正常，产物却没成形。
 // 实测 gemini-3.6-flash：137 tokens / 3 秒 / success:true / finishReason=STOP，
 // 正文断在句中。finishReason 守卫覆盖不到这类，必须靠结构化完整性判定。

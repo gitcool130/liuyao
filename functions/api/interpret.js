@@ -29,6 +29,9 @@
  *                      设得比边缘阈值略低，才能在断连前由我们自己下发可读的终止事件。
  *   SSE_HEARTBEAT_MS  选填，SSE 空闲心跳间隔（毫秒），默认 15000，下限 1000（测试用）。
  *                      上游思考期可能数十秒无输出，CF 边缘约 100s 无数据即 524。
+ *   UPSTREAM_IDLE_MS  选填，**上游**静默多久判挂死（毫秒），默认 60000，下限 1000（测试用）。
+ *                      与心跳是两件事：心跳证明「本服务还活着」，它证明「模型还在输出」。
+ *                      没有它，客户端那条「无输出超时」会被心跳一路续命到 330s 硬顶。
  *   LLM_MAX_TOKENS    选填，单次生成上限；未设置则不传（由上游按自身默认值裁定）。
  *   GPT_EFFORT        选填，gpt-5 / o 系思考模型的推理强度（minimal/low/medium/high），
  *                      默认 low（防超时）；对这些模型会自动剔除其不支持的 temperature。
@@ -574,14 +577,27 @@ export async function onRequestPost(context) {
     if (!data) {
       return { fail: { status: 502, detail: '非流式响应解析失败', retryable: true } };
     }
+    let reply = '';
     if (isGoogle) {
       const cand = data.candidates && data.candidates[0];
       const parts = cand && cand.content && cand.content.parts;
-      const reply = parts ? parts.map(function (p) { return p.text || ''; }).join('') : '';
-      return { reply: reply.slice(0, SSE_MAX_REPLY), cut: reply.length > SSE_MAX_REPLY ? 'REPLY_OVERFLOW' : null };
+      reply = parts ? parts.map(function (p) { return p.text || ''; }).join('') : '';
+    } else {
+      const choice = data.choices && data.choices[0];
+      reply = choice && choice.message ? (choice.message.content || '') : '';
     }
-    const choice = data.choices && data.choices[0];
-    const reply = choice && choice.message ? (choice.message.content || '') : '';
+    /* 空正文必须留痕（2026-10-28）：上游忽略 stream 参数、回一段既无 choices 也无
+       candidates 的 JSON 时，旧版只把 reply:'' 交回去，前端显示「大模型返回为空」，
+       服务端一行日志都没有——AI Gateway 日志里那串「1 秒完成、0 token」的空返回
+       因此无法归因（前端只能看到同一句话重复 N 次）。原始体头部一律打进日志；
+       若带 error 字段，直接按上游错误处理，别再当成「静默空返回」再重试一轮。 */
+    if (!reply) {
+      const head = String(raw).slice(0, 400);
+      console.error('[liuyao] 非流式响应无正文:', head);
+      if (data.error) {
+        return { fail: { status: 502, detail: '上游错误体: ' + head, retryable: true } };
+      }
+    }
     return { reply: reply.slice(0, SSE_MAX_REPLY), cut: reply.length > SSE_MAX_REPLY ? 'REPLY_OVERFLOW' : null };
   }
 
@@ -653,10 +669,27 @@ export async function onRequestPost(context) {
         await w.write(enc.encode('data: ' + JSON.stringify({ error: code, message: msg }) + '\n\n'));
       } catch (e) { /* 客户端已断开则忽略 */ }
     };
+    /* 上游静默看门狗（2026-10-28）。心跳每 15s 写一次 `: ping`，而客户端那条
+       「无输出才超时」的守卫把任何字节都当成「还在动」——于是上游挂死时，它会一路
+       续命到 330s 硬顶，用户对着「模型思考中… 已输出 6.9k 字」干等五分钟。
+       实测：deepseek-flash 在含混题面下吐 ~4KB 思考后整条流彻底静默（服务端连
+       r.done 都收不到），本地 curl 同样停在第 232 帧不动。
+       这里按「上游多少秒没有任何字节」独立计时：思考片段也是字节，正常长思考不会误杀。 */
+    const UPSTREAM_IDLE_MS = Math.max(1000, parseInt(env.UPSTREAM_IDLE_MS || '60000', 10) || 60000);
+    let lastUp = Date.now(), stalled = false;
+    // 轮询间隔跟着阈值缩（生产 60s → 每 5s 一查；测试把它设成 1s → 每 250ms 一查）
+    const stallTickMs = Math.min(5000, Math.max(200, Math.floor(UPSTREAM_IDLE_MS / 4)));
+    const stallTimer = setInterval(function () {
+      if (stalled || Date.now() - lastUp <= UPSTREAM_IDLE_MS) return;
+      stalled = true;
+      // cancel() 让挂起的 read() 立即返回，循环自然退出（不抛错，避免与超时分支混淆）
+      try { reader.cancel().catch(function () { /* 已释放则忽略 */ }); } catch (e) { /* 已释放 */ }
+    }, stallTickMs);
     try {
       while (true) {
         const r = await reader.read();
         if (r.done) break;
+        lastUp = Date.now();
         buf += dec.decode(r.value, { stream: true });
         // 守卫①：上游持续发送不含换行的数据，行缓冲永不切分。撞上即判定为异常流并断开。
         if (buf.length > SSE_MAX_LINE) {
@@ -739,6 +772,13 @@ export async function onRequestPost(context) {
           }
         }
         if (cut) break;
+      }
+      // 被看门狗打断：显式告知，且**不要**再走下面「草稿兜底补发」——上游没写完，
+      // 把半截草稿当答复发下去只会让前端多猜一次。
+      if (stalled) {
+        await writeErr('UPSTREAM_STALL', '上游 ' + Math.round(UPSTREAM_IDLE_MS / 1000) +
+          ' 秒内没有任何输出（思考挂死），请换一个模型');
+        cut = 'UPSTREAM_STALL';
       }
       // 兜底补发：全程只有 reasoning_content、没有任何 content（个别中转/模型
       // 把最终答案也放进思考字段）时，流末一次性补发，避免客户端按「空响应」
@@ -829,6 +869,7 @@ export async function onRequestPost(context) {
           ? ('上游 ' + Math.round((firstByteTimedOut ? firstByteMs : timeoutMs) / 1000) + ' 秒内未返回内容')
           : ('上游连接中断：' + (e && e.message ? e.message : '未知原因')));
     } finally {
+      clearInterval(stallTimer);
       // cancel() 返回 promise：流已 error 时以存储错误拒绝，必须挂 .catch
       try { reader.cancel().catch(function () { /* 上游已断开则忽略 */ }); } catch (e) { /* 已释放 */ }
     }

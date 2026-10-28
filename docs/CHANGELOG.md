@@ -731,3 +731,48 @@ DeepSeek Flash 在**题面含混**时会把 reasoning 写上百秒（一次实�
 未把「用神：」纳入结构判定——模型常在正文明细写「用神父母巳火二爻发动」不带冒号，
 硬测会把正常完篇判成残篇（`test-functions` 的「不告警反向对照」即此形）。
 资源戳 `20261027e → 20261028a`（`app.js` 有改动，必须提戳否则老用户拿缓存旧版）。
+
+## M23（2026-10-28，deepseek-flash 只想不答：心跳续命 / 原地空转 / 上游挂死无感）
+
+线上现象（用户报，附 AI Gateway 日志）：同一盘 Gemini 完篇，deepseek-flash 思考 6.9k 字后
+「没给正文」，一次点击跑了 6 次尝试、三分钟，全空。
+
+**用真实接口复现（不靠猜）**：`curl --noproxy '*'` 直打线上 `/api/interpret`，同一
+panText、model=deepseek-flash：
+
+| 请求 | 结果 |
+|---|---|
+| deepseek-flash #1 | 200，首字节 1.7s，**277 帧 `{"r":…}` 全为思考，0 帧正文**，第 45s 起彻底静默，330s 被 curl 掐断 |
+| deepseek-flash #2 | 同上，232 帧后静默（与用户日志里那条 45,439ms 完全吻合） |
+| gemini-3.6-flash（对照） | 200，52s 完篇，43 帧正文，零告警 |
+
+即：**模型只会思考、不出正文；流在 45s 处静默，连 `r.done` 都收不到**。三条代码缺口
+让这件事从「一个模型不好用」放大成「一次点击烧 6 次调用、白等三分钟」：
+
+1. **心跳把客户端超时守卫废掉了**（`app.js` `readStreamSSE`）：旧版「有字节到达就重置
+   空闲计时」，而服务端每 15s 发一帧 `: ping` 保活。上游挂死后心跳照发，65s 空闲超时
+   永不触发，只能等 330s 硬顶。改为**只认模型真产出**（`{"t"}` / `{"r"}`）才续命。
+2. **上游静默无人察觉**（`interpret.js` `pipeUpstreamSSE`）：新增 `UPSTREAM_IDLE_MS`
+   （默认 60s，下限 1000 供测试）看门狗，超时即 `reader.cancel()` 并下发
+   `UPSTREAM_STALL`，跳过草稿补发。生产口径：45s 静默 + 60s 判定 ≈ 105s 就给用户交代。
+3. **原地重试确定性失败**（`app.js` `callInterpret`）：`REASONING_ONLY` / `UPSTREAM_STALL`
+   / 连续 `EMPTY` 三类错，旧版一律退避重试——deepseek 只有单模型，重试十次也是十次同样的
+   空转。改为 `switchModelOnce()`：换一次 `fallbackModelFor()`（首选实测稳定的
+   gemini-3.6-flash），成稿在末尾自报「本稿由 X 生成（Y 只思考未产出正文）」，换过仍失败
+   就直接报错收手。`EMPTY`（服务端 502 空返回）也并入「连续两次即换模型」。
+
+顺带两处：
+
+- `interpret.js` 非流式 JSON 分支：上游回一段没有 `choices`/`candidates` 的 JSON 时，
+  旧版只回 `reply:''`，服务端一行日志都没有——AI Gateway 里那串「1 秒完成、0 token」
+  的空返回无法归因。现在把原始体头部打进 `console.error`；带 `error` 字段的直接按上游
+  错误处理，不再当成静默空返回再重试一轮。
+- `app.js` 失败框的 `第1次…第6次` 会原样重复两遍（看起来像跑了 12 次）：循环末尾统一
+  拼 `details`，而三处 `break` 前已经先填了一份。全部改为 `detail: ''`。
+
+测试：`test-functions.mjs` 296 → **298**（上游静默 → `UPSTREAM_STALL` 且不补发草稿）。
+`npm test` 全绿（93/280/91/209/55/46/152）。资源戳 `20261028a → 20261028b`。
+
+**未做**：没有替 deepseek-flash 调参（`max_tokens` / `reasoning_effort`）。DeepSeek 文档里
+`max_tokens` 不含思维链输出，硬截只会更早断流；真要救它得改系统提示让它别把盘面
+当谜题反复自问（实测它在草稿里反复问「这是六爻从初到上排列？」），属另一件事。

@@ -861,6 +861,22 @@
     return stable ? stable.id : m;
   }
 
+  /* 「这个模型压根不产出正文」时的替补（2026-10-28）。
+     与 retryModelFor 分工不同：那个只在同供应商里挑「更稳的兄弟」（gemini 3.6→3.8），
+     对 deepseek 这种单模型供应商等于原地重跑，重试十次也是十次一样的空转。
+     这里要的是「换一家能出正文的」，优先级：
+       ① 实测稳定档 gemini-3.6-flash（2026-10-28 AI Gateway 日志：同一盘面 52s 完篇）；
+       ② 同供应商其它模型；③ 任一可用模型（后台未配 key 的 configured=false 排除）。 */
+  function fallbackModelFor(m) {
+    const usable = MODELS.filter(function (x) { return x.id !== m && x.configured !== false; });
+    const preferred = usable.filter(function (x) { return x.id === 'gemini-3.6-flash'; })[0];
+    if (preferred) return preferred.id;
+    const cur = MODELS.filter(function (x) { return x.id === m; })[0];
+    const same = cur ? usable.filter(function (x) { return x.pv === cur.pv; })[0] : null;
+    if (same) return same.id;
+    return usable.length ? usable[0].id : '';
+  }
+
   function applyModels(list) {
     if (!Array.isArray(list) || !list.length) return;
     MODELS = list.map(function (m) {
@@ -1361,8 +1377,6 @@
       while (true) {
         const r = await reader.read();
         if (r.done) break;
-        // 有字节到达就重置空闲计时（含 `: ping` 心跳帧）：上游在动，就不该判超时。
-        if (onTick) { try { onTick(); } catch (e) { /* 计时回调失败不影响读流 */ } }
         buf += dec.decode(r.value, { stream: true });
         let idx;
         while ((idx = buf.indexOf('\n')) >= 0) {
@@ -1379,6 +1393,12 @@
             if (j && j.error) {
               throw { kind: 'stream', message: j.message || j.error, code: j.error };
             }
+            /* 空闲计时只认「模型真的产出了东西」（正文 t 或思考 r）。2026-10-28：
+               旧版只要有字节到达就续命，而服务端每 15s 会发一帧 `: ping` 保活——
+               于是上游挂死时客户端**永不**超时，只能等 330s 硬顶。实测 deepseek-flash
+               吐完 4KB 思考后整条流静默，界面就一直停在「模型思考中…」。
+               现在心跳归心跳，模型不出字就按 65s 判超时。 */
+            if (j && (j.t || j.r) && onTick) { try { onTick(); } catch (e) { /* 计时回调失败不影响读流 */ } }
             if (j && j.t) full += j.t;
             // 思考进度：节流 250ms 更新一次状态条，不必逐片重画
             if (j && j.r) {
@@ -1460,6 +1480,13 @@
     const details = [];
     let lastErr = null;
     let attempt = 0;
+    // 换模型后正文末尾要自报身份：用户明明点的是 deepseek，气泡标题也还是它，
+    // 底下却是 gemini 写的稿——不说清楚，下次他会以为是 deepseek 忽然好了。
+    const startModel = model;
+    const withSwitchNote = function (s) {
+      if (!modelSwitched || model === startModel) return s;
+      return String(s) + '\n\n> ⚠ 本稿由 ' + model + ' 生成（' + startModel + ' 只思考未产出正文）。';
+    };
     // 连续「上游整条流没有内容」的次数。2026-10-27：旧版对它一视同仁地重试，
     // 极端情况打满 18 次、耗 180s（AI Gateway 日志里那串 1s 请求），用户全程呆看。
     // 连续两次空稿基本可判定与该模型/该时段无关，直接收手让用户换模型。
@@ -1468,6 +1495,21 @@
     // 期间用户只看到「推卦中…」——正是「请求了十几次没有结果」的观感来源。
     // 流中断属于上游/链路问题，连撞三次基本可判定不是抖动，直接给结论让用户换模型。
     let streamFails = 0;
+    /* 换模型只换一次（2026-10-28）。触发条件全是「这个模型压根不出正文」的确定性失败：
+       只想不答（REASONING_ONLY）、上游思考挂死（UPSTREAM_STALL）、连续空返回（EMPTY）。
+       旧版对这三类一视同仁地原地重试——deepseek-flash 实测一次点击连撞 6 次
+       （1 次 6.9k 字思考 + 5 次空返回），用户干等三分钟、烧掉 6 笔付费调用，字一个没拿到。 */
+    let modelSwitched = false;
+    const switchModelOnce = function (why) {
+      if (modelSwitched) return false;
+      const alt = fallbackModelFor(model);
+      if (!alt || alt === model) return false;
+      modelSwitched = true;
+      model = alt;
+      emptyHits = 0; streamFails = 0;
+      if (onStatus) onStatus(why + '，改用 ' + alt + ' 重新生成…');
+      return true;
+    };
     // 排盘文本在进入重试循环前快照一次：旧版每轮 attempt 重建 buildPanText(true)，
     // 重试期间用户改事类/时间，后续 attempt 会发出与首次不同的盘面（对话历史还是旧的）。
     const panTextSnapshot = buildPanText(true);
@@ -1477,17 +1519,20 @@
     while (true) {
       attempt++;
       if (attempt > maxAttempts) {
+        // detail 留空：循环末尾会统一把 details 拼上去。这里先填一份会让
+        // 「第1次…第6次」在失败框里原样重复两遍（2026-10-28 实测截图即此形，
+        // 看起来像跑了 12 次，实际只有 6 次）。
         lastErr = {
           kind: 'net',
           message: '连续 ' + maxAttempts + ' 次尝试都没有拿到完整断语，请换一个模型或稍后再试',
-          detail: details.join(' | ')
+          detail: ''
         };
         break;
       }
       const elapsed = Date.now() - start;
       const remaining = AI_RETRY_DEADLINE - elapsed;
       if (remaining <= 0) {
-        lastErr = { kind: 'html', message: '接口暂未就绪（已重试，仍无响应）', detail: details.join(' | ') };
+        lastErr = { kind: 'html', message: '接口暂未就绪（已重试，仍无响应）', detail: '' };
         break;
       }
       // 外部已取消（重新起卦/重新断卦）：不再发起新 attempt
@@ -1548,7 +1593,7 @@
             if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
             clearTimeout(hardCap);
           }
-          if (text) return text;
+          if (text) return withSwitchNote(text);
           // 「只想不答」不是网络抖动，重试只会再来一轮长思考：直接给结论让用户换模型。
           // 实测 DeepSeek Flash 在题面含混时会一直写 reasoning（>150s）而不产出正文，
           // 旧版把它归入「返回为空」一路退避重试，用户看到的正是「请求十几次没有结果」。
@@ -1588,6 +1633,15 @@
         if (pick(noRetryStream, sCode)) {
           throw { kind: 'api', message: sMsg, detail: '', code: sCode };
         }
+        /* 「只想不答」与「思考挂死」都是确定性失败：同一盘面重问，它只会再烧一次
+           思考预算，正文照样一个字都不出（2026-10-28 实测 deepseek-flash：连撞 6 次，
+           1 次 6.9k 字思考 + 5 次空返回）。这类错**不原地重试**，直接换一个能出正文的
+           模型再要一稿；换过还不行就报错收手，让用户自己决定。 */
+        if (sCode === 'REASONING_ONLY' || sCode === 'UPSTREAM_STALL') {
+          details.push('第' + attempt + '次：' + sMsg);
+          if (switchModelOnce('该模型只思考不出正文')) continue;
+          throw { kind: 'api', message: sMsg, detail: details.join(' | '), code: sCode };
+        }
         /* 已经流出一大段正文再断的，不再从头重跑（2026-10-28）。
            重跑至少要再等一次思考期，用户手里却已经有一份可读的残稿；而「残篇补发」
            本来就会另起一稿把它替换掉。旧版把这段直接丢掉、从头重试，观感就是
@@ -1600,7 +1654,9 @@
         if (sCode === 'EMPTY_UPSTREAM') {
           emptyHits++;
           if (emptyHits >= 2) {
-            throw { kind: 'api', message: '大模型连续两次没有返回内容，请换一个模型或稍后再试', detail: '', code: sCode };
+            details.push('第' + attempt + '次：' + sMsg);
+            if (switchModelOnce('连续空返回')) continue;
+            throw { kind: 'api', message: '大模型连续两次没有返回内容，请换一个模型或稍后再试', detail: details.join(' | '), code: sCode };
           }
         }
         if (netErr.kind === 'stream') {
@@ -1616,7 +1672,7 @@
         lastErr = { kind: 'net', message: msg };
         const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));
         if (Date.now() - start + delay >= AI_RETRY_DEADLINE) {
-          lastErr = { kind: 'html', message: '接口暂未就绪（已重试，仍无响应）', detail: details.join(' | ') };
+          lastErr = { kind: 'html', message: '接口暂未就绪（已重试，仍无响应）', detail: '' };
           break;
         }
         if (onStatus) onStatus(msg + '，' + Math.round(delay / 1000) + ' 秒后重试…');
@@ -1631,7 +1687,7 @@
         lastErr = { kind: 'html', message: '接口暂未就绪（新部署传播中，稍等片刻重试即可）', detail: snippet };
         const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));
         if (Date.now() - start + delay >= AI_RETRY_DEADLINE) {
-          lastErr = { kind: 'html', message: '接口暂未就绪（已重试，仍无响应）', detail: details.join(' | ') };
+          lastErr = { kind: 'html', message: '接口暂未就绪（已重试，仍无响应）', detail: '' };
           break;
         }
         if (onStatus) onStatus('接口未就绪，' + Math.round(delay / 1000) + ' 秒后重试…');
@@ -1641,6 +1697,17 @@
       if (!res.ok) {
         const err = { kind: 'api', message: data.message || data.error || ('HTTP ' + res.status), detail: data.detail || '', code: data.error || '' };
         if (isRetriableError(res, data, 'api')) {
+          /* 空返回（EMPTY）与空流同样按「连续两次即换模型」处理：服务端回 502 EMPTY
+             表示上游给了一段没有 choices 的 JSON——AI Gateway 日志里那串「1 秒完成、
+             0 token」的请求就是这个形状，旧版会老老实实退避重试满 6 次。 */
+          if (err.code === 'EMPTY') {
+            emptyHits++;
+            if (emptyHits >= 2) {
+              details.push('第' + attempt + '次：' + err.message);
+              if (switchModelOnce('连续空返回')) continue;
+              throw { kind: 'api', message: '大模型连续两次返回空内容，请换一个模型或稍后再试', detail: details.join(' | '), code: err.code };
+            }
+          }
           details.push('第' + attempt + '次：' + err.message + (err.detail ? ' / ' + String(err.detail).slice(0, 80) : ''));
           lastErr = err;
           const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));
@@ -1660,7 +1727,7 @@
         await sleep(delay);
         continue;
       }
-      return data.reply;
+      return withSwitchNote(data.reply);
     }
     if (lastErr) {
       if (!lastErr.detail) lastErr.detail = '';
