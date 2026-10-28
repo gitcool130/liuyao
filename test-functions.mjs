@@ -769,6 +769,26 @@ const pingCount = rawPing.split(': ping').length - 1;
 eq('心跳真实写出：初始 ping + 周期 ping ≥ 2（旧版只有 1）', pingCount >= 2, true);
 eq('心跳不影响正文完整性', rawPing.indexOf('甲') >= 0 && rawPing.indexOf('乙') >= 0, true);
 
+/* 慢路径心跳（2026-10-28）。旧版 openSession 用 `new TransformStream()` + `await w.write()`：
+   readable 侧 HWM=0，正文一次写入悬住，心跳与看门狗的错误帧就全排在同一个 writer 后面。
+   线上指纹是「只收到开头那一帧 : ping，200~330s 里没有任何帧」，随后客户端 45s 判死 abort，
+   服务端记 499。这里强制走「先建 SSE 再等上游」的慢路径（LLM_FAST_HEADER_MS=1），
+   让上游 2.5s 才吐首块，断言等待期心跳仍在持续。 */
+globalThis.fetch = function () {
+  const body = new ReadableStream({
+    start: function (c) {
+      setTimeout(function () { c.enqueue(encG.encode(sseLine('甲'))); }, 2500);
+      setTimeout(function () { c.enqueue(encG.encode(sseLine('乙'))); c.close(); }, 2900);
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const rPingSlow = await post(Object.assign({ SSE_HEARTBEAT_MS: '500', LLM_FAST_HEADER_MS: '1' }, ENV_GPT));
+const rawSlow = await rPingSlow.text();
+const slowPingCount = rawSlow.split(': ping').length - 1;
+eq('慢路径：首字节等待期心跳持续（≥3 帧，旧版只 1 帧）', slowPingCount >= 3, true);
+eq('慢路径：首字节到达后正文完整', rawSlow.indexOf('甲') >= 0 && rawSlow.indexOf('乙') >= 0, true);
+
 // ---------- #23 排盘超限 413 与客户端断开（2026-10-17） ----------
 // 旧版对 panText 静默 slice(0, 4000)，盘面尾巴被砍掉而模型照断、服务端无痕迹。
 globalThis.fetch = origFetch;

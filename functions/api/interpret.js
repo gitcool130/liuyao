@@ -27,11 +27,14 @@
  *                      首字节实测常 60~90s。旧版只有总超时（300s），永远轮不到自己报错，
  *                      用户拿到的是边缘 reset（AI Gateway 侧表现为 499/连接中断）。
  *                      设得比边缘阈值略低，才能在断连前由我们自己下发可读的终止事件。
- *   SSE_HEARTBEAT_MS  选填，SSE 空闲心跳间隔（毫秒），默认 15000，下限 1000（测试用）。
+ *   SSE_HEARTBEAT_MS  选填，SSE 空闲心跳间隔（毫秒），默认 10000，下限 1000（测试用）。
  *                      上游思考期可能数十秒无输出，CF 边缘约 100s 无数据即 524。
- *   UPSTREAM_IDLE_MS  选填，**上游**静默多久判挂死（毫秒），默认 60000，下限 1000（测试用）。
+ *                      客户端把心跳也算作「链路还活着」，故它必须显著小于客户端 30s 空闲阈值。
+ *   UPSTREAM_IDLE_MS  选填，**上游已吐过首字节之后**静默多久判挂死（毫秒），默认 30000。
  *                      与心跳是两件事：心跳证明「本服务还活着」，它证明「模型还在输出」。
- *                      没有它，客户端那条「无输出超时」会被心跳一路续命到 330s 硬顶。
+ *                      首字节之前的等待由 LLM_FIRST_BYTE_MS 单独管（DeepSeek 实测 60~90s，
+ *                      用 30s 去套会把正常慢启动误杀）。判死后下发 UPSTREAM_STALL，
+ *                      前端据此切换模型而不是盲目原地重试。
  *   LLM_MAX_TOKENS    选填，单次生成上限；未设置则不传（由上游按自身默认值裁定）。
  *   GPT_EFFORT        选填，gpt-5 / o 系思考模型的推理强度（minimal/low/medium/high），
  *                      默认 low（防超时）；对这些模型会自动剔除其不支持的 temperature。
@@ -628,8 +631,10 @@ export async function onRequestPost(context) {
   const startedAt = Date.now();
   // 生成上限：未配置则不传，避免把上游默认值写死；配置后 Google/OpenAI 两条路径同口径。
   const maxTokens = Math.max(0, parseInt(env.LLM_MAX_TOKENS || '0', 10) || 0);
-  // 心跳间隔：默认 15s，下限 1s（留 (SSE_HEARTBEAT_MS) 给测试压到 1s 验证「心跳真的发出去了」）。
-  const hbMs = Math.max(1000, parseInt(env.SSE_HEARTBEAT_MS || '15000', 10) || 15000);
+  // 心跳间隔：默认 10s，下限 1s（留 (SSE_HEARTBEAT_MS) 给测试压到 1s 验证「心跳真的发出去了」）。
+  // 2026-10-28 由 15s 收紧到 10s：客户端改用 30s 空闲判死（且计入心跳帧），10s 给出 3 次容错，
+  // 既能在真断连时快速收手，又不会把「上游还在慢慢想」误判成掉线。
+  const hbMs = Math.max(1000, parseInt(env.SSE_HEARTBEAT_MS || '10000', 10) || 10000);
   const ctrl = new AbortController();
   let timedOut = false;
   // 客户端断开（关标签页 / 前端 abort）与「上游超时」必须区分：
@@ -737,24 +742,53 @@ export async function onRequestPost(context) {
   // 避免两处各写一份又漂移（旧版心跳就曾挂在已 releaseLock 的 writer 上而全程失效）。
   const SSE_HEADERS = {
     'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive'
+    // no-transform 禁止中间层压缩/改写；X-Accel-Buffering: no 关掉反代侧的响应缓冲。
+    // 旧版手写 'Connection: keep-alive' —— 逐跳头由运行时管，应用层写了既不生效，
+    // 还容易被缓冲启发式误读（同 workerd 下「手写 Transfer-Encoding 导致 hang」是同类坑）。
+    'Cache-Control': 'no-cache, no-transform',
+    'X-Accel-Buffering': 'no'
   };
   let firstByteTimer = null;
 
   function openSession() {
-    const { readable, writable } = new TransformStream();
+    /* 2026-10-28 第二次重构：TransformStream → ReadableStream + 同步 enqueue。
+       旧版 `new TransformStream()` 的 readable 侧 HWM=0，正文写入用 `await w.write()`；
+       只要下游消费端稍有停顿，那一次 write 就悬着，而心跳、看门狗的错误帧**排在同一个
+       writer 的队列后面**——于是实测「只收到开头那一帧 : ping，200~330s 里没有任何帧」。
+       那不是边缘不转发，是管道自己堵了：正文堵住 → 心跳堵住 → 看门狗写不进终止事件 →
+       客户端 45s 判定超时 abort → 服务端记 499。三件事同源。
+       ReadableStream 的 enqueue 是同步的、不返回 promise，写入永远不会让出控制权，
+       心跳与正文因此彻底解耦（代价是极端慢客户端下内存会涨，已由 SSE_MAX_REPLY 封顶）。 */
     const enc = new TextEncoder();
-    const writer = writable.getWriter();
+    let controller = null;
+    let closed = false;
+    const readable = new ReadableStream({
+      start: function (c) { controller = c; }
+    });
+    // 兼容原 writer 接口（pipeUpstreamSSE 只用到 write/close），一律同步入队后立即 resolved。
+    const writer = {
+      write: function (u8) {
+        if (closed || !controller) return Promise.resolve();
+        try { controller.enqueue(u8); } catch (e) { closed = true; }
+        return Promise.resolve();
+      },
+      close: function () {
+        if (closed) return Promise.resolve();
+        closed = true;
+        try { controller.close(); } catch (e) { /* 已关闭 */ }
+        return Promise.resolve();
+      }
+    };
     // 首字节：SSE 注释行，客户端解析器直接跳过；作用是让边缘/网关立刻看到数据。
-    writer.write(enc.encode(': ping\n\n')).catch(function () { /* 客户端已断开则忽略 */ });
+    writer.write(enc.encode(': ping\n\n'));
     if (variant) {
       // 对照实验：把实际生效的变体回显给调用方，免得配置没打开却以为测了 B/C
       writer.write(enc.encode('data: ' + JSON.stringify({ variant: variant }) + '\n\n')).catch(function () { });
     }
-    // 周期心跳：每 hbMs（默认 15s）写一次注释行。上游思考期（DeepSeek 可数十秒无输出）
+    // 周期心跳：每 hbMs（默认 10s）写一次注释行。上游思考期（DeepSeek 可数十秒无输出）
     // 超过 CF 边缘 ~100s 无数据即 524 断连，故必须持续写。与正文共用同一 writer：
     // 写入按调用顺序排队，每个 ping 都是完整 SSE 帧，不会与其他帧撕裂。
+    // 注意：writer 已是同步 enqueue（见 openSession），正文再慢也堵不住这里。
     heartbeat = setInterval(function () {
       writer.write(enc.encode(': ping\n\n')).catch(function () { /* 客户端断开则停 */ });
     }, hbMs);
@@ -805,12 +839,24 @@ export async function onRequestPost(context) {
        实测：deepseek-flash 在含混题面下吐 ~4KB 思考后整条流彻底静默（服务端连
        r.done 都收不到），本地 curl 同样停在第 232 帧不动。
        这里按「上游多少秒没有任何字节」独立计时：思考片段也是字节，正常长思考不会误杀。 */
-    const UPSTREAM_IDLE_MS = Math.max(1000, parseInt(env.UPSTREAM_IDLE_MS || '60000', 10) || 60000);
-    let lastUp = Date.now(), stalled = false;
-    // 轮询间隔跟着阈值缩（生产 60s → 每 5s 一查；测试把它设成 1s → 每 250ms 一查）
-    const stallTickMs = Math.min(5000, Math.max(200, Math.floor(UPSTREAM_IDLE_MS / 4)));
+    /* 上游静默看门狗（2026-10-28，两段式重写）。
+       旧版只有一个 60s 阈值，且从 pipeUpstreamSSE 起算——它同时管两件性质不同的事：
+         a) 上游「一个字都还没吐」（DeepSeek 经网关实测 60~90s 才出首字节，属正常）；
+         b) 上游「吐了一段之后整条流静默」（实测 deepseek-flash 吐 ~4KB 思考后彻底停住）。
+       用一个 60s 同时套两者，结果是对 a 太长（客户端 45s 早就 abort，看门狗永远轮不到）、
+       对 b 又太长（用户干等）。现在拆成两段：
+         - 首字节之前：用 LLM_FIRST_BYTE_MS（默认 80s，低于边缘 ~100s 的 reset 阈值）；
+         - 首字节之后：用 UPSTREAM_IDLE_MS（默认 30s）。
+       并且**必须**比客户端的空闲判死（30s，计入心跳帧）更早给出可读终止事件，
+       否则客户端先 abort，这套优雅降级在生产里就是死代码——499 就是这么来的。 */
+    const UPSTREAM_IDLE_MS = Math.max(1000, parseInt(env.UPSTREAM_IDLE_MS || '30000', 10) || 30000);
+    let lastUp = Date.now(), stalled = false, gotFirst = false;
+    // 轮询间隔跟着最小阈值缩（生产 30s → 每 5s 一查；测试把它设成 1s → 每 250ms 一查）
+    const stallTickMs = Math.min(5000, Math.max(200, Math.floor(Math.min(UPSTREAM_IDLE_MS, firstByteMs) / 4)));
     const stallTimer = setInterval(function () {
-      if (stalled || Date.now() - lastUp <= UPSTREAM_IDLE_MS) return;
+      if (stalled) return;
+      const budget = gotFirst ? UPSTREAM_IDLE_MS : firstByteMs;
+      if (Date.now() - lastUp <= budget) return;
       stalled = true;
       // cancel() 让挂起的 read() 立即返回，循环自然退出（不抛错，避免与超时分支混淆）
       try { reader.cancel().catch(function () { /* 已释放则忽略 */ }); } catch (e) { /* 已释放 */ }
@@ -820,6 +866,7 @@ export async function onRequestPost(context) {
         const r = await reader.read();
         if (r.done) break;
         lastUp = Date.now();
+        gotFirst = true;
         buf += dec.decode(r.value, { stream: true });
         // 守卫①：上游持续发送不含换行的数据，行缓冲永不切分。撞上即判定为异常流并断开。
         if (buf.length > SSE_MAX_LINE) {
@@ -910,8 +957,10 @@ export async function onRequestPost(context) {
       // 被看门狗打断：显式告知，且**不要**再走下面「草稿兜底补发」——上游没写完，
       // 把半截草稿当答复发下去只会让前端多猜一次。
       if (stalled) {
-        await writeErr('UPSTREAM_STALL', '上游 ' + Math.round(UPSTREAM_IDLE_MS / 1000) +
-          ' 秒内没有任何输出（思考挂死），请换一个模型');
+        const budget = gotFirst ? UPSTREAM_IDLE_MS : firstByteMs;
+        await writeErr('UPSTREAM_STALL',
+          (gotFirst ? '上游 ' : '上游首字节 ') + Math.round(budget / 1000) +
+          ' 秒内没有任何输出（' + (gotFirst ? '思考挂死' : '首字节未到') + '），请换一个模型');
         cut = 'UPSTREAM_STALL';
       }
       // 兜底补发：全程只有 reasoning_content、没有任何 content（个别中转/模型

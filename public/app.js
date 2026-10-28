@@ -1333,13 +1333,20 @@
   const AI_RETRY_MIN_DELAY = 1200;
   const AI_RETRY_MAX_DELAY = 6000;
   const AI_RETRY_MIN_TIMEOUT = 15000;
-  // 流式阶段的守卫改为「空闲超时」而非「总时长上限」（2026-10-27）。
-  // 旧版按「距 AI_RETRY_DEADLINE 的剩余量」做绝对上限，问题在于**数据还在流**时
-  // 也会被掐：DeepSeek Flash 的思考期实测可超 150s（垃圾输入下 150s 仍在 reasoning、
-  // 正文一个字没有），到点 abort 后前端又从头重试，用户只看到「思考中 N 字」反复归零。
-  // 现在只要上游还在吐帧（思考或正文）就重新计时；总时长另设硬上限，与函数侧
-  // LLM_TIMEOUT_MS（默认 300s）对齐，避免真的无限等。
-  const AI_STREAM_IDLE_MS = 65000;
+  /* 流式守卫的分工（2026-10-28 二次修正，这是 499 的真正来源）。
+     前两版都把「模型没出字」和「链路已断」压进同一个空闲阈值：
+       - 旧：距 180s 截止的剩余量做绝对上限 → 还在流也被掐；
+       - 中：65s / 思考型 45s「无 t·r 帧即判死」，且**故意不计心跳**。
+     实测代价：DeepSeek 经网关首字节 60~90s，客户端 45s 一到就 abort，
+     `request.signal` 触发 → 服务端 interpret.js 返回 CLIENT_ABORTED 499，
+     而服务端那套 UPSTREAM_STALL / FIRST_BYTE 降级（60s、80s）永远轮不到执行。
+     **45 < 60 < 80 的倒挂，就是「修了很多轮都没用」的结构性原因。**
+     现在重新分工：
+       · 客户端只判**链路死活**：30s 内一个字节都没有（心跳帧也算）→ 真断连，abort；
+       · 上游死活归**服务端**：首字节 80s、吐过字后静默 30s，由它下发可读终止事件，
+         前端据 error 码走「换模型」而不是盲目原地重试。
+     心跳 10s ⇒ 30s 容错 3 次；真掉线照样 30 秒内收手。 */
+  const AI_STREAM_IDLE_MS = 30000;
   const AI_STREAM_MAX_MS = 330000;
   // 单次断卦（一次 callInterpret）的尝试次数硬上限（2026-10-28）。
   // 旧版只有「流中断 3 次」「空稿 2 次」两个计数，而 AbortError（空闲 65s / 硬顶 330s）
@@ -1351,10 +1358,10 @@
      旧版对 gemini 与 deepseek 用同一套 6 次 / 65s / 330s，把两类**性质完全不同**的失败
      混成了一个参数：
        - gemini 的失败是偶发的（链路抖动、偶发截断），多试两次有意义；
-       - deepseek-flash 的失败是**确定性**的（只想不答、45s 后整条流彻底静默），
+       - deepseek-flash 的失败是**确定性**的（只想不答、吐一段字后整条流彻底静默），
          第 2 次和第 6 次结果逐字相同，差别只是多烧几笔付费调用、多等十几分钟。
      所以思考型给「快判死 + 少重试」，普通模型给「宽一点 + 多试两次」。 */
-  const AI_STREAM_IDLE_MS_THINKER = 45000;   // 实测 deepseek 静默点就在 45s
+  const AI_STREAM_IDLE_MS_THINKER = 30000;   // 与普通模型一致：链路死活与服务端算力无关
   const AI_STREAM_MAX_MS_THINKER = 150000;   // 2.5min 拿不到就换模型，不必陪它到 330s
   const AI_MAX_ATTEMPTS_THINKER = 2;         // 一次原试 + 一次确认，第 3 次必换模型
 
@@ -1405,6 +1412,12 @@
         const r = await reader.read();
         if (r.done) break;
         buf += dec.decode(r.value, { stream: true });
+        /* 链路存活信号（2026-10-28 二次修正）：**任何字节**都算还活着，包括服务端的
+           `: ping` 心跳。上版只认 t/r 正文帧，本意是防「上游挂死被心跳续命到 330s」，
+           副作用是 DeepSeek 60~90s 的正常首字节等待被判成掉线，客户端 abort → 服务端 499。
+           现在「上游死活」归服务端判（首字节 80s / 吐字后静默 30s，会下发 UPSTREAM_STALL），
+           客户端只需知道「这根管子还在不在流动」。 */
+        if (onTick) { try { onTick(); } catch (e) { /* 计时回调失败不影响读流 */ } }
         let idx;
         while ((idx = buf.indexOf('\n')) >= 0) {
           const line = buf.slice(0, idx).trim();
@@ -1420,12 +1433,10 @@
             if (j && j.error) {
               throw { kind: 'stream', message: j.message || j.error, code: j.error };
             }
-            /* 空闲计时只认「模型真的产出了东西」（正文 t 或思考 r）。2026-10-28：
-               旧版只要有字节到达就续命，而服务端每 15s 会发一帧 `: ping` 保活——
-               于是上游挂死时客户端**永不**超时，只能等 330s 硬顶。实测 deepseek-flash
-               吐完 4KB 思考后整条流静默，界面就一直停在「模型思考中…」。
-               现在心跳归心跳，模型不出字就按 65s 判超时。 */
-            if (j && (j.t || j.r) && onTick) { try { onTick(); } catch (e) { /* 计时回调失败不影响读流 */ } }
+            /* 计时已上移到「每收到任意字节」处（见 while 循环开头）。
+               这里不再按 t/r 帧单独续命：那会把「上游挂死」和「链路断开」混成一个阈值，
+               而两者的处置完全不同——前者该由服务端判死并下发 UPSTREAM_STALL（前端据此换模型），
+               后者才是客户端该 abort 的场景。 */
             if (j && j.t && j.draft) draftOnly = true;
             // draft:true 是服务端兜底补发的思考稿，不进正文、不流式上屏、不入对话历史。
             if (j && j.t && !j.draft) full += j.t;
@@ -1525,6 +1536,12 @@
     // 期间用户只看到「推卦中…」——正是「请求了十几次没有结果」的观感来源。
     // 流中断属于上游/链路问题，连撞三次基本可判定不是抖动，直接给结论让用户换模型。
     let streamFails = 0;
+    /* 已上屏的正文快照（2026-10-28）。重试时**不再**把新一稿灌回同一个气泡：
+       旧版每轮 attempt 的 full 从空开始，而 onStream 是 `el.innerHTML = mdLite(text)` 整块替换，
+       于是「吐到 3k 字 → 超时 → 重试 → 新稿从 200 字起」的表现就是正文被吞回去再重新长出来，
+       状态条上「已输出 6.9k 字」还会跳回 0。这里一旦上屏过 200 字，后续 attempt 只更新
+       状态行、不碰正文；真正的替换交给外层「残篇补发」那条既有通道（rewriteView）。 */
+    let priorText = '';
     /* 换模型只换一次（2026-10-28）。触发条件全是「这个模型压根不出正文」的确定性失败：
        只想不答（REASONING_ONLY）、上游思考挂死（UPSTREAM_STALL）、连续空返回（EMPTY）。
        旧版对这三类一视同仁地原地重试——deepseek-flash 实测一次点击连撞 6 次
@@ -1606,14 +1623,12 @@
           // 之前）算的，未扣除建连耗时，直接复用会让总截止被超出建连耗时
           // 那么久，与「与总截止口径一致」的意图相反（2026-10-21 审计修正）。
           clearTimeout(timer);
-          // 空闲超时（2026-10-27 二次修正）：不再用「距 180s 截止的剩余量」做绝对上限。
-          // 实测 DeepSeek Flash 在含混题面下思考可超 150s、正文一字未出，绝对上限会把
-          // 「还在正常思考」的请求掐掉，前端随后从头重试——用户看到的就是「请求十几次
-          // 没有结果」。改为「65s 无任何字节才超时」，同时设 330s 硬上限兜底。
+          // 空闲判死（2026-10-28 三次修正）：含义改为**链路是否还活着**，
+          // 与「模型出不出字」彻底解耦——后者归服务端看门狗判，判完下发 UPSTREAM_STALL。
           let idleTimer = null;
-          // 阈值按**当前**模型取（每轮重算，切模型后即时生效）：思考型 45s 静默即判死、
-          // 150s 硬顶；其余仍 65s / 330s。旧版两者共用 65s/330s，deepseek 静默后
-          // 要干等到 330s 才换模型，一次点击就是五分钟起步。
+          // 阈值按当前模型取：思考型只是「总时长硬顶」更短（150s），空闲阈值两边同为 30s。
+          // 历史教训：曾把思考型压到 45s 去「快判死」，结果 DeepSeek 正常首字节 60~90s
+          // 每次都被当掉线 abort，服务端一律记 499，而它自己的 80s 首字节守卫永远轮不到。
           const lim = modelLimits(model);
           const armIdle = function () {
             if (idleTimer) clearTimeout(idleTimer);
@@ -1623,10 +1638,21 @@
           armIdle();
           let stream;
           let thinkLen = 0;   // 本轮收到的思考草稿字数（用于区分「空响应」与「只想不答」）
+          // 重试时不再覆盖已上屏的正文（见 priorText 声明处）。首轮照常逐字流式；
+          // 只要曾经上屏过 ≥200 字，后续 attempt 只更新状态行，气泡保持原稿不动。
+          const sink = function (text) {
+            const t = text || '';
+            if (priorText.length >= 200) {
+              if (onStatus) onStatus('重新生成中…已收到 ' + t.length + ' 字');
+              return;
+            }
+            priorText = t;
+            if (onStream) onStream(t);
+          };
           try {
             // 思考进度回调：DeepSeek 的首字节能到 60~90s，期间正文一个字都没有，
-            // 旧版界面只显示静止的「推卦中…」，用户以为卡死。现在把草稿字数实时显示出来。
-            stream = await readStreamSSE(res, onStream, function (n) {
+            // 旧版界面只显示静止的「推卦中…」，用户现在把草稿字数实时显示出来。
+            stream = await readStreamSSE(res, sink, function (n) {
               thinkLen = n;
               thinkThisAttempt = n;
               if (!onStatus) return;
