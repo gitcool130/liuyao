@@ -984,13 +984,12 @@ await (await postVar('C', { LLM_DEBUG_VARIANTS: '1' })).text();
 eq('变体 C → 不传 thinkingConfig', gwBody.generationConfig.thinkingConfig, undefined);
 eq('变体 C → maxOutputTokens 给足 8192', gwBody.generationConfig.maxOutputTokens, 8192);
 await (await postVar('B', {})).text();
-// M24：生产口径改为 policy.thinkBudget（默认 null = 不传 thinkingConfig，交给 3.x 动态思考）。
-// 旧断言钉的是「未开调试开关 → 仍为 A（thinkingBudget:0）」——那正是「对最好的模型做最不利的事」。
-eq('未开调试开关 → 变体参数被忽略，走生产口径（不传 thinkingConfig）',
-  gwBody.generationConfig.thinkingConfig, undefined);
-await (await postVar('A', { GEMINI_THINKING_BUDGET: '0' })).text();
-eq('显式 GEMINI_THINKING_BUDGET=0 → 关思考仍可恢复（不是死路）',
+// M24：生产口径走 policy.thinkBudget（gemini 默认 0 = 关思考，见 2026-10-28 线上 A/B 实测）。
+eq('未开调试开关 → 变体参数被忽略，走生产口径（关思考）',
   gwBody.generationConfig.thinkingConfig.thinkingBudget, 0);
+await (await postVar('A', { GEMINI_THINKING_BUDGET: '-1' })).text();
+eq('显式 GEMINI_THINKING_BUDGET=-1 → 动态思考（不传 thinkingConfig）',
+  gwBody.generationConfig.thinkingConfig, undefined);
 const rVarEcho = await postVar('B', { LLM_DEBUG_VARIANTS: '1' });
 const evVarEcho = await readSSEEvents(rVarEcho);
 eq('变体回显事件（证明配置真生效）', evVarEcho.some(function (e) { return e.variant === 'B'; }), true);
@@ -1417,8 +1416,8 @@ const lastCall = function () { return policyCalls[policyCalls.length - 1]; };
 policyCalls.length = 0;
 await (await postModel('gemini', 'gemini-3.6-flash')).text();
 const gemBody = lastCall().body;
-eq('M24 gemini 默认不传 thinkingConfig（交给 3.x 动态思考）',
-  gemBody.generationConfig.thinkingConfig, undefined);
+eq('M24 gemini 默认关思考（实测：放开后 200s 断在应期中途、无结论行）',
+  gemBody.generationConfig.thinkingConfig.thinkingBudget, 0);
 eq('M24 gemini 仍保留 temperature=0.2', gemBody.generationConfig.temperature, 0.2);
 eq('M24 gemini 不受 deepseek 的正文预算影响',
   gemBody.generationConfig.maxOutputTokens, undefined);
@@ -1435,9 +1434,14 @@ eq('M24 导出的 SYSTEM_PROMPT 常量本身未被污染（app.js 副本契约�
   SYSTEM_PROMPT.indexOf('【直接成文】') < 0, true);
 
 policyCalls.length = 0;
-await (await postModel('gemini', 'gemini-3.6-flash', { GEMINI_THINKING_BUDGET: '0' })).text();
-eq('M24 GEMINI_THINKING_BUDGET=0 可退回旧行为（关思考）',
-  lastCall().body.generationConfig.thinkingConfig.thinkingBudget, 0);
+await (await postModel('gemini', 'gemini-3.6-flash', { GEMINI_THINKING_BUDGET: '-1' })).text();
+eq('M24 GEMINI_THINKING_BUDGET=-1 → 不传 thinkingConfig（动态思考，供再实验）',
+  lastCall().body.generationConfig.thinkingConfig, undefined);
+
+policyCalls.length = 0;
+await (await postModel('gemini', 'gemini-3.6-flash', { GEMINI_THINKING_BUDGET: '2048' })).text();
+eq('M24 GEMINI_THINKING_BUDGET=2048 → 显式上限',
+  lastCall().body.generationConfig.thinkingConfig.thinkingBudget, 2048);
 
 policyCalls.length = 0;
 await (await postModel('deepseek', 'deepseek-flash', { DEEPSEEK_MAX_TOKENS: '4096' })).text();

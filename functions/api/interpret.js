@@ -358,23 +358,25 @@ export async function onRequestPost(context) {
 
   /* 按模型分策略（M24）。
      旧版对所有模型用同一套参数，方向恰好是反的：
-       - gemini 3.x 被硬塞 thinkingConfig.thinkingBudget=0（关思考）——而本文件下方变体
-         注释自己记着「关思考下 3.6-flash 只生成 137/405 tokens 就 finishReason=STOP，
-         断语断在句中且无结论行」，等于对表现最好的模型做了对它最不利的事；
-       - deepseek-flash 完全不限思考、也不传 max_tokens——实测 10.2k 字草稿、正文零字。
+       - deepseek-flash 完全不限思考、也不传 max_tokens——实测 10.2k 字草稿、正文零字；
+       - gemini 3.x 虽然被硬塞 thinkingBudget=0，但那是为躲思考路径的 high demand 503
+         而加的，并非按「这个模型适合什么」来定的（详见下方 gemini 分支的实测记录）。
      现在把「思考预算 / 正文预算 / 成文约束」三件事按模型分开，env 可逐项覆盖：
-       GEMINI_THINKING_BUDGET  -1=动态（默认）0=关 正整数=上限
+       GEMINI_THINKING_BUDGET  默认 0（关思考）；'-1' = 动态思考；正整数 = 上限
        DEEPSEEK_MAX_TOKENS     默认 8192（旧版不传，交给上游默认值）
        DEEPSEEK_TAME           '0' 可关掉「直接成文」追加段 */
   function modelPolicy(modelId, google) {
     if (google) {
-      // gemini 3.x：默认交给模型自己动态思考。变体 A（关思考）曾用于规避思考路径
-      // 的 high demand 503，但代价是长输出被自己掐断——两者都试过，截断更难排查，
-      // 故默认 auto，真要退回老行为设 GEMINI_THINKING_BUDGET=0。
+      /* gemini 3.x 的思考预算（2026-10-28 线上 A/B 实测，非推测）：
+           thinkingBudget=0  → 52s 完篇，43 帧正文，零告警；
+           不传（动态思考）  → 首字节 4.8s，200s 时仍在流中、仅 1103 字，
+                              正文断在「断应期」第 3 点中途，无「结论：」行。
+         即：3.x 的动态思考会吃掉输出预算并显著拖慢生成，对「长结构化断语」是负收益。
+         故默认仍关思考；想再试可设 GEMINI_THINKING_BUDGET=-1，或给正整数上限。 */
       const raw = env.GEMINI_THINKING_BUDGET;
-      const auto = raw === undefined || String(raw).trim() === '' || String(raw).trim() === '-1';
-      const budget = auto ? null : Math.max(0, parseInt(raw, 10) || 0);
-      return { thinkBudget: auto ? null : budget, maxTokens: 0, sysExtra: '' };
+      const v = raw === undefined ? '' : String(raw).trim();
+      const budget = (v === '-1') ? null : Math.max(0, parseInt(v || '0', 10) || 0);
+      return { thinkBudget: budget, maxTokens: 0, sysExtra: '' };
     }
     if (provider === 'deepseek') {
       // deepseek-flash 的失败是**确定性**的：思考失控、正文不出，且实测 45s 后整条流
