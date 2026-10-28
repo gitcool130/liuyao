@@ -1427,12 +1427,33 @@ await (await postModel('deepseek', 'deepseek-flash')).text();
 const dsBody = lastCall().body;
 // 8192 实测反而更糟（思考打满即 length，正文 0 字），改为给足 32768。
 eq('M24 deepseek 显式给足 max_tokens=32768（旧版完全不传、8192 实测更糟）', dsBody.max_tokens, 32768);
-eq('M24 deepseek 系统提示追加【直接成文】',
-  dsBody.messages[0].content.indexOf('【直接成文】') >= 0, true);
-eq('M24 追加段排在契约之后，不改写原有判语',
-  dsBody.messages[0].content.indexOf('【结论对齐】') < dsBody.messages[0].content.indexOf('【直接成文】'), true);
-eq('M24 导出的 SYSTEM_PROMPT 常量本身未被污染（app.js 副本契约不受影响）',
-  SYSTEM_PROMPT.indexOf('【直接成文】') < 0, true);
+/* M25：提示词按模型分两版。默认 full —— A/B 实测（真实盘面 + 服务端 diag 帧）两版
+   都能正常出正文（full 1862 字/37s，lean 1179 字/28s），精简版是「更快的可选项」，
+   不是「必需品」。旧结论「deepseek 只想不答」实为本机带宽假象，已作废。 */
+eq('M25 deepseek 默认走完整版（与 gemini 同一份契约）',
+  dsBody.messages[0].content.indexOf('【判语优先】') >= 0, true);
+eq('M25 默认不夹带精简版专属句（只输出断卦正文本身）',
+  dsBody.messages[0].content.indexOf('只输出断卦正文本身') < 0, true);
+
+policyCalls.length = 0;
+await (await postModel('deepseek', 'deepseek-flash', { DEEPSEEK_PROMPT: 'lean' })).text();
+const leanBody = lastCall().body;
+eq('M25 DEEPSEEK_PROMPT=lean → 换整份提示词（含「只输出断卦正文本身」）',
+  leanBody.messages[0].content.indexOf('只输出断卦正文本身') >= 0, true);
+eq('M25 精简版不含完整版的审计条款（【判语优先】须逐条核验那类）',
+  leanBody.messages[0].content.indexOf('【判语优先】') < 0, true);
+eq('M25 精简版不含「须先引古法原文说明理由」这一论证入口',
+  leanBody.messages[0].content.indexOf('说明理由') < 0, true);
+eq('M25 精简版保留四段硬契约（盘面不可改写）',
+  leanBody.messages[0].content.indexOf('【盘面事实不可改写】') >= 0, true);
+eq('M25 精简版保留结构化五行（前端 parseConclusion 靠它）',
+  leanBody.messages[0].content.indexOf('验证标志：') >= 0, true);
+eq('M25 精简版比完整版短一半以上（1127 vs 3004 字）',
+  leanBody.messages[0].content.length < SYSTEM_PROMPT.length * 0.5, true);
+eq('M25 gemini 不受影响，仍走完整版',
+  gemBody.systemInstruction.parts[0].text.indexOf('【判语优先】') >= 0, true);
+eq('M25 导出的 SYSTEM_PROMPT 常量本身未被污染（app.js 副本契约不受影响）',
+  SYSTEM_PROMPT.indexOf('只输出断卦正文本身') < 0, true);
 
 policyCalls.length = 0;
 await (await postModel('gemini', 'gemini-3.6-flash', { GEMINI_THINKING_BUDGET: '-1' })).text();
@@ -1449,9 +1470,9 @@ await (await postModel('deepseek', 'deepseek-flash', { DEEPSEEK_MAX_TOKENS: '409
 eq('M24 DEEPSEEK_MAX_TOKENS 可覆盖默认 32768', lastCall().body.max_tokens, 4096);
 
 policyCalls.length = 0;
-await (await postModel('deepseek', 'deepseek-flash', { DEEPSEEK_TAME: '0' })).text();
-eq('M24 DEEPSEEK_TAME=0 可关掉【直接成文】',
-  lastCall().body.messages[0].content.indexOf('【直接成文】') < 0, true);
+await (await postModel('deepseek', 'deepseek-flash', { DEEPSEEK_PROMPT: 'full' })).text();
+eq('M25 DEEPSEEK_PROMPT=full 可退回完整版（对照实验入口）',
+  lastCall().body.messages[0].content.indexOf('只输出断卦正文本身') < 0, true);
 
 policyCalls.length = 0;
 await (await postModel('deepseek', 'deepseek-flash', { LLM_MAX_TOKENS: '2000' })).text();

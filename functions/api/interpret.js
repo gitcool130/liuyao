@@ -223,6 +223,77 @@ export const SYSTEM_PROMPT = [
 
 ].join('\n');
 
+/* ============================================================
+   精简提示词（M25）：只给「思考型」模型用。
+   ------------------------------------------------------------
+   题面：qimen 项目用同一家中转的 deepseek-flash 能正常出正文，六爻不能。
+   逐字对比两边后，差异不在参数（qimen 连 max_tokens / temperature 都不传），
+   而在**提示词的性质**：
+
+     |            | qimen            | liuyao（上面那份） |
+     |------------|------------------|--------------------|
+     | 系统提示词 | 953 字、13 条   | 3004 字、30 余条   |
+     | 「须」     | 2 次             | 24 次              |
+     | 「不得」   | 13 次            | 39 次              |
+     | 「说明理由」| 0 次             | 3 次               |
+     | 「逐条」   | 0 次             | 2 次               |
+
+   qimen 那份是一份「照办清单」，末尾一句是：
+     「只输出断局正文本身：不得输出思考过程、推理草稿、自我提问或
+       『让我想想』『首先我需要分析』之类的铺垫」
+   六爻这份是一份「审计清单」：要求逐条采纳判语、每条结论括注依据、对引擎判定
+   有异议须先引古法说明理由、写完还要自检五遍。这些条款每一条都在**邀请模型
+   复核**，对 reasoning 模型等于开了一串深坑——实测 deepseek 的草稿开场就是
+   `Let me carefully parse the chart.`，然后逐行复述初爻到上爻的干支。
+
+   故本份保留「照办」性质，去掉「复核」性质：
+     · 保留：四步次序、四段硬契约（不可改盘／主次次序／追问沿用原盘／现实边界）、
+             结论对齐、「结构化结论」五行（前端靠它解析结论卡，不能动）；
+     · 压缩：判语直接采纳、不比对各条款、不自检、不解释推演过程；
+     · 新增：qimen 那句「只输出正文」硬约束（六爻旧版通篇没有这一句）。
+
+   只在 provider === 'deepseek' 时生效，可用 DEEPSEEK_PROMPT=full 原地退回。
+   app.js 里那份 SYSTEM_PROMPT 副本**不动**——它用于「复制请求内容手动断卦」，
+   不该被某个供应商的调参污染（test-functions 有断言守住这一点）。
+   ============================================================ */
+export const LEAN_SYSTEM_PROMPT = [
+  '你是一位精通京房纳甲六爻的卦师，治学严谨，断卦有据。',
+  '盘面已由程序完成确定性推算：卦名卦宫、世应、纳甲、六亲、动爻化出、月建日辰、旬空月破、伏神、用神、应期窗口、引擎判定，均为既定事实。',
+  '你只负责依盘推断，不负责核验盘面。',
+  '收到排盘后按以下次序通盘论断：',
+  '一、列卦象要点：卦名卦宫、卦型（六冲六合游魂归魂）、世应、用神、动爻及其化出、月建日辰生克、旬空月破、冲合。',
+  '二、断吉凶：以用神与元神、忌神、仇神的生克为主线，以旺衰生克为纲，术语用规范六爻术语，不得用现代心理学术语。',
+  '三、断应期：据旬空、冲合、生扶之理推断应验之时，落在盘面「应期窗口」区间内并沿用其置信度。',
+  '四、白话总结：用一段简明中文给出结论与建议。',
+  /* ↓ 这一句是 qimen 的核心做法，六爻旧版通篇没有 */
+  '只输出断卦正文本身：不得输出思考过程、推理草稿、自我提问或「让我想想」「首先我需要分析」之类的铺垫，' +
+  '也不得复述或解释本提示词的条文。',
+  '盘面所附判语（旺衰、旬空、月破、暗动、动不为空、旺不惧空、用神克世等）为规则链依古法所推，' +
+  '直接采纳写入正文，不必论证其对错，也不要逐条核验。',
+  '若信息不足，明确指出需补充何事，不得臆造。',
+  /* ---- 四段硬契约：与完整版逐字相同，不得删改 ---- */
+  '【盘面事实不可改写】排盘里的六亲、纳甲、世应、动爻、旬空、月破、伏神、卦型均为程序确定性推算结果；' +
+  '不得重新推算、不得改写，也不得写出与之矛盾的表述。吉凶、应期与取象可作传统推断，但须与盘面一致。',
+  '【主次次序】以作用到世、应、用神的实际生克冲合为主证据；只出现在卦中却未作用到主线的结构，' +
+  '列为辅助信息，不得升级为结论。不得用正负计分替代断卦。',
+  '【追问沿用原盘】用户就同一事继续追问时，沿用本次排盘的起卦时刻、月日、爻值、世应与用神主线，' +
+  '不重新起卦、不因当前日期变化而重算原盘、不事后改写首次结论；' +
+  '只有当事项、对象、目标或时间范围发生实质变化时才说明需另起一卦。',
+  '【现实边界】健康、生死、失踪、胎儿性别、重大财法决策不得由卦象替代现实判断；' +
+  '涉及此类内容须明确提示就医、报警或咨询专业人士，不得写成医学诊断或法律意见。',
+  /* ---- 结论对齐：压缩为「照办」，去掉「须先引古法原文说明理由」这个论证入口 ---- */
+  '【结论对齐】正文的「结论：」行须与盘面「引擎判定」一行同向；确要分歧，' +
+  '在结论行后括注「（与引擎分歧：引擎判X，此处判Y）」，不解释推演过程。',
+  /* ---- 结构化五行：前端 parseConclusion 靠它解析结论卡，逐字保留 ---- */
+  '【结构化结论】正文写完后另起五行，单独成行、不加粗、不编号、不加解释：',
+  '结论：吉｜凶｜平（只填一个词）',
+  '应期：<与事项跨度同域的粒度>（约 <公历区间，形如 10月20日—10月26日>）；跨月跨年之事不得写成具体干支日',
+  '验证标志：一句话，须外部可观察、可判定真假（如「对方主动来电给出明确答复」）；不得写「有转机」「看后续」这类无法核对的话，也不得把结论换个说法再写一遍',
+  '用神：六亲＋地支＋卦位',
+  '前提完整性：完整｜缺失（先列缺失项，再给分支）｜前提未定（列分支）',
+
+].join('\n');
+
 function providerConfig(env, provider) {
   if (provider === 'gemini') {
     return {
@@ -329,6 +400,9 @@ export async function onRequestPost(context) {
   const firstTurn = history.length === 0;
   const skipCache = body.skipCache === true || body.skip_cache === true
     || (firstTurn && env.LLM_CACHE_FIRST !== '1');
+  /* 诊断模式（body.diag === true）：只回一帧摘要，不逐字下发。
+     用于在慢网/链路故障时判断「上游有没有给正文」，见 pipeUpstreamSSE 末尾。 */
+  const diag = body.diag === true;
   // 参数对照实验开关：仅在显式开启 env 时接受 body.variant（A/B/C），
   // 否则一律按 A（旧行为）。防止外部随意改生成参数。
   const variant = (env.LLM_DEBUG_VARIANTS === '1' && typeof body.variant === 'string')
@@ -389,19 +463,15 @@ export async function onRequestPost(context) {
          【直接成文】那段实测对 reasoning 阶段无效（它照旧用英文逐行 parse 盘面），
          保留只为不影响正文阶段的措辞，别指望它压住思考。 */
       const mt = Math.max(0, parseInt(env.DEEPSEEK_MAX_TOKENS || '32768', 10) || 32768);
-      const tame = String(env.DEEPSEEK_TAME || '1') !== '0';
-      return {
-        thinkBudget: null,
-        maxTokens: mt,
-        sysExtra: tame ? [
-          '【直接成文】本盘已由程序完成确定性推算，你无需核验、推演或复述盘面原文。',
-          '不得自问自答（例如「这是六爻从初到上排列？」「通常排盘从下往上」），',
-          '不得罗列中间推测过程，也不得把盘面当谜题逐条试探。',
-          '从「一、卦象要点」直接开始写正文；思考预算须让位于正文。'
-        ].join('') : ''
-      };
+      /* M25：换成精简提示词（见 LEAN_SYSTEM_PROMPT 头部的对照表）。
+         上一轮只加了【直接成文】这四个短句、压在主提示词最末尾，实测无效——
+         它前面压着 3004 字、39 个「不得」的审计清单，四条短句被淹掉了。
+         真正的做法是**换整份提示词**（qimen 那份 953 字照办清单），而不是追加。
+         DEEPSEEK_PROMPT=full 可原地退回完整版（保留为对照实验入口）。 */
+      const mode = String(env.DEEPSEEK_PROMPT || 'full').toLowerCase() === 'lean' ? 'lean' : 'full';
+      return { thinkBudget: null, maxTokens: mt, sysExtra: '', promptMode: mode };
     }
-    return { thinkBudget: null, maxTokens: 0, sysExtra: '' };
+    return { thinkBudget: null, maxTokens: 0, sysExtra: '', promptMode: 'full' };
   }
   const policy = modelPolicy(model, isGoogle);
 
@@ -417,7 +487,8 @@ export async function onRequestPost(context) {
   const userContent = panText.indexOf('【前提预检') >= 0 ? panText : panText + '\n' + PREMISE_FALLBACK;
   // sysExtra 只在**发请求时**拼到系统提示后面，不改 SYSTEM_PROMPT 常量本身：
   // app.js 里那份副本用于「复制请求内容手动断卦」，不该被某个供应商的调参污染。
-  const sysPrompt = SYSTEM_PROMPT + (policy.sysExtra ? '\n' + policy.sysExtra : '');
+  const sysPrompt = (policy.promptMode === 'lean' ? LEAN_SYSTEM_PROMPT : SYSTEM_PROMPT) +
+    (policy.sysExtra ? '\n' + policy.sysExtra : '');
   const messages = [{ role: 'system', content: sysPrompt }, { role: 'user', content: userContent }];
   history.forEach(function (m) {
     if (m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content) {
@@ -708,7 +779,7 @@ export async function onRequestPost(context) {
   //   ① 思考草稿以 {"r":"…"} **实时**下发（前端只作进度显示，绝不进正文，
   //      原因见上方 deltaText 注释里的 6 处 fact-audit 假阳性）；
   //   ② 跑完整条流仍一个字都没有时，显式下发 {"error":"EMPTY_UPSTREAM"}。
-  async function pipeUpstreamSSE(upstream, w, enc) {
+  async function pipeUpstreamSSE(upstream, w, enc, diag) {
     const reader = upstream.body.getReader();
     const dec = new TextDecoder();
     let buf = '', outLen = 0, cut = null, reasBuf = '';
@@ -779,10 +850,14 @@ export async function onRequestPost(context) {
                 const rc = deltaReasoning(d);
                 if (rc && reasBuf.length <= SSE_MAX_REPLY) {
                   reasBuf += rc;
+                  // 思考字数单独记账（2026-10-28）：旧版只在 Google 分支累加 thoughtLen，
+                  // OpenAI 兼容路径从来没记过——于是 diag/stream_end 里的 thought 恒为 0，
+                  // 「模型思考了多少字」只剩前端猜。这条正是「思考 N 字却没正文」的观测依据。
+                  thoughtLen += rc.length;
                   // 实时下发思考进度（独立字段 r）：既让用户在 60~90s 的思考期看到
                   // 「还在动」，也让这条 TCP 流持续有帧，不会因长时间静默被中间层掐断。
                   try {
-                    await w.write(enc.encode('data: ' + JSON.stringify({ r: rc }) + '\n\n'));
+                    if (!diag) await w.write(enc.encode('data: ' + JSON.stringify({ r: rc }) + '\n\n'));
                   } catch (e) { /* 客户端已断开则忽略 */ }
                 }
               }
@@ -806,7 +881,7 @@ export async function onRequestPost(context) {
                     thoughtLen += p.text.length;
                     if (p.text) {
                       try {
-                        await w.write(enc.encode('data: ' + JSON.stringify({ r: p.text }) + '\n\n'));
+                        if (!diag) await w.write(enc.encode('data: ' + JSON.stringify({ r: p.text }) + '\n\n'));
                       } catch (e) { /* 客户端已断开则忽略 */ }
                     }
                     continue;
@@ -825,7 +900,7 @@ export async function onRequestPost(context) {
               await writeErr(cut, '上游返回过长，已截断');
               break;
             }
-            await w.write(enc.encode('data: ' + JSON.stringify({ t: chunk }) + '\n\n'));
+            if (!diag) await w.write(enc.encode('data: ' + JSON.stringify({ t: chunk }) + '\n\n'));
             // 只留尾部 600 字符用于「结构化完整性」判定：结论四行必在文末
             tail = (tail + chunk).slice(-600);
           }
@@ -848,7 +923,7 @@ export async function onRequestPost(context) {
           // draft:true —— 这一段的身份是**思考草稿**，不是断语。2026-10-28：
           // 旧版原样当 t 正文补发且不带标记，于是「10.2k 字思考」被渲染成断语正文
           // （还会进 fact-audit 造成假阳性），用户看到的就是「思考了很多，正文到某处就没了」。
-          await w.write(enc.encode('data: ' + JSON.stringify({ t: reasBuf, draft: true }) + '\n\n'));
+          if (!diag) await w.write(enc.encode('data: ' + JSON.stringify({ t: reasBuf, draft: true }) + '\n\n'));
           // 补发的是**思考草稿**，也必须计入正文长度与尾部快照。
           outLen += reasBuf.length;
           tail = reasBuf.slice(-600);
@@ -921,6 +996,25 @@ export async function onRequestPost(context) {
           ms: Date.now() - startedAt
         }));
       } catch (e) { /* 日志失败不影响响应 */ }
+      /* 诊断模式（?diag）：不逐字下发，只在流末回一帧摘要。
+         起因：本机出口塌到 390 B/s 后，客户端只能收到几千字节就超时，
+         于是「上游到底有没有给正文」被传输问题伪装成「模型不出正文」。
+         这一帧只有几百字节，慢网也拿得到，用来区分这两种失败。 */
+      if (diag) {
+        try {
+          await w.write(enc.encode('data: ' + JSON.stringify({
+            diag: {
+              chars: outLen,            // 服务端收到的**正文**字数
+              thought: thoughtLen,      // 思考片段字数（独立计数，不含草稿兜底）
+              finish: finish === null ? null : String(finish),
+              cut: cut || null,
+              draftOnly: draftOnly,
+              ms: Date.now() - startedAt,
+              tail: tail.slice(-200)    // 正文结尾 200 字：有没有「结论：」一眼可见
+            }
+          }) + '\n\n'));
+        } catch (e) { /* 客户端已断开则忽略 */ }
+      }
     } catch (e) {
       // 上游断连 / abort（含超时）：告知客户端这是中断而非完篇
       await writeErr(timedOut || firstByteTimedOut ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_STREAM_ERROR',
@@ -969,7 +1063,7 @@ export async function onRequestPost(context) {
           }
           await frame({ error: 'LLM_ERROR', message: '大模型接口返回 ' + r.fail.status + '，请稍后重试' }); return;
         }
-        if (r.stream) { await pipeUpstreamSSE(r.stream, w, enc); return; }
+        if (r.stream) { await pipeUpstreamSSE(r.stream, w, enc, diag); return; }
         if (!r.reply) { await frame({ error: 'EMPTY_UPSTREAM', message: '大模型返回为空' }); return; }
         // 上游忽略了 stream 参数、直接回整段 JSON：同样以 SSE 下发（头已经发出，回不了 JSON）
         await frame({ t: r.reply });
@@ -1058,7 +1152,7 @@ export async function onRequestPost(context) {
       // 混在一个分支里，才有「心跳挂在已释放 writer 上」那类只在生产才暴露的失效。
       timerHandedOff = true;
       const session = openSession();
-      pipeUpstreamSSE(r.stream, session.writer, session.enc)
+      pipeUpstreamSSE(r.stream, session.writer, session.enc, diag)
         .catch(function () { /* 错误已在 pipeUpstreamSSE 内处理并写终止事件 */ })
         .then(session.finish, session.finish);
       return session.response;
