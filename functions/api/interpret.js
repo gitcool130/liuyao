@@ -1041,8 +1041,7 @@ export async function onRequestPost(context) {
     const task = (async function () {
       try {
         let r = await pending;
-        if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
-        // 与快速路径同一条跨模型降级规则（gemini 侧 high demand 持续 503）
+        // 首字节预算覆盖同族降级全程：主模型秒回 503、备选挂起时，不能先清计时器。
         if (r.fail && r.fail.retryable && provider === 'gemini') {
           const alt = wl.gemini.filter(function (m) { return m !== model; })[0];
           if (alt) {
@@ -1050,6 +1049,7 @@ export async function onRequestPost(context) {
             if (!r2.fail) { usedModel = alt; r = r2; }
           }
         }
+        if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
         if (r.fail) {
           if (r.fail.status === 0) {
             console.error('[liuyao] 上游连接失败:', r.fail.detail);
@@ -1106,7 +1106,6 @@ export async function onRequestPost(context) {
       wait(FAST_HEADER_MS).then(function () { return null; })
     ]);
     if (!fast) return slowSession(pending, usedModel);
-    if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
     if (fast.e) throw fast.e;
     let r = fast.v;
     // gemini 跨模型降级（2026-10-12）：所选模型可恢复性失败（429/5xx/网络错误）时，
@@ -1122,6 +1121,8 @@ export async function onRequestPost(context) {
         if (!r2.fail) { fellBackTo = alt; usedModel = alt; r = r2; }
       }
     }
+    // 与慢路径同口径：主模型失败后，备选落地前首字节守卫必须继续有效。
+    if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
     if (r.fail) {
       // 上游原始错误体只进服务端日志，不回传客户端：本端点未配 ACCESS_CODE /
       // RATE_LIMIT_PER_MIN 时完全开放，而自配中转站的错误响应可能回显请求头或

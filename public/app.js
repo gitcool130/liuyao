@@ -883,6 +883,7 @@
       return {
         id: m.id,
         pv: m.pv || '',
+        configured: m.configured !== false,
         label: modelLabel(m.id),
         tip: (m.configured === false) ? '后台未配 key' : (pick(MODEL_TIPS, m.id) || '')
       };
@@ -892,9 +893,15 @@
       return MODELS.some(function (x) { return x.id === id; });
     });
     loadSelModels().forEach(function (id) {
-      if (current.indexOf(id) < 0) current.push(id);
+      // 本地保存的是上一次清单，后台下架模型后不得再把它加回请求队列。
+      if (MODELS.some(function (x) { return x.id === id; }) && current.indexOf(id) < 0) current.push(id);
     });
-    selModels = current.length ? current : DEFAULT_MODELS.slice();
+    const defaults = DEFAULT_MODELS.filter(function (id) {
+      return MODELS.some(function (x) { return x.id === id; });
+    });
+    const firstUsable = MODELS.filter(function (x) { return x.configured !== false; })[0] || MODELS[0];
+    selModels = current.length ? current : (defaults.length ? defaults : (firstUsable ? [firstUsable.id] : []));
+    lsSet('ly_models', JSON.stringify(selModels));
     renderModelChips();
   }
 
@@ -1391,6 +1398,7 @@
     let buf = '', full = '', emitted = '';
     let lastEmit = 0, flushTimer = null;
     let streamWarn = null;   // 上游 finishReason 异常时置位，供上层提示「未完篇」
+    let draftOnly = false;   // DRAFT_ONLY：草稿仅供诊断，绝不作为正式断语交付
     let thinkLen = 0, lastThink = 0;
     try {
       while (true) {
@@ -1418,7 +1426,9 @@
                吐完 4KB 思考后整条流静默，界面就一直停在「模型思考中…」。
                现在心跳归心跳，模型不出字就按 65s 判超时。 */
             if (j && (j.t || j.r) && onTick) { try { onTick(); } catch (e) { /* 计时回调失败不影响读流 */ } }
-            if (j && j.t) full += j.t;
+            if (j && j.t && j.draft) draftOnly = true;
+            // draft:true 是服务端兜底补发的思考稿，不进正文、不流式上屏、不入对话历史。
+            if (j && j.t && !j.draft) full += j.t;
             // 思考进度：节流 250ms 更新一次状态条，不必逐片重画
             if (j && j.r) {
               thinkLen += j.r.length;
@@ -1429,6 +1439,7 @@
             // 再撞同一上限，所以不 throw（不触发重试），而是记下来交给上层提示。
             // 旧版服务端不读 finishReason，这类半篇断语被当成完整答案交付。
             if (j && j.warn) {
+              if (j.warn === 'DRAFT_ONLY') draftOnly = true;
               // 可能同时有多条（如 MODEL_MAX_TOKENS + INCOMPLETE_STRUCTURE），全部保留
               const msg = j.message || j.warn;
               streamWarn = streamWarn ? streamWarn + '；' + msg : msg;
@@ -1476,7 +1487,7 @@
       full += '\n\n> ⚠ 本卦断语未完篇（' + streamWarn + '）。建议重试或换模型。';
       if (onStream) onStream(full);
     }
-    return full;
+    return { text: full, draftOnly: draftOnly };
   }
 
   /* 剥掉「未完篇 / 传输中断」提示段（2026-10-28）。
@@ -1495,7 +1506,7 @@
     opts = opts || {};
     const gen = opts.gen;
     const outerSignal = opts.signal;
-    const start = Date.now();
+    let start = Date.now();
     const details = [];
     let lastErr = null;
     let attempt = 0;
@@ -1525,6 +1536,7 @@
       if (!alt || alt === model) return false;
       modelSwitched = true;
       model = alt;
+      start = Date.now();   // 时间预算按“每个实际生成模型一份”重算，备选不继承前模型耗尽的剩余量
       emptyHits = 0; streamFails = 0;
       // 换了模型就换一套额度：新模型有自己的失败模式，不该沿用上一个模型的计数
       // （否则「deepseek 试满 2 次 → 切 gemini」会在第 1 轮就撞 break，等于没换）。
@@ -1609,12 +1621,12 @@
           };
           const hardCap = setTimeout(function () { ctrl.abort(); }, lim.hardCapMs);
           armIdle();
-          let text;
+          let stream;
           let thinkLen = 0;   // 本轮收到的思考草稿字数（用于区分「空响应」与「只想不答」）
           try {
             // 思考进度回调：DeepSeek 的首字节能到 60~90s，期间正文一个字都没有，
             // 旧版界面只显示静止的「推卦中…」，用户以为卡死。现在把草稿字数实时显示出来。
-            text = await readStreamSSE(res, onStream, function (n) {
+            stream = await readStreamSSE(res, onStream, function (n) {
               thinkLen = n;
               thinkThisAttempt = n;
               if (!onStatus) return;
@@ -1623,6 +1635,14 @@
           } finally {
             if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
             clearTimeout(hardCap);
+          }
+          const text = stream.text;
+          // DRAFT_ONLY 不问草稿长短、是否带「结论：」字样：它不是正式回答，首轮与追问都必须降级。
+          if (stream.draftOnly) {
+            throw {
+              kind: 'stream', code: 'REASONING_ONLY',
+              message: '模型只返回了思考草稿，没有给出正式断语，请换一个模型'
+            };
           }
           if (text) return withSwitchNote(text);
           // 「只想不答」不是网络抖动，重试只会再来一轮长思考：直接给结论让用户换模型。
@@ -1913,8 +1933,17 @@
             const alt = retryModelFor(m);
             const label = alt !== m ? '断语未写完，改用 ' + alt + ' 重新生成' : '断语未写完，正在重新生成';
             curDraft = mdLite(reply);   // 残篇也要留着现形，用户才知道「往哪儿补」
-            const retry = await callInterpret(alt, [], rwStatus(label), rwStream(label),
-              { gen: myGen, signal: mySignal, maxAttempts: 3 });
+            let retry = '';
+            try {
+              retry = await callInterpret(alt, [], rwStatus(label), rwStream(label),
+                { gen: myGen, signal: mySignal, maxAttempts: 3 });
+            } catch (e) {
+              if (e && e.kind === 'aborted') throw e;
+              // 补发失败不得清空首稿：用户手里那段残篇已经比空白失败框更有信息量。
+              retry = '';
+              reply = String(reply || '') + '\n\n> ⚠ 本卦断语补发失败（' +
+                (e && e.message ? e.message : '接口暂不可用') + '），以上为首稿残篇。';
+            }
             if (myGen !== aiGen) return;
             const retryBare = stripStreamWarn(retry);
             const good = !!retry && (/结[论局]\s*[：:]/.test(retryBare) || retryBare.length > bareReply.length);
@@ -2093,6 +2122,13 @@
         } catch (e) {
           if (e && e.kind === 'aborted') return;
           if (aiGen !== myGen) return;
+          // 本次追问没有得到 assistant 回答时回滚 user 消息：否则历史里会留下连续 user，
+          // 下一轮请求带着「没答完的孤儿问题」，上下文被污染。
+          const hist = aiStates[m] && aiStates[m].history;
+          if (hist && hist.length === historySnapshot.length) {
+            const last = hist[hist.length - 1];
+            if (last && last.role === 'user' && last.content === q) hist.pop();
+          }
           if (loadEl) {
             const box = document.createElement('div');
             loadEl.innerHTML = '';

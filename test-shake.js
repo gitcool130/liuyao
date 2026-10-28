@@ -209,6 +209,127 @@ async function launchBrowser() {
     await page.close();
   }
 
+  // ---------- B4. 补发失败必须保留首稿残篇（2026-10-28） ----------
+  // 旧版首稿已经流出一半，补发请求再失败时异常冒到最外层 renderFailBox，
+  // 已收到的正文被整栏清空，只剩“本次未获得断语”——这正是用户看到的无回答形态之一。
+  {
+    const page = await browser.newPage();
+    const calls = [];
+    const partial = '一、卦象要点：用神父母巳火二爻发动，世爻子孙酉金得月建生扶，事项尚有阻力，须待文书落地后再定。';
+    await page.route('**/api/interpret', async route => {
+      calls.push(JSON.parse(route.request().postData() || '{}'));
+      if (calls.length === 1) {
+        return route.fulfill({
+          status: 200, contentType: 'text/event-stream',
+          body: 'data: ' + JSON.stringify({ t: partial }) + '\n\n'
+        });
+      }
+      return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'LLM_ERROR', message: '上游暂不可用' }) });
+    });
+    console.log('B4. 补发失败保留残篇');
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#btnRandom', { timeout: 15000 });
+    for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.waitForTimeout(60); await page.click('#btnConfirm'); await page.waitForTimeout(60); }
+    await page.selectOption('#useSelect', '父母');
+    await page.waitForTimeout(250);
+    await page.click('.mchip[data-m="gemini-3.6-flash"]');
+    await page.waitForTimeout(80);
+    await page.click('.mchip[data-m="gemini-3.8-flash"]');
+    await page.waitForTimeout(80);
+    await page.click('.mchip[data-m="deepseek-flash"]');
+    await page.waitForTimeout(160);
+    await page.click('#btnAI');
+    await page.waitForFunction(() => document.body.innerText.indexOf('补发失败') >= 0, null, { timeout: 12000 });
+    const shownB4 = await page.evaluate(() => document.body.innerText);
+    eq('补发请求确实发起（首稿 + 重试）', calls.length >= 2, true);
+    eq('补发失败仍保留首稿正文', shownB4.indexOf('须待文书落地后再定') >= 0, true);
+    eq('补发失败有明确提示', shownB4.indexOf('本卦断语补发失败') >= 0, true);
+    eq('残稿不被失败框清空', shownB4.indexOf('本次未获得断语') < 0, true);
+    await page.close();
+  }
+
+  // ---------- B5. 追问里的 DRAFT_ONLY 不得作为回答（2026-10-28） ----------
+  // 服务端兜底补发的 t 帧带 draft:true；旧前端把它拼进 full，于是
+  // “只思考未答”守卫被绕过，草稿直接展示并进 history，污染下一轮追问。
+  {
+    const page = await browser.newPage();
+    await page.addInitScript(() => localStorage.setItem('ly_models', JSON.stringify(['deepseek-flash'])));
+    const calls = [];
+    await page.route('**/api/interpret', async route => {
+      calls.push(JSON.parse(route.request().postData() || '{}'));
+      if (calls.length === 1) {
+        return route.fulfill({ status: 200, contentType: 'application/json',
+          body: JSON.stringify({ reply: '一、卦象要点：用神得日月扶助。\n二、断吉凶：可为。\n结论：吉\n应期：三日内\n验证标志：对方明确回复' }) });
+      }
+      if (calls.length === 2) {
+        return route.fulfill({ status: 200, contentType: 'text/event-stream', body:
+          'data: ' + JSON.stringify({ r: '先核对盘面' }) + '\n\n' +
+          'data: ' + JSON.stringify({ t: '草稿误作回答', draft: true }) + '\n\n' +
+          'data: ' + JSON.stringify({ warn: 'DRAFT_ONLY', message: '上游只返回了思考草稿' }) + '\n\n' });
+      }
+      if (calls.length === 3) {
+        return route.fulfill({ status: 200, contentType: 'application/json',
+          body: JSON.stringify({ reply: '正式追问回答：可在三日内等待对方回复。' }) });
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ reply: '后续追问回答：以正式答复为准。' }) });
+    });
+    console.log('B5. 追问草稿不入答、不入史');
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#btnRandom', { timeout: 15000 });
+    for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.waitForTimeout(60); await page.click('#btnConfirm'); await page.waitForTimeout(60); }
+    await page.click('#btnAI');
+    await page.waitForFunction(() => document.body.innerText.indexOf('结论：吉') >= 0, null, { timeout: 8000 });
+    await page.fill('#chatInput', '这件事还要等多久？');
+    await page.click('#btnChat');
+    await page.waitForFunction(() => document.body.innerText.indexOf('正式追问回答') >= 0, null, { timeout: 10000 });
+    eq('DRAFT_ONLY 追问触发跨模型降级', calls.length, 3);
+    eq('降级请求改用可用模型', calls[2].model, 'gemini-3.6-flash');
+    const shownB5 = await page.evaluate(() => document.body.innerText);
+    eq('草稿不展示为追问回答', shownB5.indexOf('草稿误作回答') < 0, true);
+    eq('正式回答正常展示', shownB5.indexOf('正式追问回答') >= 0, true);
+    await page.fill('#chatInput', '再确认一次');
+    await page.click('#btnChat');
+    await page.waitForFunction(() => document.body.innerText.indexOf('后续追问回答') >= 0, null, { timeout: 8000 });
+    const hist4 = calls[3].messages.map(m => m.content).join('\n');
+    eq('草稿没有写入 assistant 历史', hist4.indexOf('草稿误作回答') < 0, true);
+    eq('正式追问回答已进入历史', hist4.indexOf('正式追问回答') >= 0, true);
+    await page.close();
+  }
+
+  // ---------- B6. 动态模型清单不得复活已下架/未配置模型（2026-10-28） ----------
+  {
+    const page = await browser.newPage();
+    await page.addInitScript(() => localStorage.setItem('ly_models', JSON.stringify(['gone-model', 'custom-a'])));
+    const calls = [];
+    await page.route('**/api/models', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ models: [
+        { id: 'custom-a', pv: 'Test', configured: false },
+        { id: 'custom-b', pv: 'Test', configured: true }
+      ] })
+    }));
+    await page.route('**/api/interpret', async route => {
+      const body = JSON.parse(route.request().postData() || '{}');
+      calls.push(body);
+      if (body.model === 'custom-a') {
+        return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'EMPTY', message: '大模型返回为空' }) });
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ reply: '动态清单正式回答\n结论：平' }) });
+    });
+    console.log('B6. 动态模型清单与降级资格');
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.mchip', { state: 'attached', timeout: 15000 });
+    for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.waitForTimeout(60); await page.click('#btnConfirm'); await page.waitForTimeout(60); }
+    await page.click('#btnAI');
+    await page.waitForFunction(() => document.body.innerText.indexOf('动态清单正式回答') >= 0, null, { timeout: 10000 });
+    eq('已下架模型不会从 localStorage 复活', calls.some(c => c.model === 'gone-model'), false);
+    eq('未配置模型连续空返回后切换', calls.map(c => c.model), ['custom-a', 'custom-a', 'custom-b']);
+    eq('最终展示已配置模型的正式回答', (await page.evaluate(() => document.body.innerText)).indexOf('动态清单正式回答') >= 0, true);
+    await page.close();
+  }
+
   // ---------- C. 时间一致性（#5 / #10） ----------
   {
     const page = await browser.newPage();

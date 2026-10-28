@@ -1316,6 +1316,65 @@ eq('首字节超时 → 错误码 UPSTREAM_FIRST_BYTE_TIMEOUT', hdrJ.error, 'UPS
 eq('首字节超时 → 不等满总超时（<1.5s 返回）', Date.now() - hdrT < 1500, true);
 eq('首字节超时 → 文案提示换更快的模型', /更快/.test(hdrJ.message), true);
 
+/* 2026-10-28 补：首字节计时必须覆盖「主模型秒挂 → 同族备选挂起」全程。
+   旧版主模型 503 一到就清 firstByteTimer，备选若永不返回，只能等 300s 总超时；
+   Cloudflare 边缘会先行断连，用户侧重新表现为长时间无回答。 */
+const postGemEnv = function (model, envExtra) {
+  return interpretPost({
+    request: new Request('https://x/api/interpret', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ panText: '占测试', provider: 'gemini', model: model })
+    }),
+    env: Object.assign({ GEMINI_API_KEY: 'k' }, envExtra || {})
+  });
+};
+let fbCalls = 0;
+globalThis.fetch = function (url, opts) {
+  fbCalls++;
+  if (fbCalls === 1) return Promise.resolve(new Response('high demand', { status: 503 }));
+  return new Promise(function (resolve, reject) {
+    const sig = opts && opts.signal;
+    if (sig) sig.addEventListener('abort', function () {
+      const e = new Error('The operation was aborted'); e.name = 'AbortError'; reject(e);
+    });
+  });
+};
+const fbFastT = Date.now();
+const fbFastR = await postGemEnv('gemini-3.8-flash', { LLM_FIRST_BYTE_MS: '300', LLM_TIMEOUT_MS: '2500' });
+const fbFastJ = await fbFastR.json();
+eq('主 503 + 备选挂起（快速路径）→ 仍按首字节预算 504', fbFastR.status, 504);
+eq('主 503 + 备选挂起（快速路径）→ UPSTREAM_FIRST_BYTE_TIMEOUT', fbFastJ.error, 'UPSTREAM_FIRST_BYTE_TIMEOUT');
+eq('主 503 + 备选挂起（快速路径）→ 不等总超时', Date.now() - fbFastT < 1500, true);
+eq('主 503 + 备选挂起（快速路径）→ 同族降级确实发生', fbCalls, 2);
+
+// 慢路径（头已先发）同样不得丢守卫：备选挂起按 firstByteMs 在流内终止。
+fbCalls = 0;
+globalThis.fetch = function (url, opts) {
+  fbCalls++;
+  if (fbCalls === 1) {
+    return new Promise(function (resolve) {
+      setTimeout(function () { resolve(new Response('high demand', { status: 503 })); }, 500);
+    });
+  }
+  return new Promise(function (resolve, reject) {
+    const sig = opts && opts.signal;
+    if (sig) sig.addEventListener('abort', function () {
+      const e = new Error('The operation was aborted'); e.name = 'AbortError'; reject(e);
+    });
+  });
+};
+const fbSlowT = Date.now();
+const fbSlowR = await postGemEnv('gemini-3.8-flash', {
+  LLM_FAST_HEADER_MS: '100', LLM_FIRST_BYTE_MS: '1200', LLM_TIMEOUT_MS: '4000'
+});
+eq('主慢 503 + 备选挂起（慢路径）→ 先发 SSE 头', fbSlowR.status, 200);
+const fbSlowEv = await readSSEEvents(fbSlowR);
+eq('主慢 503 + 备选挂起（慢路径）→ 流内 UPSTREAM_TIMEOUT',
+  fbSlowEv.some(function (e) { return e.error === 'UPSTREAM_TIMEOUT'; }), true);
+eq('主慢 503 + 备选挂起（慢路径）→ 按首字节预算截止', Date.now() - fbSlowT < 3000, true);
+eq('主慢 503 + 备选挂起（慢路径）→ 同族降级确实发生', fbCalls, 2);
+
 // ⑦ Google 原生流里的 thought 片段：与 reasoning_content 同待遇，只走 r 通道。
 // 背景：thinkingConfig:thinkingBudget=0 并不总被 gemini 3.x 采纳，实测会真的吐
 // parts[{text, thought:true}]；旧版按 p.text 一并拼进正文 → 2026-10-13 fact-audit
