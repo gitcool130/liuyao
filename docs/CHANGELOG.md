@@ -693,3 +693,41 @@ DeepSeek Flash 在**题面含混**时会把 reasoning 写上百秒（一次实�
 原「升学·无高风险缺项（不拦结论）」与需求相反，已改为「高风险含对象阶段与目标标准」）。
 `test-functions.mjs` 保持 **292 PASS**（两份提示词逐字符一致断言照旧通过）。
 资源戳 `20261027d → 20261027e`。
+
+## M22（2026-10-28，断流静默交付半篇 / 草稿冒充正文 / 补发被自己的告警骗过）
+
+线上现象（用户报）：同一盘 Gemini 正常，DeepSeek 思考 10.2k 字后「没给正文」——
+其实是正文写到「用神」一行就没了，随后反复重试十余次。对着 HEAD 逐条核对，四处
+互相独立的缺口叠加成了这个观感，均可在本地复现（`functions/api/interpret.js` 打桩驱动，
+不联网）：
+
+| 场景（上游收尾方式） | 旧版服务端 | 旧版前端 |
+|---|---|---|
+| 正文断在「用神」行，流自然结束、无 `finish_reason` | **零告警**（`finish === null` 跳过全部判定） | 当完整稿交付 |
+| 只有 `reasoning_content`、无 `content` | 把草稿当 `t` 正文补发，无标记 | 10.2k 字独白渲染成断语（「只想不答」守卫因此永不可达） |
+| 残篇 + `INCOMPLETE_STRUCTURE` 告警 | 告警文案含「结论：」 | 对全文测 `/结[论局]/` → 残篇恒判完篇，**自动补发从未触发** |
+| 流从中间断开 | 下发 `UPSTREAM_STREAM_ERROR` | 已收到的正文随异常丢弃，从头重跑 |
+
+改动：
+
+1. `interpret.js` `pipeUpstreamSSE`：`finish === null && outLen > 30` 增发
+   `warn: MODEL_NO_FINISH`。正常收流必带结束原因（OpenAI 兼容 `finish_reason`、
+   Gemini 原生 `finishReason`），缺失即「上游什么都没说就断了」。
+   `stream_end` 日志同步加 `draft` 字段。
+2. 同处纯草稿兜底补发改发 `{t, draft:true}` + `warn: DRAFT_ONLY`，草稿不再自报家门为正文。
+3. `app.js` 新增 `stripStreamWarn()`：判残篇、解析结论卡一律先剥掉自己拼的
+   「> ⚠ 本卦断语…」提示段。判定条件同时改为「结构缺结论行 **或** 带过提示」——
+   带过提示就说明这一稿不足以交付，结构齐全也要再要一稿。
+4. `readStreamSSE` 捕获异常时把已收正文挂在 `err.partial` 上；`callInterpret` 在
+   `partial.length >= 200` 时直接当残稿返回（尾巴注明传输中断），不再丢稿重跑。
+5. 新增 `AI_MAX_ATTEMPTS = 6`（补发/校正两条二次生成给 3）。旧版只有「空稿 2 次」
+   「流中断 3 次」两个计数，`AbortError`（空闲 65s / 硬顶 330s）与 JSON 5xx /
+   `LLM_ERROR` 完全不计数，只靠 180s 截止兜——快速失败下能打满十几次付费请求。
+6. 残稿不做盘面校正：半篇里的「冲突」多半是没写完，纠正它收益为零
+   （`HAS_ABSORB && !curTruncated`）。
+
+测试：`test-functions.mjs` 292 → **296**（`finish` 缺失告警且不写成 error、
+纯草稿兜底带 `draft:true` 与 `DRAFT_ONLY`）。`npm test` 全绿（93/280/91/209/55/46/152）。
+未把「用神：」纳入结构判定——模型常在正文明细写「用神父母巳火二爻发动」不带冒号，
+硬测会把正常完篇判成残篇（`test-functions` 的「不告警反向对照」即此形）。
+资源戳 `20261027e → 20261028a`（`app.js` 有改动，必须提戳否则老用户拿缓存旧版）。
