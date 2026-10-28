@@ -379,11 +379,16 @@ export async function onRequestPost(context) {
       return { thinkBudget: budget, maxTokens: 0, sysExtra: '' };
     }
     if (provider === 'deepseek') {
-      // deepseek-flash 的失败是**确定性**的：思考失控、正文不出，且实测 45s 后整条流
-      // 静默。给它显式正文预算 + 一段「直接成文」约束，压缩它把盘面当谜题反复自问的空间。
-      // 注意 DeepSeek 的 max_tokens 不含思维链输出，所以这不是硬截思考，只是给正文
-      // 一个明确配额（旧版 0 = 完全不传，等于把预算控制权全交出去）。
-      const mt = Math.max(0, parseInt(env.DEEPSEEK_MAX_TOKENS || '8192', 10) || 8192);
+      /* deepseek-flash 的正文预算（2026-10-28 线上两轮实测，方向曾经改反）：
+           不传（上游默认 8192）→ 思考吃到 10.2k 字后正文才起头，断在「用神」行；
+           显式 8192           → 8123 帧 / 13243 字思考在 41s 内打满，正文 0 字，
+                                 finish_reason=length，比不传更糟。
+         即 DeepSeek 的 max_tokens **包含思维链**（与「不含 CoT」的文档说法不符），
+         真因是「思考 + 正文」共用一份总预算而预算不够，不是思考没被约束。
+         故改为**给足**：默认 32768，让思考用掉之后仍有富余写完整篇。
+         【直接成文】那段实测对 reasoning 阶段无效（它照旧用英文逐行 parse 盘面），
+         保留只为不影响正文阶段的措辞，别指望它压住思考。 */
+      const mt = Math.max(0, parseInt(env.DEEPSEEK_MAX_TOKENS || '32768', 10) || 32768);
       const tame = String(env.DEEPSEEK_TAME || '1') !== '0';
       return {
         thinkBudget: null,

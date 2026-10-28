@@ -1425,7 +1425,8 @@ eq('M24 gemini 不受 deepseek 的正文预算影响',
 policyCalls.length = 0;
 await (await postModel('deepseek', 'deepseek-flash')).text();
 const dsBody = lastCall().body;
-eq('M24 deepseek 显式传 max_tokens=8192（旧版完全不传）', dsBody.max_tokens, 8192);
+// 8192 实测反而更糟（思考打满即 length，正文 0 字），改为给足 32768。
+eq('M24 deepseek 显式给足 max_tokens=32768（旧版完全不传、8192 实测更糟）', dsBody.max_tokens, 32768);
 eq('M24 deepseek 系统提示追加【直接成文】',
   dsBody.messages[0].content.indexOf('【直接成文】') >= 0, true);
 eq('M24 追加段排在契约之后，不改写原有判语',
@@ -1445,7 +1446,7 @@ eq('M24 GEMINI_THINKING_BUDGET=2048 → 显式上限',
 
 policyCalls.length = 0;
 await (await postModel('deepseek', 'deepseek-flash', { DEEPSEEK_MAX_TOKENS: '4096' })).text();
-eq('M24 DEEPSEEK_MAX_TOKENS 可覆盖默认 8192', lastCall().body.max_tokens, 4096);
+eq('M24 DEEPSEEK_MAX_TOKENS 可覆盖默认 32768', lastCall().body.max_tokens, 4096);
 
 policyCalls.length = 0;
 await (await postModel('deepseek', 'deepseek-flash', { DEEPSEEK_TAME: '0' })).text();
