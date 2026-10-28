@@ -984,7 +984,13 @@ await (await postVar('C', { LLM_DEBUG_VARIANTS: '1' })).text();
 eq('变体 C → 不传 thinkingConfig', gwBody.generationConfig.thinkingConfig, undefined);
 eq('变体 C → maxOutputTokens 给足 8192', gwBody.generationConfig.maxOutputTokens, 8192);
 await (await postVar('B', {})).text();
-eq('未开调试开关 → 变体参数被忽略（仍为 A）', gwBody.generationConfig.thinkingConfig.thinkingBudget, 0);
+// M24：生产口径改为 policy.thinkBudget（默认 null = 不传 thinkingConfig，交给 3.x 动态思考）。
+// 旧断言钉的是「未开调试开关 → 仍为 A（thinkingBudget:0）」——那正是「对最好的模型做最不利的事」。
+eq('未开调试开关 → 变体参数被忽略，走生产口径（不传 thinkingConfig）',
+  gwBody.generationConfig.thinkingConfig, undefined);
+await (await postVar('A', { GEMINI_THINKING_BUDGET: '0' })).text();
+eq('显式 GEMINI_THINKING_BUDGET=0 → 关思考仍可恢复（不是死路）',
+  gwBody.generationConfig.thinkingConfig.thinkingBudget, 0);
 const rVarEcho = await postVar('B', { LLM_DEBUG_VARIANTS: '1' });
 const evVarEcho = await readSSEEvents(rVarEcho);
 eq('变体回显事件（证明配置真生效）', evVarEcho.some(function (e) { return e.variant === 'B'; }), true);
@@ -1377,6 +1383,74 @@ const rNoWait = await interpretPost({
 const evNoWait = await readSSEEvents(rNoWait);
 eq('缺 waitUntil 的运行时 → 仍 200 且不抛错', rNoWait.status, 200);
 eq('缺 waitUntil 的运行时 → 正文仍能送达', sseText(evNoWait), '无 waitUntil');
+
+// ---------- #26 按模型分策略（M24）----------
+// 旧版对所有模型用同一套参数，方向恰好相反：gemini 3.x 被硬塞 thinkingBudget=0（而本仓库
+// 自己的注释记着「关思考下 3.6-flash 只生成 137/405 tokens 就 STOP，断语断在句中」），
+// deepseek 则既不限思考也不传 max_tokens（实测 10.2k 字草稿、正文零字）。
+// 这一组守住「两个供应商拿到的请求体必须不同」。
+const policyCalls = [];
+globalThis.fetch = function (url, opt) {
+  policyCalls.push({
+    url: String(url),
+    body: opt && opt.body ? JSON.parse(opt.body) : null
+  });
+  const parts = [sseLine('一、卦象要点\n结论：平\n'), 'data: [DONE]\n'];
+  const body = new ReadableStream({
+    start(c) { parts.forEach(function (s) { c.enqueue(new TextEncoder().encode(s)); }); c.close(); }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const ENV_BOTH = { GEMINI_API_KEY: 'gk', DEEPSEEK_API_KEY: 'dk' };
+const postModel = function (provider, model, extraEnv) {
+  return interpretPost({
+    request: new Request('https://x/api/interpret', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ panText: '占测试', provider: provider, model: model })
+    }),
+    env: Object.assign({}, ENV_BOTH, extraEnv || {})
+  });
+};
+const lastCall = function () { return policyCalls[policyCalls.length - 1]; };
+
+policyCalls.length = 0;
+await (await postModel('gemini', 'gemini-3.6-flash')).text();
+const gemBody = lastCall().body;
+eq('M24 gemini 默认不传 thinkingConfig（交给 3.x 动态思考）',
+  gemBody.generationConfig.thinkingConfig, undefined);
+eq('M24 gemini 仍保留 temperature=0.2', gemBody.generationConfig.temperature, 0.2);
+eq('M24 gemini 不受 deepseek 的正文预算影响',
+  gemBody.generationConfig.maxOutputTokens, undefined);
+
+policyCalls.length = 0;
+await (await postModel('deepseek', 'deepseek-flash')).text();
+const dsBody = lastCall().body;
+eq('M24 deepseek 显式传 max_tokens=8192（旧版完全不传）', dsBody.max_tokens, 8192);
+eq('M24 deepseek 系统提示追加【直接成文】',
+  dsBody.messages[0].content.indexOf('【直接成文】') >= 0, true);
+eq('M24 追加段排在契约之后，不改写原有判语',
+  dsBody.messages[0].content.indexOf('【结论对齐】') < dsBody.messages[0].content.indexOf('【直接成文】'), true);
+eq('M24 导出的 SYSTEM_PROMPT 常量本身未被污染（app.js 副本契约不受影响）',
+  SYSTEM_PROMPT.indexOf('【直接成文】') < 0, true);
+
+policyCalls.length = 0;
+await (await postModel('gemini', 'gemini-3.6-flash', { GEMINI_THINKING_BUDGET: '0' })).text();
+eq('M24 GEMINI_THINKING_BUDGET=0 可退回旧行为（关思考）',
+  lastCall().body.generationConfig.thinkingConfig.thinkingBudget, 0);
+
+policyCalls.length = 0;
+await (await postModel('deepseek', 'deepseek-flash', { DEEPSEEK_MAX_TOKENS: '4096' })).text();
+eq('M24 DEEPSEEK_MAX_TOKENS 可覆盖默认 8192', lastCall().body.max_tokens, 4096);
+
+policyCalls.length = 0;
+await (await postModel('deepseek', 'deepseek-flash', { DEEPSEEK_TAME: '0' })).text();
+eq('M24 DEEPSEEK_TAME=0 可关掉【直接成文】',
+  lastCall().body.messages[0].content.indexOf('【直接成文】') < 0, true);
+
+policyCalls.length = 0;
+await (await postModel('deepseek', 'deepseek-flash', { LLM_MAX_TOKENS: '2000' })).text();
+eq('M24 全局 LLM_MAX_TOKENS 仍优先于按模型默认', lastCall().body.max_tokens, 2000);
 
 globalThis.fetch = origFetch;
 if (fail > 0) process.exit(1);

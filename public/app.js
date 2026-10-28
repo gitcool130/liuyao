@@ -1338,8 +1338,27 @@
   // 旧版只有「流中断 3 次」「空稿 2 次」两个计数，而 AbortError（空闲 65s / 硬顶 330s）
   // 与 JSON 5xx / LLM_ERROR 两条路**完全不计数**，只靠 180s 截止兜——快速失败下实测能
   // 打满十几次上游调用（每轮都是一次真生成、一笔真费用），用户侧只看到「第 N 次尝试」。
-  // 6 次足够扛过抖动，又不会把一次点击变成十几次付费请求。
-  const AI_MAX_ATTEMPTS = 6;
+  const AI_MAX_ATTEMPTS = 3;
+
+  /* 按模型分策略（M24）。
+     旧版对 gemini 与 deepseek 用同一套 6 次 / 65s / 330s，把两类**性质完全不同**的失败
+     混成了一个参数：
+       - gemini 的失败是偶发的（链路抖动、偶发截断），多试两次有意义；
+       - deepseek-flash 的失败是**确定性**的（只想不答、45s 后整条流彻底静默），
+         第 2 次和第 6 次结果逐字相同，差别只是多烧几笔付费调用、多等十几分钟。
+     所以思考型给「快判死 + 少重试」，普通模型给「宽一点 + 多试两次」。 */
+  const AI_STREAM_IDLE_MS_THINKER = 45000;   // 实测 deepseek 静默点就在 45s
+  const AI_STREAM_MAX_MS_THINKER = 150000;   // 2.5min 拿不到就换模型，不必陪它到 330s
+  const AI_MAX_ATTEMPTS_THINKER = 2;         // 一次原试 + 一次确认，第 3 次必换模型
+
+  function isThinkerModel(m) {
+    return /deepseek|reasoning|(^|[-/_])o[134]([-/_]|$)|^r1/i.test(String(m || ''));
+  }
+  function modelLimits(m) {
+    return isThinkerModel(m)
+      ? { attempts: AI_MAX_ATTEMPTS_THINKER, idleMs: AI_STREAM_IDLE_MS_THINKER, hardCapMs: AI_STREAM_MAX_MS_THINKER }
+      : { attempts: AI_MAX_ATTEMPTS, idleMs: AI_STREAM_IDLE_MS, hardCapMs: AI_STREAM_MAX_MS };
+  }
 
   function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
@@ -1507,15 +1526,19 @@
       modelSwitched = true;
       model = alt;
       emptyHits = 0; streamFails = 0;
+      // 换了模型就换一套额度：新模型有自己的失败模式，不该沿用上一个模型的计数
+      // （否则「deepseek 试满 2 次 → 切 gemini」会在第 1 轮就撞 break，等于没换）。
+      attempt = 0;
+      maxAttempts = Math.max(1, (opts && opts.maxAttempts) || modelLimits(model).attempts);
       if (onStatus) onStatus(why + '，改用 ' + alt + ' 重新生成…');
       return true;
     };
     // 排盘文本在进入重试循环前快照一次：旧版每轮 attempt 重建 buildPanText(true)，
     // 重试期间用户改事类/时间，后续 attempt 会发出与首次不同的盘面（对话历史还是旧的）。
     const panTextSnapshot = buildPanText(true);
-    // 补发/校正这类「第二次生成」给的尝试额度更小（默认 6）：它们本身是补救，
-    // 不该再自带一整套 17 次空转。
-    const maxAttempts = Math.max(1, (opts && opts.maxAttempts) || AI_MAX_ATTEMPTS);
+    // 补发/校正这类「第二次生成」给的尝试额度更小：它们本身是补救，不该再自带一整套空转。
+    // 主流程按模型取额度（思考型 2 次、其余 3 次），切换模型后重新取一次。
+    let maxAttempts = Math.max(1, (opts && opts.maxAttempts) || modelLimits(model).attempts);
     while (true) {
       attempt++;
       if (attempt > maxAttempts) {
@@ -1576,11 +1599,15 @@
           // 「还在正常思考」的请求掐掉，前端随后从头重试——用户看到的就是「请求十几次
           // 没有结果」。改为「65s 无任何字节才超时」，同时设 330s 硬上限兜底。
           let idleTimer = null;
+          // 阈值按**当前**模型取（每轮重算，切模型后即时生效）：思考型 45s 静默即判死、
+          // 150s 硬顶；其余仍 65s / 330s。旧版两者共用 65s/330s，deepseek 静默后
+          // 要干等到 330s 才换模型，一次点击就是五分钟起步。
+          const lim = modelLimits(model);
           const armIdle = function () {
             if (idleTimer) clearTimeout(idleTimer);
-            idleTimer = setTimeout(function () { ctrl.abort(); }, AI_STREAM_IDLE_MS);
+            idleTimer = setTimeout(function () { ctrl.abort(); }, lim.idleMs);
           };
-          const hardCap = setTimeout(function () { ctrl.abort(); }, AI_STREAM_MAX_MS);
+          const hardCap = setTimeout(function () { ctrl.abort(); }, lim.hardCapMs);
           armIdle();
           let text;
           let thinkLen = 0;   // 本轮收到的思考草稿字数（用于区分「空响应」与「只想不答」）

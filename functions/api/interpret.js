@@ -356,6 +356,48 @@ export async function onRequestPost(context) {
   const isGoogle = cfg.base.indexOf('generativelanguage.googleapis.com') !== -1 ||
     (cfg.base.indexOf('google-ai-studio') !== -1 && cfg.base.slice(-7) !== '/openai');
 
+  /* 按模型分策略（M24）。
+     旧版对所有模型用同一套参数，方向恰好是反的：
+       - gemini 3.x 被硬塞 thinkingConfig.thinkingBudget=0（关思考）——而本文件下方变体
+         注释自己记着「关思考下 3.6-flash 只生成 137/405 tokens 就 finishReason=STOP，
+         断语断在句中且无结论行」，等于对表现最好的模型做了对它最不利的事；
+       - deepseek-flash 完全不限思考、也不传 max_tokens——实测 10.2k 字草稿、正文零字。
+     现在把「思考预算 / 正文预算 / 成文约束」三件事按模型分开，env 可逐项覆盖：
+       GEMINI_THINKING_BUDGET  -1=动态（默认）0=关 正整数=上限
+       DEEPSEEK_MAX_TOKENS     默认 8192（旧版不传，交给上游默认值）
+       DEEPSEEK_TAME           '0' 可关掉「直接成文」追加段 */
+  function modelPolicy(modelId, google) {
+    if (google) {
+      // gemini 3.x：默认交给模型自己动态思考。变体 A（关思考）曾用于规避思考路径
+      // 的 high demand 503，但代价是长输出被自己掐断——两者都试过，截断更难排查，
+      // 故默认 auto，真要退回老行为设 GEMINI_THINKING_BUDGET=0。
+      const raw = env.GEMINI_THINKING_BUDGET;
+      const auto = raw === undefined || String(raw).trim() === '' || String(raw).trim() === '-1';
+      const budget = auto ? null : Math.max(0, parseInt(raw, 10) || 0);
+      return { thinkBudget: auto ? null : budget, maxTokens: 0, sysExtra: '' };
+    }
+    if (provider === 'deepseek') {
+      // deepseek-flash 的失败是**确定性**的：思考失控、正文不出，且实测 45s 后整条流
+      // 静默。给它显式正文预算 + 一段「直接成文」约束，压缩它把盘面当谜题反复自问的空间。
+      // 注意 DeepSeek 的 max_tokens 不含思维链输出，所以这不是硬截思考，只是给正文
+      // 一个明确配额（旧版 0 = 完全不传，等于把预算控制权全交出去）。
+      const mt = Math.max(0, parseInt(env.DEEPSEEK_MAX_TOKENS || '8192', 10) || 8192);
+      const tame = String(env.DEEPSEEK_TAME || '1') !== '0';
+      return {
+        thinkBudget: null,
+        maxTokens: mt,
+        sysExtra: tame ? [
+          '【直接成文】本盘已由程序完成确定性推算，你无需核验、推演或复述盘面原文。',
+          '不得自问自答（例如「这是六爻从初到上排列？」「通常排盘从下往上」），',
+          '不得罗列中间推测过程，也不得把盘面当谜题逐条试探。',
+          '从「一、卦象要点」直接开始写正文；思考预算须让位于正文。'
+        ].join('') : ''
+      };
+    }
+    return { thinkBudget: null, maxTokens: 0, sysExtra: '' };
+  }
+  const policy = modelPolicy(model, isGoogle);
+
   // 前提预检兜底（M21）：正常请求由 public/core/premise.js 在排盘文本里注入
   // 「【前提预检（…）】」块（五类槽位的确定性命中 + 应期刻度）。直接用 API 打
   // /api/interpret 的调用方不会有这一段，于是缺项分级与应期同域就只剩系统提示里的
@@ -366,7 +408,10 @@ export async function onRequestPost(context) {
     '把缺项按【缺项分级】定级并在正文写明所设假设；' +
     '时间跨度不明确时不得给具体干支日，只给区间与触发条件。';
   const userContent = panText.indexOf('【前提预检') >= 0 ? panText : panText + '\n' + PREMISE_FALLBACK;
-  const messages = [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: userContent }];
+  // sysExtra 只在**发请求时**拼到系统提示后面，不改 SYSTEM_PROMPT 常量本身：
+  // app.js 里那份副本用于「复制请求内容手动断卦」，不该被某个供应商的调参污染。
+  const sysPrompt = SYSTEM_PROMPT + (policy.sysExtra ? '\n' + policy.sysExtra : '');
+  const messages = [{ role: 'system', content: sysPrompt }, { role: 'user', content: userContent }];
   history.forEach(function (m) {
     if (m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content) {
       messages.push({ role: m.role, content: m.content.slice(0, LIMITS.perMessage) });
@@ -411,10 +456,15 @@ export async function onRequestPost(context) {
       // 断语断在句中且无「结论：」行；怀疑对 3.x 关思考损伤长输出。
       // 变体只在 env.LLM_DEBUG_VARIANTS === '1' 时生效，生产默认关闭。
       const genCfg = { temperature: 0.2 };
-      if (!variant || variant === 'A') {
-        genCfg.thinkingConfig = { thinkingBudget: 0 };
+      // 生产口径由 policy.thinkBudget 决定（默认 null = 不传 thinkingConfig，交给
+      // gemini 3.x 动态思考）；variant 只在 LLM_DEBUG_VARIANTS=1 的对照实验里生效。
+      const thinkBudget = (variant === 'B' || variant === 'C') ? null
+        : (variant === 'A' ? 0 : policy.thinkBudget);
+      if (thinkBudget !== null && thinkBudget !== undefined) {
+        genCfg.thinkingConfig = { thinkingBudget: thinkBudget };
       }
-      if (maxTokens > 0) genCfg.maxOutputTokens = maxTokens;
+      const gemMax = maxTokens > 0 ? maxTokens : (policy.maxTokens || 0);
+      if (gemMax > 0) genCfg.maxOutputTokens = gemMax;
       if (variant === 'C') genCfg.maxOutputTokens = 8192;
       return {
         // 原生接口也走流式（alt=sse）：非流式要在服务端等整篇生成完，
@@ -425,7 +475,7 @@ export async function onRequestPost(context) {
           gatewayHeaders(cfg.base)
         ),
         payload: {
-          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          systemInstruction: { parts: [{ text: sysPrompt }] },
           contents: contents,
           generationConfig: genCfg
         }
@@ -433,7 +483,9 @@ export async function onRequestPost(context) {
     }
     // 统一走流式（服务端拼接完整文本后返回），避免中转站网关的 60s 整响应硬超时
     const payload = { model: modelId, messages: messages, stream: true };
-    if (maxTokens > 0) payload.max_tokens = maxTokens;
+    // 正文预算：全局 LLM_MAX_TOKENS 优先，其次按模型的 policy（deepseek 默认 8192）。
+    const oaMax = maxTokens > 0 ? maxTokens : (policy.maxTokens || 0);
+    if (oaMax > 0) payload.max_tokens = oaMax;
     if (/^(gpt-5|o[134])/.test(modelId)) {
       // gpt-5 / o 系思考模型：不支持 temperature；推理强度可用环境变量 GPT_EFFORT 调（minimal/low/medium/high），默认 low 防超时
       const effort = (env.GPT_EFFORT || 'low').trim();
