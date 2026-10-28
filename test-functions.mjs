@@ -884,6 +884,42 @@ globalThis.fetch = function () {
 const evStop = await readSSEEvents(await postGem('gemini-3.6-flash'));
 eq('finishReason=STOP 且结论行齐全 → 不告警（反向对照）', evStop.some(function (e) { return e.warn; }), false);
 
+/* 2026-10-28：finish 缺失（流自然结束、上游什么都没说）必须告警。
+   线上形状：DeepSeek 思考 10.2k 字后正文写到「用神」一行就没了，finish_reason 一路为
+   null，旧版据此判「完美完篇」，一条告警都不发——用户拿半篇当断语。 */
+globalThis.fetch = function () {
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(encG.encode('data: ' + JSON.stringify({ choices: [{ delta: { content: '一、卦象要点：世在三爻。\n结论：平\n应期：戌日\n验证标志：对方来电\n用神：妻财庚辰（三爻）\n' } }] }) + '\n\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const evNoFinish = await readSSEEvents(await postDS({ skip_cache: true }));
+eq('finish 缺失 → 发出 MODEL_NO_FINISH（结论行齐全也要报）',
+  evNoFinish.some(function (e) { return e.warn === 'MODEL_NO_FINISH'; }), true);
+eq('finish 缺失不写成 error（不是网络问题，不该触发重试）',
+  evNoFinish.some(function (e) { return e.error; }), false);
+
+/* 2026-10-28：只有 reasoning_content、没有 content 时，兜底补发的那段是**草稿**，
+   必须打 draft 标记 + DRAFT_ONLY 告警。旧版原样当正文下发，10.2k 字独白被渲染成断语，
+   且客户端「只想不答」守卫（text 为空才算）因此永远不可达。 */
+globalThis.fetch = function () {
+  const body = new ReadableStream({
+    start: function (c) {
+      c.enqueue(encG.encode('data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: '我先核盘：世在三爻，用神取妻财……' } }] }) + '\n\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const evDraftOnly = await readSSEEvents(await postDS({ skip_cache: true }));
+const draftFrame = evDraftOnly.filter(function (e) { return typeof e.t === 'string'; })[0] || {};
+eq('纯草稿兜底 → 补发的正文帧带 draft:true', draftFrame.draft, true);
+eq('纯草稿兜底 → 发出 DRAFT_ONLY 告警',
+  evDraftOnly.some(function (e) { return e.warn === 'DRAFT_ONLY'; }), true);
+
 // STOP 但缺「结论：」行 —— 上游自称停得正常，产物却没成形。
 // 实测 gemini-3.6-flash：137 tokens / 3 秒 / success:true / finishReason=STOP，
 // 正文断在句中。finishReason 守卫覆盖不到这类，必须靠结构化完整性判定。

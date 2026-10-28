@@ -637,6 +637,9 @@ export async function onRequestPost(context) {
     const reader = upstream.body.getReader();
     const dec = new TextDecoder();
     let buf = '', outLen = 0, cut = null, reasBuf = '';
+    // 本次回答是否只是「思考草稿兜底补发」的产物（正文其实一个字节都没来）。
+    // 置位后要额外下发 DRAFT_ONLY 告警，前端据此提示并走残篇补发，别把草稿当断语。
+    let draftOnly = false;
     // 思考片段计数（仅观测，不改输出）：Google 原生流里思考内容以
     // parts[{ text, thought:true }] 返回，而下方统一按 p.text 拼接。
     let thoughtLen = 0;
@@ -741,8 +744,12 @@ export async function onRequestPost(context) {
       // 把最终答案也放进思考字段）时，流末一次性补发，避免客户端按「空响应」
       // 重试或报 EMPTY。走到这里只可能是 r.done 正常收流。
       if (!cut && outLen === 0 && reasBuf) {
+        draftOnly = true;
         try {
-          await w.write(enc.encode('data: ' + JSON.stringify({ t: reasBuf }) + '\n\n'));
+          // draft:true —— 这一段的身份是**思考草稿**，不是断语。2026-10-28：
+          // 旧版原样当 t 正文补发且不带标记，于是「10.2k 字思考」被渲染成断语正文
+          // （还会进 fact-audit 造成假阳性），用户看到的就是「思考了很多，正文到某处就没了」。
+          await w.write(enc.encode('data: ' + JSON.stringify({ t: reasBuf, draft: true }) + '\n\n'));
           // 补发的是**思考草稿**，也必须计入正文长度与尾部快照。
           outLen += reasBuf.length;
           tail = reasBuf.slice(-600);
@@ -755,6 +762,15 @@ export async function onRequestPost(context) {
       if (!cut && outLen === 0) {
         await writeErr('EMPTY_UPSTREAM', '上游整条流未返回任何内容（finish=' + (finish === null ? 'none' : finish) + '）');
       }
+      // 草稿补发必须自报身份：前端会提示「这是草稿」并改用残篇补发再要一篇正式稿。
+      if (!cut && draftOnly) {
+        try {
+          await w.write(enc.encode('data: ' + JSON.stringify({
+            warn: 'DRAFT_ONLY',
+            message: '上游只返回了思考草稿（' + outLen + ' 字符），没有正式答复'
+          }) + '\n\n'));
+        } catch (e) { /* 客户端已断开则忽略 */ }
+      }
       // 非正常收尾必须显式告知客户端：MODEL_TRUNCATED 不是网络问题——重试只会
       // 再撞一次同一个上限，所以单列 warn 事件，由前端提示「本卦未完篇」。
       if (!cut && finish && finish !== 'STOP' && finish !== 'stop' && finish !== 'end_turn') {
@@ -765,8 +781,24 @@ export async function onRequestPost(context) {
           }) + '\n\n'));
         } catch (e) { /* 客户端已断开则忽略 */ }
       }
+      /* finish 缺失 = 「上游什么都没说就断了」（2026-10-28 补）。
+         正常收流的 SSE 一定带结束原因：OpenAI 兼容是 finish_reason，Gemini 原生是
+         finishReason。旧版只在 finish 有值时才判「非正常收尾」，于是 finish === null
+         被当成完美完篇 —— 实测正是「正文写到『用神』一行、后面没了、一条告警都没有」
+         的成因：流在传输层自然结束，模型既没停也没报错。 */
+      if (!cut && finish === null && outLen > 30) {
+        try {
+          await w.write(enc.encode('data: ' + JSON.stringify({
+            warn: 'MODEL_NO_FINISH',
+            message: '上游未给出结束原因（流自然结束），断语可能在 ' + outLen + ' 字符处被截断'
+          }) + '\n\n'));
+        } catch (e) { /* 客户端已断开则忽略 */ }
+      }
       // 结构化完整性：《结论对齐》契约要求文末四行。结论行缺失即视为「没断完」，
       // 无论上游自称停得多么正常。只管首次断卦（history 为空）。
+      // 注：**不**把「用神：」一并纳入判定——模型在正文明细里常写「用神父母巳火二爻发动」
+      // 而不带冒号，硬测会把这个正常完篇判成残篇（test-functions「不告警反向对照」即此形）。
+      // 断在「用神」行之后的残篇由上面的 MODEL_NO_FINISH 捕获。
       if (!cut && history.length === 0 && outLen > 30 && !/结[论局]\s*[：:]/.test(tail)) {
         try {
           await w.write(enc.encode('data: ' + JSON.stringify({
@@ -785,6 +817,7 @@ export async function onRequestPost(context) {
           thought: thoughtLen,
           cut: cut || null,
           empty: outLen === 0,
+          draft: draftOnly,
           first: history.length === 0,
           ms: Date.now() - startedAt
         }));

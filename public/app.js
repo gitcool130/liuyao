@@ -1318,6 +1318,12 @@
   // LLM_TIMEOUT_MS（默认 300s）对齐，避免真的无限等。
   const AI_STREAM_IDLE_MS = 65000;
   const AI_STREAM_MAX_MS = 330000;
+  // 单次断卦（一次 callInterpret）的尝试次数硬上限（2026-10-28）。
+  // 旧版只有「流中断 3 次」「空稿 2 次」两个计数，而 AbortError（空闲 65s / 硬顶 330s）
+  // 与 JSON 5xx / LLM_ERROR 两条路**完全不计数**，只靠 180s 截止兜——快速失败下实测能
+  // 打满十几次上游调用（每轮都是一次真生成、一笔真费用），用户侧只看到「第 N 次尝试」。
+  // 6 次足够扛过抖动，又不会把一次点击变成十几次付费请求。
+  const AI_MAX_ATTEMPTS = 6;
 
   function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
@@ -1409,6 +1415,14 @@
           }
         }
       }
+    } catch (e) {
+      // 已收到的正文随异常一并带出（2026-10-28）：旧版直接 throw，full 是局部变量、
+      // 随异常丢弃，于是「正文已经流出来一大段」的中断被当成零产出，上层从头重跑
+      // （再等一次 60~90s 长思考）。用户看到的就是正文出现一下又消失、然后「第 N 次尝试」。
+      if (e && typeof e === 'object') {
+        try { if (!e.partial) e.partial = full; } catch (e2) { /* 不可扩展的宿主错误则放弃 */ }
+      }
+      throw e;
     } finally {
       if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
       // cancel() 返回 promise：流已被上游 error 时以存储错误拒绝，需就地吞掉
@@ -1424,6 +1438,16 @@
       if (onStream) onStream(full);
     }
     return full;
+  }
+
+  /* 剥掉「未完篇 / 传输中断」提示段（2026-10-28）。
+     这些提示是前端/服务端自己拼在正文末尾的，文案里就含「结论：」三个字
+     （「断语缺少「结论：」行」）。而「这稿是不是残篇」的判定就是
+     /结[论局]\s*[：:]/ —— 于是**拼了提示的残篇永远被判成完篇**，
+     app.js 里那套「残篇自动补发」在最该触发的场景 100% 不触发。
+     判残篇、解析结论卡一律先过这个函数。 */
+  function stripStreamWarn(s) {
+    return String(s == null ? '' : s).replace(/\n\n> ⚠ 本卦断语[\s\S]*$/, '');
   }
 
   // opts.gen：代数令牌，用于丢弃「用户已重新起卦/断卦」后在途旧请求的回调。
@@ -1447,8 +1471,19 @@
     // 排盘文本在进入重试循环前快照一次：旧版每轮 attempt 重建 buildPanText(true)，
     // 重试期间用户改事类/时间，后续 attempt 会发出与首次不同的盘面（对话历史还是旧的）。
     const panTextSnapshot = buildPanText(true);
+    // 补发/校正这类「第二次生成」给的尝试额度更小（默认 6）：它们本身是补救，
+    // 不该再自带一整套 17 次空转。
+    const maxAttempts = Math.max(1, (opts && opts.maxAttempts) || AI_MAX_ATTEMPTS);
     while (true) {
       attempt++;
+      if (attempt > maxAttempts) {
+        lastErr = {
+          kind: 'net',
+          message: '连续 ' + maxAttempts + ' 次尝试都没有拿到完整断语，请换一个模型或稍后再试',
+          detail: details.join(' | ')
+        };
+        break;
+      }
       const elapsed = Date.now() - start;
       const remaining = AI_RETRY_DEADLINE - elapsed;
       if (remaining <= 0) {
@@ -1552,6 +1587,15 @@
         const sMsg = (netErr && netErr.message) || '未知原因';
         if (pick(noRetryStream, sCode)) {
           throw { kind: 'api', message: sMsg, detail: '', code: sCode };
+        }
+        /* 已经流出一大段正文再断的，不再从头重跑（2026-10-28）。
+           重跑至少要再等一次思考期，用户手里却已经有一份可读的残稿；而「残篇补发」
+           本来就会另起一稿把它替换掉。旧版把这段直接丢掉、从头重试，观感就是
+           「正文出来了 → 消失 → 第 N 次尝试」。 */
+        const partial = (netErr && netErr.partial) || '';
+        if (String(partial).length >= 200) {
+          return stripStreamWarn(partial) + '\n\n> ⚠ 本卦断语传输中断（' + sMsg +
+            '），以上为已收到的部分。';
         }
         if (sCode === 'EMPTY_UPSTREAM') {
           emptyHits++;
@@ -1745,13 +1789,21 @@
           };
 
           let retriedWith = '';
-          if (reply && reply.length > 30 && !/结[论局]\s*[：:]/.test(reply)) {
+          /* 判残篇只看**剥掉提示后的正文**（2026-10-28）。旧版对拼了提示的全文测
+             /结[论局]/，而提示文案里自带「结论：」三个字 → 残篇恒被判为完篇，
+             这套补发在最该触发的地方从来没触发过。另外：只要尾部带过提示
+             （未完篇 / 只有草稿 / 传输中断 / length 截断），即使结构齐全也再要一稿。 */
+          const bareReply = stripStreamWarn(reply);
+          const wasTruncated = String(bareReply).length !== String(reply || '').length;
+          if (reply && reply.length > 30 && (!/结[论局]\s*[：:]/.test(bareReply) || wasTruncated)) {
             const alt = retryModelFor(m);
             const label = alt !== m ? '断语未写完，改用 ' + alt + ' 重新生成' : '断语未写完，正在重新生成';
             curDraft = mdLite(reply);   // 残篇也要留着现形，用户才知道「往哪儿补」
-            const retry = await callInterpret(alt, [], rwStatus(label), rwStream(label), { gen: myGen, signal: mySignal });
+            const retry = await callInterpret(alt, [], rwStatus(label), rwStream(label),
+              { gen: myGen, signal: mySignal, maxAttempts: 3 });
             if (myGen !== aiGen) return;
-            const good = !!retry && (/结[论局]\s*[：:]/.test(retry) || retry.length > reply.length);
+            const retryBare = stripStreamWarn(retry);
+            const good = !!retry && (/结[论局]\s*[：:]/.test(retryBare) || retryBare.length > bareReply.length);
             if (good) {
               reply = retry;
               // 只有真的换上、且模型不同才标注，避免「补全」二字在默认路径上刷屏
@@ -1761,9 +1813,12 @@
 
           /* 盘面事实冲突 → 把冲突点回灌给模型，只重写一次。
              旧版只在断语下方提示，用户拿到的仍是写错的正文；重写一次能消掉
-             大半「世应写反／卦名写错」且不会无限循环（仅一次机会）。 */
+             大半「世应写反／卦名写错」且不会无限循环（仅一次机会）。
+             2026-10-28：残稿不做校正——半篇里的「冲突」多半是没写完造成的，
+             再花一次生成去纠正它，收益为零。 */
           let corrected = false;
-          if (HAS_ABSORB) {
+          const curTruncated = stripStreamWarn(reply).length !== String(reply || '').length;
+          if (HAS_ABSORB && !curTruncated) {
             try {
               const fa = C.auditFactClaims(reply, pan);
               if (fa && !fa.accepted && fa.errors.length) {
@@ -1776,14 +1831,14 @@
                   { role: 'assistant', content: reply },
                   { role: 'user', content: '上一稿有 ' + fa.errors.length + ' 处与卦盘不符：' + list +
                     '。请严格对照盘面全文重写，保持原有结构，不得保留上述错误表述，也不要解释修改过程。' }
-                ], rwStatus(label), rwStream(label), { gen: myGen, signal: mySignal });
+                ], rwStatus(label), rwStream(label), { gen: myGen, signal: mySignal, maxAttempts: 3 });
                 corrected = true;
               }
             } catch (e) { /* 审计或重写失败：保留首稿，不打断 */ }
           }
           if (myGen !== aiGen) return;
 
-          const cc = parseConclusion(reply);
+          const cc = parseConclusion(stripStreamWarn(reply));
           if (cc.verify) lastVerify = cc.verify;
           // 输出前一致性校验（M21 · 应期同域）：模型给的「应期」粒度不得细于事项跨度。
           // 这一步是确定性的——引擎已判出跨度，模型写日级应期就是自相矛盾，
