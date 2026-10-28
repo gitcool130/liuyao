@@ -776,3 +776,30 @@ panText、model=deepseek-flash：
 **未做**：没有替 deepseek-flash 调参（`max_tokens` / `reasoning_effort`）。DeepSeek 文档里
 `max_tokens` 不含思维链输出，硬截只会更早断流；真要救它得改系统提示让它别把盘面
 当谜题反复自问（实测它在草稿里反复问「这是六爻从初到上排列？」），属另一件事。
+
+### M23 补记（同日，部署后复测发现：心跳与看门狗在生产环境都没跑起来）
+
+部署 `ec171c80` 后按同一盘面再打一次 deepseek-flash，结果与部署前一致：
+200s、45s 后无任何字节、**没有 `UPSTREAM_STALL`**。回看四次真实请求的原始流：
+
+| 请求 | 时长 | `: ping` 帧数 |
+|---|---|---|
+| deepseek-flash #1/#2（旧版） | 330s / 200s | 1（只有 `openSession` 开头那一帧） |
+| deepseek-flash #3（新版，带看门狗） | 200s | 1 |
+| gemini-3.6-flash（对照，52s 正常完篇） | 52s | 1 |
+
+`SSE_HEARTBEAT_MS` 默认 15s、`UPSTREAM_IDLE_MS` 默认 60s，按道理该有 3~13 帧 ping 和一帧
+`UPSTREAM_STALL`，实际一帧都没有。结论：**Pages Functions 生产环境里，定时器回调里的
+流写入没有生效**（Node 侧的 `test-functions` 心跳/看门狗断言全绿，workerd 生产不绿——
+这正是「服务端保活」这类设计的盲区）。
+
+因此所有超时兜底改为**客户端自己认**，不再依赖服务端心跳：
+
+- `app.js` `readStreamSSE`：空闲计时只认 `{"t"}` / `{"r"}`（上一版已改，此处不再重复计入 ping）。
+- `app.js` `callInterpret`：新增「超时 + 期间只收到思考、正文为零」分支
+  （`thinkThisAttempt > 500` 且无 `partial`）——直接按 `REASONING_ONLY` 处理，
+  `switchModelOnce()` 换一次模型；换过仍不行才报错。旧版把这种超时算作「请求超时」
+  原地重试，每次都要再等 65s 静默，6 次就是十几分钟。
+
+服务端看门狗保留（Node/本地开发与将来运行时行为一致时仍然有效），但**不再作为唯一保障**。
+资源戳 `20261028b → 20261028c`。

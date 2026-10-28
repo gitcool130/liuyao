@@ -1551,6 +1551,9 @@
         }
       }
       let res, raw, netErr;
+      // 本次 attempt 收到的思考字数（跨 try/catch 用：SSE 分支里累加，netErr 分支据此
+      // 判断「是超时还是只想不答」——见下方 isAbort 分支）。
+      let thinkThisAttempt = 0;
       try {
         res = await apiFetch('/api/interpret', {
           method: 'POST',
@@ -1586,6 +1589,7 @@
             // 旧版界面只显示静止的「推卦中…」，用户以为卡死。现在把草稿字数实时显示出来。
             text = await readStreamSSE(res, onStream, function (n) {
               thinkLen = n;
+              thinkThisAttempt = n;
               if (!onStatus) return;
               onStatus('模型思考中… 已输出 ' + (n > 999 ? (n / 1000).toFixed(1) + 'k' : n) + ' 字');
             }, armIdle);
@@ -1641,6 +1645,22 @@
           details.push('第' + attempt + '次：' + sMsg);
           if (switchModelOnce('该模型只思考不出正文')) continue;
           throw { kind: 'api', message: sMsg, detail: details.join(' | '), code: sCode };
+        }
+        /* 超时，但期间「只收到思考、正文为零」（2026-10-28 线上实测补的口子）。
+           服务端的 15s 心跳与 60s 上游看门狗在 Pages Functions 生产环境里实测**均未生效**：
+           四次请求各自只收到开头那一帧 `: ping`，200~330s 的流里再没有任何注释帧。
+           于是「上游静默」只能由客户端认定——走到这里说明已经 65s 没有任何 t/r 帧。
+           对一个只会写思考的模型，原地重试等于再等 65s 再撞一次，直接换模型。 */
+        if (isAbort && thinkThisAttempt > 500 && !String((netErr && netErr.partial) || '').length) {
+          const n = thinkThisAttempt;
+          const nTxt = (n > 999 ? (n / 1000).toFixed(1) + 'k' : n);
+          details.push('第' + attempt + '次：只思考不出正文（' + nTxt + ' 字后静默）');
+          if (switchModelOnce('该模型只思考不出正文')) continue;
+          throw {
+            kind: 'api', code: 'REASONING_ONLY',
+            message: '模型思考了 ' + nTxt + ' 字后不再输出，也没有给出正文，请换一个模型或把所测之事写得更具体',
+            detail: details.join(' | ')
+          };
         }
         /* 已经流出一大段正文再断的，不再从头重跑（2026-10-28）。
            重跑至少要再等一次思考期，用户手里却已经有一份可读的残稿；而「残篇补发」
