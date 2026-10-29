@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node test-core.js && node test-rules.js && node test-gua-types.js && node test-absorb.js && node test-yingqi.js && node test-share.js && node test-premise.js && node tools/check-baseline-snapshot.js && node tools/check-vote-page.js",
+    "test": "node test-core.js && node test-rules.js && node test-gua-types.js && node test-absorb.js && node test-yingqi.js && node test-share.js && node test-premise.js && node tools/check-baseline-snapshot.js && node tools/check-vote-page.js && node tools/check-verified-cases.js",
     "test:save": "node tools/check-baseline-snapshot.js",
     "test:vote": "node tools/check-vote-page.js",
     "test:fn": "node test-functions.mjs",
@@ -22,6 +22,8 @@
     "test:drift": "node tests/drift/run.mjs && node tests/drift/selftest.mjs",
     "test:drift:strict": "node tests/drift/run.mjs --strict",
     "guji:coverage": "node tests/guji/coverage.mjs",
+    "guji:verified": "node tools/guji-verified.mjs",
+    "test:verified": "node tools/check-verified-cases.js",
     "test:ui": "node test-shake.js",
     "gen:jieqi": "node tools/gen-jieqi.js",
     "verify:live": "node tools/verify-live.mjs",

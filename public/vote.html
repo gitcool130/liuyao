@@ -116,13 +116,16 @@
   .v-warn{color:var(--gold)}
   .v-split{color:var(--red)}
 
-  /* ---------- 规则层 ---------- */
+  /* ---------- 依据层 ---------- */
   .rules{display:grid;gap:0}
   .rule-row{display:grid;grid-template-columns:132px 1fr;gap:14px;padding:10px 16px;border-bottom:1px solid var(--line2);font-size:12.5px}
   .rule-row:last-child{border-bottom:none}
   .rule-row .who{color:var(--muted);font-size:11.5px}
   .quote{color:var(--ink2)}
   .quote em{font-style:normal;color:var(--red)}
+  .rule-note{padding:12px 16px;border-top:1px solid var(--line2);
+    font-size:11.5px;line-height:1.85;color:var(--muted)}
+  .rule-note b{color:var(--ink2);font-weight:600}
 
   /* ---------- 散文视图 ---------- */
   .prose{display:none;gap:10px;grid-template-columns:repeat(3,1fr)}
@@ -188,13 +191,22 @@
     <div class="matrix" id="matrix"></div>
   </div>
 
-  <!-- ============ 规则层 ============ -->
+  <!-- ============ 依据层 ============ -->
   <div class="sec">
     <div class="sec-h">
-      <h2>四、规则层</h2><span class="tag rule">引古法者需标出处</span>
-      <span class="hint">同一判断引不同条文 → 属流派分歧</span>
+      <h2>四、依据层</h2><span class="tag rule">模型自述 · 未核验</span>
+      <span class="hint">同一判断援不同规则名 → 属流派分歧</span>
     </div>
-    <div class="card"><div class="rules" id="rules"></div></div>
+    <div class="card">
+      <div class="rules" id="rules"></div>
+      <div class="rule-note">
+        <b>本层不提供古籍引文。</b>它只陈列每票<b>自己报出的规则名</b>，用来判断三票是不是在同一套规则上分歧——
+        「同规则不同结论」指向该模型推理不稳，「不同规则」指向流派选择，两者处置完全不同。<br>
+        早先样例里那三条带书名号的「引文」是编造的：在《增删卜易》《卜筮正宗》语料（404 例 / 12148 项断言）
+        中均检索不到原句，已全部撤除。要可回溯的原文，请到主站断卦卡片的判定链——
+        那里的 `basis` 逐条对应古籍章次，并有 golden test 兜底。
+      </div>
+    </div>
   </div>
 
   <!-- ============ 散文视图 ============ -->
@@ -214,7 +226,9 @@
     票源全部走 Cloudflare Workers AI 免费额度：<code>@cf/cloudflare/clef</code>（直接给概率、不收输出费）、
     <code>@cf/qwen/qwen3-30b-a3b-fp8</code>、<code>@cf/openai/gpt-oss-120b</code>。
     同一张盘实测一轮约 <b>17 neurons</b>，10,000 neurons/天 的免费额度≈ 500 轮，够用。<br>
-    入口：主站「断卦」卡片里的<b>「三模型对账」</b>按钮。没有带入盘面时，下方三个 <b>A/B/C</b> 是内置样例，仅供看结构。
+    入口：主站「断卦」卡片里的<b>「三模型对账」</b>按钮。没有带入盘面时，下方三个 <b>A/B/C</b> 是内置样例，仅供看结构。<br>
+    <b>依据层不核验引文。</b>三票自报的规则名由模型自己写，未经原典比对，只用于分辨「同规则不同结论」与「不同规则」；
+    真正的古籍引文在 core/analyze.js 的 basis 字段，逐条对应章次，并有 12,148 项 golden test 兜底。
   </div>
 </div>
 
@@ -253,9 +267,9 @@ const CASES = [
                clef:{本旬:0.09,下旬:0.35,月内:0.47,月外:0.09} }
     },
     rules:[
-      ['Qwen3-30B','「用神旺相而静，待冲开之期方应」——《增删卜易·应期》'],
-      ['gpt-oss-120b','「财爻持世，求财易得；动而化克，得中有阻」——《卜筮正宗》'],
-      ['clef 27B','「用神有气，虽空不空；动化回头克，主先成后败」——《黄金策》'],
+      ['Qwen3-30B','用神旺相而静 → 待冲开之期方应（规则名示意，非引文）'],
+      ['gpt-oss-120b','财爻持世且得月建 → 求财易得；动而化克 → 得中有阻（规则名示意，非引文）'],
+      ['clef 27B','用神有气不为空 + 动化回头克 → 先成后败（规则名示意，非引文）'],
     ],
     prose:[
       '用神妻财卯木，得日辰子水相生，旺相有气。三爻发动化酉金回头克，主中途有阻。本月内可望收回大半，然须防对方反复，月外则力衰难追。',
@@ -288,9 +302,9 @@ const CASES = [
                clef:{本旬:0.35,下旬:0.41,月内:0.19,月外:0.05} }
     },
     rules:[
-      ['Qwen3-30B','「占病以子孙为医药，子孙旺则药到病除」——《增删卜易·疾病》'],
-      ['gpt-oss-120b','「占病以官鬼为病神，鬼旺则病重」——《卜筮正宗·病体》'],
-      ['clef 27B','「占尊长病，用神取子孙，鬼动则忌」——《黄金策·疾病》'],
+      ['Qwen3-30B','子孙为医药 → 子孙旺则药到病除（规则名示意，非引文）'],
+      ['gpt-oss-120b','官鬼为病神 → 鬼旺则病重（规则名示意，非引文）'],
+      ['clef 27B','占尊长病 → 取子孙为用，鬼动则为忌（规则名示意，非引文）'],
     ],
     prose:[
       '子孙寅木为用，得亥月生扶，旺相有力。五爻动化未土，未为木之墓，主病势缠绵但有救。本月内可愈，无需过忧。',
@@ -323,9 +337,9 @@ const CASES = [
                clef:{本旬:0.12,下旬:0.39,月内:0.42,月外:0.07} }
     },
     rules:[
-      ['Qwen3-30B','「官鬼持世或生世，求官必得」——《增删卜易·功名》'],
-      ['gpt-oss-120b','「官星旺相生世，功名可期」——《卜筮正宗·求名》'],
-      ['clef 27B','「官鬼旺而生世，无空破则成」——《黄金策·仕宦》'],
+      ['Qwen3-30B','官鬼持世或生世 → 求官必得（规则名示意，非引文）'],
+      ['gpt-oss-120b','官星旺相生世 → 功名可期（规则名示意，非引文）'],
+      ['clef 27B','官鬼旺而生世 + 无空破 → 成（规则名示意，非引文）'],
     ],
     prose:[
       '官鬼酉金临月建，又得日辰巳火暗合，旺相非常。初二爻连动生官，层层相推。竞聘必成，唯须留意公示环节有人异议。',
@@ -375,7 +389,10 @@ function buildLiveCase(spec, votes){
       probs.qi[m.id] = v.probs.qi;
       prose[i] = v.answer || '（该模型只回概率，未给散文）';
       const u = v.usage || {};
-      rules[i] = [m.name, '本票 ' + v.ms + 'ms' + (u.input != null ? ' · tokens ' + u.input + '+' + u.output : '')];
+      // 依据层只陈列模型自述的规则名 + 本次耗时，绝不拼成「引文」形态：
+      // 早先样例里的三条「——《某书》」全部是编造的，见 sec 四 底部的说明。
+      const bs = v.basis ? '所据：' + v.basis + ' · ' : '（未报依据）· ';
+      rules[i] = [m.name, bs + v.ms + 'ms' + (u.input != null ? ' · tokens ' + u.input + '+' + u.output : '')];
     }else{
       const z = zeroProbs();
       probs.yong[m.id] = z.yong; probs.wang[m.id] = z.wang;

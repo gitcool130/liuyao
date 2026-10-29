@@ -9,8 +9,10 @@
  * 实测一轮三票约 17 neurons，免费额度 10000/天 ≈ 500 轮（2026-10-29 实测）。
  *
  * 请求：POST { state: string(≤1500), ask?: string(≤200) }
- * 响应：{ votes: [{ id, label, org, ok, ms, probs, answer, error }], usage: {...} }
+ * 响应：{ votes: [{ id, label, org, ok, ms, probs, answer, basis, error }], usage: {...} }
  *        probs 形状固定为 { yong, wang, cheng, qi }，与前端分歧矩阵一一对应。
+ *        basis 是**模型自述的规则名**（已剥书名号），一律未经原典核验 —— 前端据此渲染「依据层」，
+ *        不得当作可回溯的古籍引文；可回溯的引文只在 core/analyze.js 的 basis 字段里。
  */
 import { json } from './_lib.js';
 
@@ -48,7 +50,8 @@ const MODELS = [
 function chatPrompt(state, ask) {
   return state + '\n\n' + (ask ? '占问：' + ask + '\n\n' : '') +
     '请按盘面判读，只输出一行 JSON，不要解释、不要代码块：\n' +
-    '{"用神":"妻财|官鬼|父母|兄弟|子孙","旺衰":"极弱|弱|平|旺|极旺","可成":0到1之间的小数,"应期":"本旬|下旬|月内|月外"}';
+    '{"用神":"妻财|官鬼|父母|兄弟|子孙","旺衰":"极弱|弱|平|旺|极旺","可成":0到1之间的小数,"应期":"本旬|下旬|月内|月外","依据":"所据规则名，16字内"}\n' +
+    '「依据」只写规则名称（如「用神月破无救」），不要写书名、不要加引号——本接口不核验古籍原文。';
 }
 
 // 从可能带围栏、带前言、带尾注的回复里抠出第一个完整 JSON 对象
@@ -129,7 +132,20 @@ function normalizeChat(text) {
   if (c == null) missing.push('可成');
   if (!q.hit) missing.push('应期');
   if (missing.length) return { error: 'BAD_FIELDS:' + missing.join('/'), answer: String(text).slice(0, 200) };
-  return { probs: { yong: y.probs, wang: w.probs, cheng: { noul: c }, qi: q.probs }, answer: String(text).slice(0, 400) };
+  return { probs: { yong: y.probs, wang: w.probs, cheng: { noul: c }, qi: q.probs }, answer: String(text).slice(0, 400), basis: cleanBasis(o['依据'] || o.basis) };
+}
+
+/**
+ * 模型自述的规则名 —— 只留规则名，剥掉一切「看起来像古籍引文」的装饰。
+ *
+ * 前端「依据层」早先展示的是带书名号的引文，实测全部是编造的（语料 404 例中检索不到）。
+ * 模型仍爱在 JSON 里顺手写「……——《增删卜易》」，故此处主动剥除书名号与引号，
+ * 并在前端一律标「模型自述 · 未核验」：宁可信息少一点，也不让编造的引文看起来像可回溯的原文。
+ */
+function cleanBasis(v) {
+  const s = String(v == null ? '' : v).replace(/[《》〈〉「」『』“”"']/g, '').replace(/\s+/g, ' ').trim();
+  if (!s) return null;
+  return s.slice(0, 32);
 }
 
 function withTimeout(promise, ms) {
@@ -175,7 +191,7 @@ function runOne(env, m, state, ask) {
     const usage = { input: u.input_tokens || u.prompt_tokens || 0, output: u.output_tokens || u.completion_tokens || 0, neurons: u.neurons || 0 };
     const norm = m.kind === 'clef' ? normalizeClef(res) : normalizeChat(res.choices && res.choices[0] && res.choices[0].message && res.choices[0].message.content);
     if (norm.error) return Object.assign(base, { ok: false, error: norm.error, probs: null, answer: norm.answer, usage: usage });
-    return Object.assign(base, { ok: true, error: null, probs: norm.probs, answer: norm.answer, usage: usage });
+    return Object.assign(base, { ok: true, error: null, probs: norm.probs, answer: norm.answer, basis: norm.basis || null, usage: usage });
   });
 }
 
@@ -205,4 +221,4 @@ export function onRequestGet() {
 }
 
 // 导出给测试用（不参与运行时分发）
-export const _internals = { extractJson, normalizeClef, normalizeChat, oneHot, clamp01, MODELS, CRITERIA };
+export const _internals = { extractJson, normalizeClef, normalizeChat, oneHot, clamp01, cleanBasis, MODELS, CRITERIA };

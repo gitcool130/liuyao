@@ -24,7 +24,8 @@ import { onRequestGet as modelsGet } from './functions/api/models.js';
 import { onRequestPost as interpretPost, isRateLimited, __rlState, SYSTEM_PROMPT, deltaText, deltaReasoning } from './functions/api/interpret.js';
 import { onRequestGet as ogGet } from './functions/index.js';
 import { onRequestGet as readingsGet, onRequestPost as readingsPost, beijingToday } from './functions/api/readings.js';
-import { onRequestPost as votePost, onRequestGet as voteGet } from './functions/api/vote.js';
+import { onRequestPost as votePost, onRequestGet as voteGet, _internals as voteInternals } from './functions/api/vote.js';
+const _vCleanBasis = voteInternals.cleanBasis;
 import { decodeCast as facadeDecode } from './functions/api/_share.js';
 import { readFileSync } from 'node:fs';
 
@@ -1671,6 +1672,26 @@ eq('qwen 请求不开 thinking 时不传 reasoning_effort',
 const gptCallBody = aiOk.calls.find(function (c) { return c.model.indexOf('gpt-oss') >= 0; }).body;
 eq('gpt-oss 不带 /no_think（它不认这个软开关）',
   /\/no_think/.test(gptCallBody.messages[gptCallBody.messages.length - 1].content), false);
+
+// 依据层：模型自述的规则名必须剥掉书名号/引号，避免被当成可回溯的古籍引文。
+// 背景：投票页早先「规则层」的三条带书名号「引文」是编造的，404 例语料里检索不到（已全撤）。
+eq('未报「依据」时 basis 为 null（不猜）', vQwen.basis, null);
+const aiBasis = mkAI({
+  '@cf/qwen/qwen3-30b-a3b-fp8': {
+    choices: [{ message: { content: '{"用神":"妻财","旺衰":"旺","可成":0.62,"应期":"月内","依据":"用神月破无救——《增删卜易·月破章》"}' } }],
+    usage: { prompt_tokens: 10, completion_tokens: 5 }
+  }
+});
+const jBasis = await (await voteCall({ state: '盘面' }, { AI: aiBasis.ai })).json();
+const vBasis = jBasis.votes.find(function (v) { return v.id === 'qwen'; });
+eq('依据层剥除书名号（不伪装成原文）', vBasis.basis, '用神月破无救——增删卜易·月破章');
+eq('依据层剥除后仍保留规则名本体', /用神月破无救/.test(vBasis.basis), true);
+eq('prompt 明确要求「依据」不得写书名',
+  /不要写书名/.test(qwenCallBody.messages[qwenCallBody.messages.length - 1].content), true);
+eq('cleanBasis 剥除各类引号装饰',
+  _vCleanBasis('「官鬼旺而生世」——〈求名〉'), '官鬼旺而生世——求名');
+eq('cleanBasis 空串 → null', _vCleanBasis('《》'), null);
+eq('cleanBasis 截断到 32 字', _vCleanBasis('甲'.repeat(50)).length, 32);
 eq('chat 票 max_tokens 留足 512（reasoning 也要占额度）', gptCallBody.max_tokens, 512);
 
 const aiBad = mkAI({ '@cf/openai/gpt-oss-120b': { choices: [{ message: { content: '抱歉，我无法判断。' } }] } });

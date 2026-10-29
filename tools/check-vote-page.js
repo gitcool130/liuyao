@@ -67,12 +67,14 @@ const VOTES = [
     probs: { yong: p({ 妻财: 1, 官鬼: 0, 父母: 0, 兄弟: 0, 子孙: 0 }),
       wang: p({ 极弱: 0, 弱: 0, 平: 1, 旺: 0, 极旺: 0 }),
       cheng: { noul: 0.5 }, qi: p({ 本旬: 0, 下旬: 1, 月内: 0, 月外: 0 }) },
-    answer: '{"用神":"妻财","旺衰":"平","可成":0.5,"应期":"下旬"}', usage: { input: 200, output: 38, neurons: 2.08 } },
+    answer: '{"用神":"妻财","旺衰":"平","可成":0.5,"应期":"下旬"}', basis: '用神得日辰生扶',
+    usage: { input: 200, output: 38, neurons: 2.08 } },
   { id: 'gptoss', label: 'gpt-oss-120b', org: 'OpenAI 开源', ok: true, ms: 2372,
     probs: { yong: p({ 妻财: 1, 官鬼: 0, 父母: 0, 兄弟: 0, 子孙: 0 }),
       wang: p({ 极弱: 0, 弱: 0, 平: 1, 旺: 0, 极旺: 0 }),
       cheng: { noul: 0.58 }, qi: p({ 本旬: 0, 下旬: 0, 月内: 1, 月外: 0 }) },
-    answer: '{"用神":"妻财","旺衰":"平","可成":0.58,"应期":"月内"}', usage: { input: 261, output: 92, neurons: 14.58 } }
+    answer: '{"用神":"妻财","旺衰":"平","可成":0.58,"应期":"月内"}', basis: null,
+    usage: { input: 261, output: 92, neurons: 14.58 } }
 ];
 let fetchCalls = 0;
 async function fetchStub(url, opts) {
@@ -117,6 +119,17 @@ const ctx = vm.createContext({
   console.log('\n⑤ 不扰动真实数据（live 不做 jitter）');
   const chengCells = (nodes.matrix.innerHTML.match(/\d+%/g) || []);
   ok('可成三格是 31/50/58 原值', chengCells.join(',') === '31%,50%,58%', '实得 ' + chengCells.join(','));
+
+  console.log('\n⑥ 依据层：只陈列模型自述，不伪装成古籍引文');
+  const rulesHtml = nodes.rules.innerHTML;
+  ok('报出依据的票显示「所据：」', rulesHtml.indexOf('所据：用神得日辰生扶') >= 0);
+  ok('未报依据的票显式标注', rulesHtml.indexOf('（未报依据）') >= 0);
+  ok('依据层不出现书名号（编造引文的形态）',
+    !/[《》〈〉]/.test(rulesHtml), '实得 ' + (rulesHtml.match(/[《》〈〉]/g) || []).join(''));
+  const secFour = /<h2>四、([^<]+)<\/h2>/.exec(src);
+  ok('区块标题已由「规则层」改为「依据层」', !!secFour && secFour[1] === '依据层',
+    '实得 ' + (secFour ? secFour[1] : '(未找到)'));
+  ok('页面保留「本层不提供古籍引文」的边界说明', src.indexOf('本层不提供古籍引文') >= 0);
 
   console.log('\n结果：PASS ' + pass + '　FAIL ' + fail + '\n');
   process.exit(fail ? 1 : 0);
