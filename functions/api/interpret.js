@@ -9,8 +9,11 @@
  *   GEMINI_API_KEY    secret，Google AI Studio key（AIza 开头）
  *   GEMINI_BASE_URL   走 CF AI Gateway 的 google-ai-studio 原生路径（绕开 Google 对数据中心 IP 的拒绝）
  *   DEEPSEEK_API_KEY  secret，DeepSeek key（sk- 开头）
- *   DEEPSEEK_BASE_URL secret，生产走 CF AI Gateway 的 /deepseek 路径（网关重试 + 日志）；
- *                      未配置时回退 https://api.deepseek.com/v1 直连
+ *   DEEPSEEK_BASE_URL 选填。**DeepSeek 默认官方直连 https://api.deepseek.com/v1**
+ *                      （2026-10-29 起不再走 CF AI Gateway：网关侧 ~91s 请求超时、
+ *                      cf-aig 重试与缓存都会干扰长断语）。指向 gateway.ai.cloudflare.com
+ *                      的遗留值会被忽略并回退直连（线上 secret 未清理也不会误走网关）；
+ *                      填非网关地址（自建中转/代理）仍按该地址发请求。
  *   GPT_API_KEY       secret，OpenAI 兼容接口 key（官方或中转均可）；别名 OPENAI_API_KEY
  *   GPT_BASE_URL      OpenAI 兼容接口地址，默认 https://api.openai.com/v1（中转接口改这里）；别名 OPENAI_BASE_URL
  *   GPT_MODELS        GPT 可用模型清单（逗号分隔），默认 gpt-6-luna,gpt-6-sol,gpt-6-astra；别名 OPENAI_MODELS
@@ -27,6 +30,8 @@
  *                      首字节实测常 60~90s。旧版只有总超时（300s），永远轮不到自己报错，
  *                      用户拿到的是边缘 reset（AI Gateway 侧表现为 499/连接中断）。
  *                      设得比边缘阈值略低，才能在断连前由我们自己下发可读的终止事件。
+ *                      （2026-10-29 DeepSeek 改直连后该阈值仍按原值保留：直连虽少一层
+ *                      网关排队，但思考预算 32768 时首字节仍可能数十秒，80s 仍属合理。）
  *   SSE_HEARTBEAT_MS  选填，SSE 空闲心跳间隔（毫秒），默认 10000，下限 1000（测试用）。
  *                      上游思考期可能数十秒无输出，CF 边缘约 100s 无数据即 524。
  *                      客户端把心跳也算作「链路还活着」，故它必须显著小于客户端 30s 空闲阈值。
@@ -297,6 +302,9 @@ export const LEAN_SYSTEM_PROMPT = [
 
 ].join('\n');
 
+// 「遗留网关地址已被忽略」的日志闸：模块级，isolate 存活期内只打一条。
+let GATEWAY_IGNORED_LOGGED = false;
+
 function providerConfig(env, provider) {
   if (provider === 'gemini') {
     return {
@@ -306,10 +314,19 @@ function providerConfig(env, provider) {
     };
   }
   if (provider === 'deepseek') {
+    /* 直连优先（2026-10-29 用户要求：DeepSeek 不走 CF AI Gateway）。
+       仅改默认值不够——线上 DEEPSEEK_BASE_URL 仍是 Pages secret 里的网关地址，
+       不改 secret 的话代码会静默继续走网关（网关侧 ~91s 请求超时、cf-aig 重试、
+       缓存全都还在）。故这里把「指向 gateway.ai.cloudflare.com 的值」一律视为
+       遗留配置并忽略，回退官方直连；非网关的自定义地址（自建中转/代理）仍然生效。 */
+    const rawBase = String(env.DEEPSEEK_BASE_URL || '').trim();
+    const isGatewayBase = rawBase.indexOf('gateway.ai.cloudflare.com') !== -1;
+    const base = (rawBase && !isGatewayBase) ? rawBase : 'https://api.deepseek.com/v1';
     return {
       name: 'deepseek',
       key: env.DEEPSEEK_API_KEY || env.LLM_API_KEY || '',
-      base: (env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/$/, '')
+      base: base.replace(/\/$/, ''),
+      gatewayIgnored: isGatewayBase
     };
   }
   if (provider === 'gpt') {
@@ -426,6 +443,13 @@ export async function onRequestPost(context) {
 
   const cfg = providerConfig(env, provider);
   if (!cfg.key) return json({ error: 'NO_KEY', message: '服务端未配置 ' + provider.toUpperCase() + '_API_KEY 环境变量' }, 500);
+  // 遗留网关地址被忽略时留一行痕迹：否则「线上到底走没走网关」只能靠抓包判断。
+  // 按 isolate 只打一次——secret 一直存在的话，逐请求打会把日志刷成噪音。
+  if (cfg.gatewayIgnored && !GATEWAY_IGNORED_LOGGED) {
+    GATEWAY_IGNORED_LOGGED = true;
+    console.log('[liuyao] DEEPSEEK_BASE_URL 指向 AI Gateway，已按配置忽略并直连 ' + cfg.base +
+      '（如确需网关，请先把该 secret 改为非网关地址）');
+  }
 
   // Google 原生接口（generativelanguage.googleapis.com 或 AI Gateway 的 google-ai-studio 原生路径）
   // 走 streamGenerateContent?alt=sse + x-goog-api-key，并关闭 thinking（思考路径常因 high demand 503）；
@@ -501,11 +525,13 @@ export async function onRequestPost(context) {
 
   // CF AI Gateway 请求头：网关默认超时（实测 DeepSeek 约 91s）短于函数侧，
   // 显式声明与函数侧一致，避免网关先超时丢包。
-  // 同时覆盖默认 3 次指数重试：DeepSeek 本身慢且大概率能成，网关重试会拖死 Worker；
+  // 同时覆盖默认 3 次指数重试：慢模型（DeepSeek 等）网关重试会拖死 Worker；
   // Gemini/GPT 等快模型保留轻量重试，constant 1s 延迟足够覆盖偶发 503/429。
   // 注意：必须对**所有**走网关的分支生效——旧版只加在 OpenAI 兼容分支，
   // 而 GEMINI_BASE_URL 指向 gateway 的 google-ai-studio 路径时（README 记载的
   // 生产通道）不带头，函数侧等 300s、网关 ~91s 先 504，与注释意图相悖。
+  // 2026-10-29 起 DeepSeek 改官方直连，其 base 不含网关域名 → 本函数返回空头，
+  // 网关超时/重试/缓存一律不参与；Gemini、GPT 若配网关地址仍照旧生效。
   function gatewayHeaders(base) {
     const h = {};
     if (base.indexOf('gateway.ai.cloudflare.com') === -1) return h;

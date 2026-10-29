@@ -265,7 +265,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | 变量 | 说明 |
 |------|------|
 | `DEEPSEEK_API_KEY` | secret，DeepSeek key |
-| `DEEPSEEK_BASE_URL` | **secret**，CF AI Gateway `/deepseek` 路径（网关重试 + 日志，2026-10-12 起；此前为 `wrangler.toml [vars]` 明文直连）。含账号 ID 与网关名，故不写进仓库，用 `wrangler pages secret put DEEPSEEK_BASE_URL` 设置；模板：`https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/<GATEWAY_NAME>/deepseek`。未配置则回退 `https://api.deepseek.com/v1` 直连 |
+| `DEEPSEEK_BASE_URL` | 选填。**DeepSeek 现为官方直连** `https://api.deepseek.com/v1`（2026-10-29 起不走 CF AI Gateway：网关侧 ~91s 请求超时、`cf-aig` 重试与缓存会干扰长断语）。线上残留的网关地址 secret 会被代码忽略并回退直连；仅在换自建中转/代理时才需要设成本地址（非 `gateway.ai.cloudflare.com` 的值照旧生效） |
 
 **GPT / OpenAI 兼容通道（中转站等）**
 

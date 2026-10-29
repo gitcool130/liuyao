@@ -28,11 +28,13 @@ database_id = "42279a23-7032-42bb-b675-bb7a2015fcc0"
 # 换账号/换网关时重设即可，模板：
 #   https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/<GATEWAY_NAME>/google-ai-studio/v1beta
 # 未配置时后端回退 Google 原生端点 generativelanguage.googleapis.com（数据中心 IP 常被拒）
-# DeepSeek 同样走 CF AI Gateway（获得网关重试/日志/可观测，2026-10-12 起）。
-# 该地址同样含账号 ID 与网关名，不设明文，已通过
-# `wrangler pages secret put DEEPSEEK_BASE_URL` 设为 Pages secret（production），模板：
-#   https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/<GATEWAY_NAME>/deepseek
-# 未配置时后端回退 https://api.deepseek.com/v1 直连（无网关重试与日志）
+# DeepSeek **直连官方端点**（2026-10-29 用户要求不走 CF AI Gateway）：
+#   base = https://api.deepseek.com/v1（代码里的默认值，无需任何变量）
+# 线上还残留着 2026-10-12 设的 DEEPSEEK_BASE_URL secret（值指向网关 /deepseek）。
+# 代码会**主动忽略指向 gateway.ai.cloudflare.com 的值**并回退直连，所以不删该 secret
+# 也不会误走网关；想彻底清干净可 `wrangler pages secret delete DEEPSEEK_BASE_URL`，
+# 删完必须重新部署一次（Functions 持旧环境快照）。
+# DEEPSEEK_BASE_URL 只在需要换自建中转/代理时才设（非网关地址照旧生效）。
 
 # ---- 两道费用/访问闸门（2026-09-28 启用）----
 # RATE_LIMIT_PER_MIN：/api/interpret 按访客 IP 的每分钟上限。**当前刻意不设 → 不限流。**

@@ -841,22 +841,27 @@ globalThis.fetch = origFetch;
 // provider+endpoint+model+鉴权头+整个请求体的 SHA-256，故同一盘同一问重发必命中。
 // 后果有二：① 评测拿不到独立样本；② 截断/失败响应会被一并固化。
 // skipCache 只影响上游缓存头，不改任何生成参数。
-let gwOpts = null;
+let gwOpts = null, gwUrl = '';
 globalThis.fetch = function (url, opts) {
+  gwUrl = String(url);
   gwOpts = opts;
   const body = new ReadableStream({ start: function (c) { c.enqueue(encG.encode(sseLine('甲'))); c.close(); } });
   return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
 };
+// 2026-10-29 起 DeepSeek 走官方直连、网关地址被忽略，故网关头用例改由 GPT 承载
+// （GPT_BASE_URL 指网关仍会加 cf-aig-*）；DeepSeek 侧另有「直连」专项断言在后。
+const GW_BASE = 'https://gateway.ai.cloudflare.com/v1/acc/gw';
 const envGw = {
-  DEEPSEEK_API_KEY: 'k',
-  DEEPSEEK_BASE_URL: 'https://gateway.ai.cloudflare.com/v1/acc/gw/deepseek'
+  GPT_API_KEY: 'k',
+  GPT_MODELS: 'gpt-6-luna',
+  GPT_BASE_URL: GW_BASE + '/openai'
 };
 const postDS = function (extra, envOverride) {
   return interpretPost({
     request: new Request('https://x/api/interpret', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(Object.assign({ panText: '占测试', model: 'deepseek-flash' }, extra || {}))
+      body: JSON.stringify(Object.assign({ panText: '占测试', model: 'gpt-6-luna' }, extra || {}))
     }),
     env: Object.assign({}, envGw, envOverride || {})
   });
@@ -874,6 +879,28 @@ await (await postDS({ skipCache: true })).text();
 eq('skipCache:true → 透传 cf-aig-skip-cache', gwOpts.headers['cf-aig-skip-cache'], 'true');
 await (await postDS({ skip_cache: true })).text();
 eq('skip_cache 别名同样生效', gwOpts.headers['cf-aig-skip-cache'], 'true');
+
+// ---------- DeepSeek 官方直连（2026-10-29 用户要求不走 CF AI Gateway） ----------
+// 关键点：线上 DEEPSEEK_BASE_URL 这个 secret 里躺的还是网关地址，只改代码默认值
+// 不改 secret 就会静默继续走网关，故代码必须主动忽略 gateway.ai.cloudflare.com。
+const postDeepseek = function (dsBase, model) {
+  return interpretPost({
+    request: new Request('https://x/api/interpret', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ panText: '占测试', model: model || 'deepseek-flash' })
+    }),
+    env: { DEEPSEEK_API_KEY: 'k', DEEPSEEK_BASE_URL: dsBase }
+  });
+};
+await (await postDeepseek(GW_BASE + '/deepseek')).text();
+eq('DeepSeek 忽略遗留网关地址，直连官方端点', gwUrl, 'https://api.deepseek.com/v1/chat/completions');
+eq('DeepSeek 直连不带 cf-aig 超时头', gwOpts.headers['cf-aig-request-timeout'], undefined);
+eq('DeepSeek 直连不带 cf-aig 缓存头', gwOpts.headers['cf-aig-skip-cache'], undefined);
+await (await postDeepseek('')).text();
+eq('DEEPSEEK_BASE_URL 未设 → 同样直连官方端点', gwUrl, 'https://api.deepseek.com/v1/chat/completions');
+await (await postDeepseek('https://relay.example.com/v1/')).text();
+eq('非网关的自定义地址（自建中转）仍生效', gwUrl, 'https://relay.example.com/v1/chat/completions');
 
 // finishReason：上游以 MAX_TOKENS 收尾时必须显式告警，不得当完整断语交付。
 // 实测 gemini-3.6-flash 稳定停在 405 tokens、正文断在句中且无「结论：」行，
