@@ -1661,6 +1661,18 @@ eq('clef questions 键全为 ASCII（中文键实测被 422 拒）',
 eq('clef criteria 键也全为 ASCII',
   Object.keys(clefCallBody.questions.yong.criteria).every(function (k) { return /^[A-Za-z0-9_.-]{1,100}$/.test(k); }), true);
 
+// Qwen3 默认开 thinking：实测 400 tokens 全烧在 reasoning 上、content 恒 null → UNPARSEABLE。
+// 只有 `/no_think` 软开关能压住（chat_template_kwargs 在该条目上不生效，亦已实测）。
+const qwenCallBody = aiOk.calls.find(function (c) { return c.model.indexOf('qwen') >= 0; }).body;
+eq('qwen 请求末尾带 /no_think（否则整票作废）',
+  /\/no_think\s*$/.test(qwenCallBody.messages[qwenCallBody.messages.length - 1].content), true);
+eq('qwen 请求不开 thinking 时不传 reasoning_effort',
+  Object.prototype.hasOwnProperty.call(qwenCallBody, 'reasoning_effort'), false);
+const gptCallBody = aiOk.calls.find(function (c) { return c.model.indexOf('gpt-oss') >= 0; }).body;
+eq('gpt-oss 不带 /no_think（它不认这个软开关）',
+  /\/no_think/.test(gptCallBody.messages[gptCallBody.messages.length - 1].content), false);
+eq('chat 票 max_tokens 留足 512（reasoning 也要占额度）', gptCallBody.max_tokens, 512);
+
 const aiBad = mkAI({ '@cf/openai/gpt-oss-120b': { choices: [{ message: { content: '抱歉，我无法判断。' } }] } });
 const jBad = await (await voteCall({ state: '盘面' }, { AI: aiBad.ai })).json();
 const vBad = jBad.votes.find(function (v) { return v.id === 'gptoss'; });

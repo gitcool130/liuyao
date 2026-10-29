@@ -157,9 +157,11 @@ function runOne(env, m, state, ask) {
     : env.AI.run(m.model, {
       messages: [
         { role: 'system', content: '你是六爻排盘判读器。严格按给定盘面，只输出一行 JSON。' },
-        { role: 'user', content: chatPrompt(state, ask) }
+        // Qwen3 默认开 thinking，400 tokens 全烧在 reasoning 上、content 恒为 null（实测 UNPARSEABLE）。
+        // `/no_think` 是官方软开关；改用 chat_template_kwargs 在 Workers AI 的该条目上不生效（已实测）。
+        { role: 'user', content: chatPrompt(state, ask) + (m.id === 'qwen' ? ' /no_think' : '') }
       ],
-      max_tokens: 400,
+      max_tokens: 512,
       temperature: 0.1,
       ...(m.id === 'qwen' ? {} : { reasoning_effort: 'low' })
     });
