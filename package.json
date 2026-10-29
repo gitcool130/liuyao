@@ -7,7 +7,9 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node test-core.js && node test-rules.js && node test-gua-types.js && node test-absorb.js && node test-yingqi.js && node test-share.js && node test-premise.js",
+    "test": "node test-core.js && node test-rules.js && node test-gua-types.js && node test-absorb.js && node test-yingqi.js && node test-share.js && node test-premise.js && node tools/check-baseline-snapshot.js && node tools/check-vote-page.js",
+    "test:save": "node tools/check-baseline-snapshot.js",
+    "test:vote": "node tools/check-vote-page.js",
     "test:fn": "node test-functions.mjs",
     "test:absorb": "node test-absorb.js",
     "test:all": "npm test && npm run test:fn && npm run test:diff && npm run test:guji && npm run test:guji:self && npm run test:paipan && npm run test:verify && npm run test:drift",

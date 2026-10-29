@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>六爻 · 多模型对账</title>
+<style>
+  :root{
+    --paper:#f6f2e9;
+    --card:#fffdf7;
+    --card2:#fbf7ed;
+    --ink:#2b2620;
+    --ink2:#4a4238;
+    --muted:#8c8272;
+    --line:#e3dbc9;
+    --line2:#efe8d8;
+    --red:#a8362a;
+    --redbg:#fbeeeb;
+    --gold:#a8822a;
+    --goldbg:#fbf5e3;
+    --teal:#2f6360;
+    --tealbg:#e9f2f0;
+    --grey:#9a9284;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--paper);color:var(--ink)}
+  body{
+    font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:14px;line-height:1.6;
+    padding:26px 20px 60px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1000px;margin:0 auto}
+
+  /* ---------- 顶栏 ---------- */
+  .top{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:6px}
+  h1{font-family:"Songti SC","Noto Serif SC",Georgia,serif;font-size:22px;font-weight:600;letter-spacing:.06em}
+  h1 small{font-size:12px;color:var(--muted);font-weight:400;letter-spacing:.1em;margin-left:10px}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap}
+  button{
+    font:inherit;font-size:12.5px;cursor:pointer;
+    background:var(--card);color:var(--ink2);
+    border:1px solid var(--line);border-radius:6px;
+    padding:5px 12px;transition:.15s;
+  }
+  button:hover{background:var(--card2);border-color:#d3c8b0}
+  button.on{background:var(--ink);color:#fbf7ed;border-color:var(--ink)}
+
+  /* ---------- 盘面摘要 ---------- */
+  .strip{
+    margin-top:14px;background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:14px 18px;
+    display:flex;gap:26px;flex-wrap:wrap;align-items:center;
+  }
+  .strip .gua{font-family:"Songti SC","Noto Serif SC",serif;font-size:17px;letter-spacing:.05em}
+  .strip .gua b{color:var(--red);font-weight:600}
+  .kv{font-size:12.5px;color:var(--ink2)}
+  .kv span{color:var(--muted);margin-right:5px}
+  .ask{font-size:12.5px;color:var(--ink2);border-left:2px solid var(--gold);padding-left:10px}
+
+  /* ---------- 分区标题 ---------- */
+  .sec{margin-top:26px}
+  .sec-h{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .sec-h h2{font-family:"Songti SC","Noto Serif SC",serif;font-size:15px;font-weight:600;letter-spacing:.08em}
+  .sec-h .tag{font-size:11px;padding:1px 7px;border-radius:4px;letter-spacing:.04em}
+  .tag.code{background:var(--tealbg);color:var(--teal)}
+  .tag.rule{background:var(--goldbg);color:var(--gold)}
+  .tag.judge{background:#efeae0;color:var(--grey)}
+  .sec-h .hint{font-size:11.5px;color:var(--muted);margin-left:auto}
+
+  /* ---------- 卡片 ---------- */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .card + .card{margin-top:10px}
+
+  /* ---------- 事实层表 ---------- */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:9px 14px;text-align:left;border-bottom:1px solid var(--line2)}
+  th{font-weight:500;color:var(--muted);font-size:11.5px;letter-spacing:.06em;background:var(--card2)}
+  tr:last-child td{border-bottom:none}
+  td.mid,th.mid{text-align:center;width:92px}
+  .ok{color:var(--teal);font-weight:600}
+  .bad{color:var(--red);font-weight:600}
+  .warn{color:var(--gold);font-weight:600}
+  .note{font-size:11.5px;color:var(--muted);font-weight:400}
+
+  /* ---------- 模型卡 ---------- */
+  .models{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .m{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 15px}
+  .m-h{display:flex;align-items:center;gap:7px;margin-bottom:12px}
+  .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .m-n{font-size:13px;font-weight:600;letter-spacing:.02em}
+  .m-o{font-size:10.5px;color:var(--muted);margin-left:auto;letter-spacing:.04em}
+  .q{margin-bottom:11px}
+  .q:last-child{margin-bottom:0}
+  .q-l{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-bottom:4px}
+  .q-v{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+  .bar{height:5px;background:#eee7d7;border-radius:3px;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:3px;transition:width .45s cubic-bezier(.3,.9,.4,1)}
+
+  /* ---------- 分歧矩阵 ---------- */
+  .matrix{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:4px 0}
+  .mrow{display:grid;grid-template-columns:120px 1fr 96px;align-items:center;gap:14px;padding:11px 16px;border-bottom:1px solid var(--line2)}
+  .mrow:last-child{border-bottom:none}
+  .mrow .lab{font-size:12.5px;color:var(--ink2)}
+  .cells{display:flex;gap:6px}
+  .cell{
+    flex:1;font-size:11.5px;text-align:center;padding:4px 6px;border-radius:5px;
+    font-variant-numeric:tabular-nums;letter-spacing:.02em;
+    background:var(--card2);color:var(--ink2);border:1px solid transparent;
+  }
+  .cell.hi{background:var(--tealbg);color:var(--teal);font-weight:600}
+  .cell.mid2{background:var(--goldbg);color:var(--gold);font-weight:600}
+  .cell.lo{background:var(--redbg);color:var(--red);font-weight:600}
+  .verdict{font-size:11.5px;text-align:right;letter-spacing:.03em}
+  .v-agree{color:var(--teal)}
+  .v-warn{color:var(--gold)}
+  .v-split{color:var(--red)}
+
+  /* ---------- 规则层 ---------- */
+  .rules{display:grid;gap:0}
+  .rule-row{display:grid;grid-template-columns:132px 1fr;gap:14px;padding:10px 16px;border-bottom:1px solid var(--line2);font-size:12.5px}
+  .rule-row:last-child{border-bottom:none}
+  .rule-row .who{color:var(--muted);font-size:11.5px}
+  .quote{color:var(--ink2)}
+  .quote em{font-style:normal;color:var(--red)}
+
+  /* ---------- 散文视图 ---------- */
+  .prose{display:none;gap:10px;grid-template-columns:repeat(3,1fr)}
+  .prose.show{display:grid}
+  .prose .m p{font-size:12.5px;color:var(--ink2);line-height:1.85;
+    font-family:"Songti SC","Noto Serif SC",serif;text-align:justify}
+
+  /* ---------- 横幅 ---------- */
+  .banner{
+    margin-top:16px;border-radius:10px;padding:12px 16px;font-size:12.5px;
+    display:flex;gap:10px;align-items:flex-start;border:1px solid;
+  }
+  .banner.red{background:var(--redbg);border-color:#eed5cf;color:#7c2a20}
+  .banner.gold{background:var(--goldbg);border-color:#eee0b8;color:#6d5314}
+  .banner.teal{background:var(--tealbg);border-color:#cee0dc;color:#1f4a47}
+  .banner b{font-weight:600}
+
+  .foot{margin-top:26px;font-size:11.5px;color:var(--muted);line-height:1.9;
+    border-top:1px solid var(--line);padding-top:14px}
+  .foot code{background:#efe9da;padding:1px 5px;border-radius:3px;font-size:11px;color:var(--ink2)}
+
+  @media (max-width:820px){
+    .models,.prose{grid-template-columns:1fr}
+    .mrow{grid-template-columns:88px 1fr;row-gap:6px}
+    .verdict{grid-column:1/-1;text-align:left}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top">
+    <h1>六爻 · 多模型对账<small>三票并行 · 分层判定</small></h1>
+    <div class="toolbar" id="cases"></div>
+  </div>
+
+  <div class="strip" id="strip"></div>
+
+  <!-- ============ 事实层 ============ -->
+  <div class="sec">
+    <div class="sec-h">
+      <h2>一、事实层</h2><span class="tag code">代码可判定</span>
+      <span class="hint">不通过 → 该模型的结论直接作废</span>
+    </div>
+    <div class="card"><table id="facts"></table></div>
+  </div>
+
+  <!-- ============ 结论层概率 ============ -->
+  <div class="sec">
+    <div class="sec-h">
+      <h2>二、结论层</h2><span class="tag judge">概率而非散文</span>
+      <span class="hint">每格是该模型给该选项的概率</span>
+    </div>
+    <div class="models" id="models"></div>
+  </div>
+
+  <!-- ============ 分歧矩阵 ============ -->
+  <div class="sec">
+    <div class="sec-h">
+      <h2>三、分歧矩阵</h2><span class="tag judge">自动归因</span>
+      <span class="hint">绿=三票一致 · 黄=程度分歧 · 红=选项对立</span>
+    </div>
+    <div class="matrix" id="matrix"></div>
+  </div>
+
+  <!-- ============ 规则层 ============ -->
+  <div class="sec">
+    <div class="sec-h">
+      <h2>四、规则层</h2><span class="tag rule">引古法者需标出处</span>
+      <span class="hint">同一判断引不同条文 → 属流派分歧</span>
+    </div>
+    <div class="card"><div class="rules" id="rules"></div></div>
+  </div>
+
+  <!-- ============ 散文视图 ============ -->
+  <div class="sec">
+    <div class="sec-h">
+      <h2>五、散文视图</h2><span class="tag judge">对照用</span>
+      <span class="hint">同一判断的三种措辞——分歧多在文风，不在判断</span>
+    </div>
+    <div class="prose" id="prose"></div>
+  </div>
+
+  <div id="banner"></div>
+
+  <div class="foot">
+    <b>本页是三票对账，不是断卦结论。</b>它的用途只有一个：看同一张盘、同一套前提下，
+    不同模型会不会给出不同的取用神与可成概率——<b>三票同错指向规则链，单票异常指向该模型没遵守前提</b>。<br>
+    票源全部走 Cloudflare Workers AI 免费额度：<code>@cf/cloudflare/clef</code>（直接给概率、不收输出费）、
+    <code>@cf/qwen/qwen3-30b-a3b-fp8</code>、<code>@cf/openai/gpt-oss-120b</code>。
+    同一张盘实测一轮约 <b>17 neurons</b>，10,000 neurons/天 的免费额度≈ 500 轮，够用。<br>
+    入口：主站「断卦」卡片里的<b>「三模型对账」</b>按钮。没有带入盘面时，下方三个 <b>A/B/C</b> 是内置样例，仅供看结构。
+  </div>
+</div>
+
+<script>
+/* ===================== 演示数据 ===================== */
+const MODELS = [
+  { id:'clef',   name:'clef 27B',     org:'Cloudflare',   color:'#a8822a' },
+  { id:'qwen',   name:'Qwen3-30B',    org:'阿里',         color:'#2f6360' },
+  { id:'gptoss', name:'gpt-oss-120b', org:'OpenAI 开源',  color:'#a8362a' },
+];
+
+const CASES = [
+  {
+    key:'A', label:'丙子日 求财',
+    gua:'天地否', bian:'天水讼',
+    meta:[['月建','戊戌 · 戌'],['日辰','丙子 · 子'],['旬空','申 酉'],['动爻','三爻 · 五爻']],
+    ask:'问：本月这笔货款能否收回？',
+    facts:[
+      ['用神定位','二爻 妻财乙卯','取到 二爻妻财','取到 二爻妻财','取到 二爻妻财'],
+      ['旺衰基数','月建戌土 · 日辰子水','卯木克戌土，日生','卯木克戌土，日生','卯木克戌土，日生'],
+      ['旬空判定','卯 不在空亡（空申酉）','不空','不空','不空'],
+      ['动爻生克链','三爻动化酉金回头克','识别','识别','识别'],
+      ['变爻回头影响','','计算在内','计算在内','计算在内'],
+    ],
+    // 概率：{模型: {选项: p}}
+    probs:{
+      yong:  { qwen:{妻财:0.86,官鬼:0.05,父母:0.04,兄弟:0.03,子孙:0.02},
+               gptoss:{妻财:0.81,官鬼:0.07,父母:0.05,兄弟:0.04,子孙:0.03},
+               clef:{妻财:0.91,官鬼:0.03,父母:0.03,兄弟:0.02,子孙:0.01} },
+      wang:  { qwen:{极弱:0.03,弱:0.08,平:0.19,旺:0.52,极旺:0.18},
+               gptoss:{极弱:0.05,弱:0.15,平:0.42,旺:0.30,极旺:0.08},
+               clef:{极弱:0.01,弱:0.06,平:0.14,旺:0.48,极旺:0.31} },
+      cheng: { qwen:{noul:0.71}, gptoss:{noul:0.52}, clef:{noul:0.78} },
+      qi:    { qwen:{本旬:0.12,下旬:0.31,月内:0.44,月外:0.13},
+               gptoss:{本旬:0.18,下旬:0.26,月内:0.38,月外:0.18},
+               clef:{本旬:0.09,下旬:0.35,月内:0.47,月外:0.09} }
+    },
+    rules:[
+      ['Qwen3-30B','「用神旺相而静，待冲开之期方应」——《增删卜易·应期》'],
+      ['gpt-oss-120b','「财爻持世，求财易得；动而化克，得中有阻」——《卜筮正宗》'],
+      ['clef 27B','「用神有气，虽空不空；动化回头克，主先成后败」——《黄金策》'],
+    ],
+    prose:[
+      '用神妻财卯木，得日辰子水相生，旺相有气。三爻发动化酉金回头克，主中途有阻。本月内可望收回大半，然须防对方反复，月外则力衰难追。',
+      '此卦财爻持世又得月建生扶，求财本属易得之象。惟动爻化出回头克，得财之后恐有反复。以应期论，下旬至月内成事，宜早不宜迟。',
+      '卯财临日建之生，本身不弱；但化出酉金回头相克，形成「成而复败」之局。综合判断：可成，成数约七成，应在本月下旬至月内。',
+    ]
+  },
+  {
+    key:'B', label:'庚申日 问病',
+    gua:'水雷屯', bian:'水泽节',
+    meta:[['月建','己亥 · 亥'],['日辰','庚申 · 申'],['旬空','午 未'],['动爻','五爻']],
+    ask:'问：家中老人这波咳嗽多久能好？',
+    facts:[
+      ['用神定位','（三票不一致）','取 子孙寅木','取 官鬼戌土','取 子孙寅木'],
+      ['旺衰基数','寅木 · 亥月生扶','旺','弱（以鬼论）','旺'],
+      ['旬空判定','午未空，寅不空','不空','不空','不空'],
+      ['动爻生克链','五爻动化未土','识别','识别','识别'],
+      ['变爻回头影响','','计算在内','漏算','计算在内'],
+    ],
+    probs:{
+      yong:  { qwen:{妻财:0.04,官鬼:0.06,父母:0.08,兄弟:0.05,子孙:0.77},
+               gptoss:{妻财:0.05,官鬼:0.58,父母:0.19,兄弟:0.06,子孙:0.12},
+               clef:{妻财:0.03,官鬼:0.04,父母:0.06,兄弟:0.03,子孙:0.84} },
+      wang:  { qwen:{极弱:0.02,弱:0.06,平:0.17,旺:0.55,极旺:0.20},
+               gptoss:{极弱:0.21,弱:0.44,平:0.25,旺:0.08,极旺:0.02},
+               clef:{极弱:0.01,弱:0.05,平:0.15,旺:0.51,极旺:0.28} },
+      cheng: { qwen:{noul:0.74}, gptoss:{noul:0.31}, clef:{noul:0.81} },
+      qi:    { qwen:{本旬:0.31,下旬:0.38,月内:0.24,月外:0.07},
+               gptoss:{本旬:0.19,下旬:0.29,月内:0.36,月外:0.16},
+               clef:{本旬:0.35,下旬:0.41,月内:0.19,月外:0.05} }
+    },
+    rules:[
+      ['Qwen3-30B','「占病以子孙为医药，子孙旺则药到病除」——《增删卜易·疾病》'],
+      ['gpt-oss-120b','「占病以官鬼为病神，鬼旺则病重」——《卜筮正宗·病体》'],
+      ['clef 27B','「占尊长病，用神取子孙，鬼动则忌」——《黄金策·疾病》'],
+    ],
+    prose:[
+      '子孙寅木为用，得亥月生扶，旺相有力。五爻动化未土，未为木之墓，主病势缠绵但有救。本月内可愈，无需过忧。',
+      '官鬼戌土发动，病神有力，此为病重之象。所幸日辰申金泄土之气，不至危殆。宜速就医，恐迁延至月外。',
+      '以子孙为用，寅木旺相，医药得宜。动爻化未土为木墓，主愈后乏力。约在本旬至下旬可痊，成数八成。',
+    ]
+  },
+  {
+    key:'C', label:'乙巳日 问职',
+    gua:'火风鼎', bian:'火山旅',
+    meta:[['月建','丁酉 · 酉'],['日辰','乙巳 · 巳'],['旬空','寅 卯'],['动爻','初爻 · 二爻']],
+    ask:'问：这次内部竞聘能否上位？',
+    facts:[
+      ['用神定位','四爻 官鬼辛酉','取到 四爻官鬼','取到 四爻官鬼','取到 四爻官鬼'],
+      ['旺衰基数','月建酉金 · 日辰巳火','旺','旺','旺'],
+      ['旬空判定','寅卯空，酉不空','不空','不空','不空'],
+      ['动爻生克链','初二爻连动生官','识别','识别','识别'],
+      ['变爻回头影响','','计算在内','计算在内','计算在内'],
+    ],
+    probs:{
+      yong:  { qwen:{妻财:0.03,官鬼:0.88,父母:0.05,兄弟:0.03,子孙:0.01},
+               gptoss:{妻财:0.04,官鬼:0.85,父母:0.06,兄弟:0.03,子孙:0.02},
+               clef:{妻财:0.02,官鬼:0.92,父母:0.03,兄弟:0.02,子孙:0.01} },
+      wang:  { qwen:{极弱:0.01,弱:0.04,平:0.15,旺:0.58,极旺:0.22},
+               gptoss:{极弱:0.02,弱:0.05,平:0.19,旺:0.55,极旺:0.19},
+               clef:{极弱:0.01,弱:0.03,平:0.12,旺:0.56,极旺:0.28} },
+      cheng: { qwen:{noul:0.76}, gptoss:{noul:0.72}, clef:{noul:0.80} },
+      qi:    { qwen:{本旬:0.14,下旬:0.36,月内:0.41,月外:0.09},
+               gptoss:{本旬:0.16,下旬:0.33,月内:0.42,月外:0.09},
+               clef:{本旬:0.12,下旬:0.39,月内:0.42,月外:0.07} }
+    },
+    rules:[
+      ['Qwen3-30B','「官鬼持世或生世，求官必得」——《增删卜易·功名》'],
+      ['gpt-oss-120b','「官星旺相生世，功名可期」——《卜筮正宗·求名》'],
+      ['clef 27B','「官鬼旺而生世，无空破则成」——《黄金策·仕宦》'],
+    ],
+    prose:[
+      '官鬼酉金临月建，又得日辰巳火暗合，旺相非常。初二爻连动生官，层层相推。竞聘必成，唯须留意公示环节有人异议。',
+      '官星当令，生扶世爻，此为求名得名之象。内卦二爻齐动，主内部有人举荐。月内可见分晓，成算颇高。',
+      '酉官旺相，得动爻连生，无空破刑冲。此事可成，成数近八成，应在下旬至月内。',
+    ]
+  }
+];
+
+/* ===================== 真实盘：由主站带入 ===================== */
+// 主站「断卦」卡片里的「三模型对账」按钮把当前盘的紧凑快照写进 localStorage
+// （键 ly.vote.cast；用 localStorage 而非 sessionStorage，免得新开标签页拿不到副本），
+// 本页据此拼出一个与样例同形状的 case，直接复用下面全部渲染逻辑。
+// 无快照或快照超过 30 分钟时退化为三个内置样例，页脚会标明「样例」。
+const LIVE_KEY = 'ly.vote.cast';
+const LIVE_MAX_AGE = 30 * 60 * 1000;
+const YONG_OPTS = ['妻财','官鬼','父母','兄弟','子孙'];
+const WANG_OPTS = ['极弱','弱','平','旺','极旺'];
+const QI_OPTS   = ['本旬','下旬','月内','月外'];
+
+function zeroProbs(){
+  const z = a => a.reduce((o,k)=>(o[k]=0,o),{});
+  return { yong:z(YONG_OPTS), wang:z(WANG_OPTS), cheng:{noul:0}, qi:z(QI_OPTS) };
+}
+
+function readCastSpec(){
+  try{
+    const raw = localStorage.getItem(LIVE_KEY);
+    if(!raw) return null;
+    const s = JSON.parse(raw);
+    if(!s || typeof s.state !== 'string' || !s.state) return null;
+    if(!s.ts || (Date.now() - s.ts) > LIVE_MAX_AGE) return null;   // 旧盘不自动跑，免得白花配额
+    return s;
+  }catch(e){ return null; }
+}
+
+// votes=[] 时产出占位 case（结构齐全、全零），拿到真票后 Object.assign 覆盖
+function buildLiveCase(spec, votes){
+  const probs = { yong:{}, wang:{}, cheng:{}, qi:{} };
+  const prose = [], rules = [];
+  MODELS.forEach(function(m, i){
+    const v = (votes||[]).find(x => x.id === m.id);
+    if(v && v.ok && v.probs){
+      probs.yong[m.id] = v.probs.yong;
+      probs.wang[m.id] = v.probs.wang;
+      probs.cheng[m.id] = v.probs.cheng;
+      probs.qi[m.id] = v.probs.qi;
+      prose[i] = v.answer || '（该模型只回概率，未给散文）';
+      const u = v.usage || {};
+      rules[i] = [m.name, '本票 ' + v.ms + 'ms' + (u.input != null ? ' · tokens ' + u.input + '+' + u.output : '')];
+    }else{
+      const z = zeroProbs();
+      probs.yong[m.id] = z.yong; probs.wang[m.id] = z.wang;
+      probs.cheng[m.id] = z.cheng; probs.qi[m.id] = z.qi;
+      prose[i] = '未取到有效票：' + ((v && v.error) || '无响应');
+      rules[i] = [m.name, '无效票（' + ((v && v.error) || '无响应') + '），不参与分歧归因'];
+    }
+  });
+
+  const cell = function(v, fn){
+    if(!v || !v.ok) return '缺票（未取到有效回答）';
+    return fn(v);
+  };
+  const facts = [
+    ['取用神', '引擎 ' + (spec.yong || '—'), ...MODELS.map(m => cell((votes||[]).find(x=>x.id===m.id), v => {
+      const t = topOption(v.probs.yong)[0];
+      return (spec.yong && spec.yong.indexOf(t) >= 0 ? '一致 ' : '不一致 ') + t;
+    }))],
+    ['旺衰', '引擎粗判 ' + (spec.trend || '—') + '（不直接给旺衰档）', ...MODELS.map(m => cell((votes||[]).find(x=>x.id===m.id), v => '— ' + topOption(v.probs.wang)[0]))],
+    ['可成概率', '此格无代码真值，只比三票离散度', ...MODELS.map(m => cell((votes||[]).find(x=>x.id===m.id), v => '— ' + Math.round(v.probs.cheng.noul * 100) + '%'))],
+    ['应期', '引擎 ' + (spec.yingqi || '—'), ...MODELS.map(m => cell((votes||[]).find(x=>x.id===m.id), v => '— ' + topOption(v.probs.qi)[0]))]
+  ];
+
+  return {
+    key: 'L', label: '当前盘 · 三模型对账', live: true,
+    gua: spec.gua || '—', bian: spec.bian || '—',
+    meta: spec.meta || [],
+    ask: spec.ask || '',
+    facts: facts, probs: probs, rules: rules, prose: prose
+  };
+}
+
+async function fetchLive(){
+  if(!LIVE || LIVE.loading) return;
+  LIVE.loading = true;
+  $('banner').innerHTML = '<div class="banner gold"><b>三票并行调用中…</b>' +
+    'Workers AI 免费额度内实测约 2–5 秒；任一票超时或解析失败会单独标为无效，不影响其余两票。</div>';
+  try{
+    const r = await fetch('/api/vote', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state: LIVE.spec.state, ask: LIVE.spec.ask || '' })
+    });
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error((j && (j.message || j.error)) || ('HTTP ' + r.status));
+    Object.assign(LIVE.data, buildLiveCase(LIVE.spec, j.votes || []));
+    LIVE.usage = j.usage;
+  }catch(e){
+    LIVE.error = String((e && e.message) || e);
+    Object.assign(LIVE.data, buildLiveCase(LIVE.spec, []));
+  }finally{
+    LIVE.loading = false;
+    if(cur && cur.live) renderAll();
+  }
+}
+const $ = id => document.getElementById(id);
+let cur = CASES[0];
+let jitterSeed = 1;
+let LIVE = null;                 // { spec, data, loading, error, usage } —— 有真盘时才有
+
+function jitter(p, k){                       // 轻微扰动，模拟重跑
+  if(k === 1) return p;
+  const out = {};
+  for(const key in p){
+    out[key] = Math.min(0.99, Math.max(0.01, p[key] + Math.sin(jitterSeed * 7.3 + key.length * 2.1) * 0.04));
+  }
+  return out;
+}
+
+function renderCases(){
+  $('cases').innerHTML = CASES.map(c =>
+    `<button data-k="${c.key}" class="${c.key===cur.key?'on':''}">${c.live?'★ ':'<b>'+c.key+'</b> · '}${c.label}</button>`
+  ).join('') + `<button id="rerun">${cur.live ? '重新对账' : '重新计票'}</button>`;
+  $('cases').querySelectorAll('button[data-k]').forEach(b => {
+    b.onclick = () => { cur = CASES.find(c => c.key === b.dataset.k); jitterSeed = 1; renderAll(); };
+  });
+  const rr = $('rerun');
+  if(rr) rr.onclick = () => {
+    if(cur.live){ fetchLive(); return; }      // 真盘重跑会再花一次配额，不做本地扰动
+    jitterSeed++; renderAll();
+  };
+}
+
+function renderStrip(){
+  $('strip').innerHTML = `
+    <div class="gua">${cur.gua} <b>之</b> ${cur.bian}</div>
+    ${cur.meta.map(([k,v]) => `<div class="kv"><span>${k}</span>${v}</div>`).join('')}
+    <div class="ask">${cur.ask}</div>`;
+}
+
+function renderFacts(){
+  const head = `<thead><tr><th>校验项</th>
+    ${MODELS.map(m=>`<th class="mid">${m.name}</th>`).join('')}</tr></thead>`;
+  const body = cur.facts.map(row => {
+    const [item, fact, ...vals] = row;
+    return `<tr><td>${item}${fact?`<div class="note">${fact}</div>`:''}</td>
+      ${vals.map(v=>{
+        let cls = 'ok', mark = '✓ ';
+        if(/不一致|漏算|错|缺票/.test(v)) { cls='bad'; mark='✗ '; }
+        else if(/^—/.test(v)) { cls=''; mark=''; }          // 无代码真值的格只陈列，不判对错
+        else if(/弱（|以鬼论/.test(v)) { cls='warn'; mark='△ '; }
+        return `<td class="mid ${cls}">${mark}${v}</td>`;
+      }).join('')}</tr>`;
+  }).join('');
+  $('facts').innerHTML = head + `<tbody>${body}</tbody>`;
+}
+
+const QDEF = [
+  { k:'yong',  label:'取用神',   type:'choice' },
+  { k:'wang',  label:'用神旺衰', type:'score'  },
+  { k:'cheng', label:'可成概率', type:'noul'   },
+  { k:'qi',    label:'应期',     type:'choice' },
+];
+
+function topOption(p){ return Object.entries(p).sort((a,b)=>b[1]-a[1])[0]; }
+
+function renderModels(){
+  $('models').innerHTML = MODELS.map(m => {
+    const qs = QDEF.map(q => {
+      const raw = cur.probs[q.k][m.id];
+      const p = cur.live ? raw : jitter(raw, jitterSeed);
+      let label, val, pct;
+      if(q.type === 'noul'){ label='可成'; val = Math.round(p.noul*100)+'%'; pct = p.noul*100; }
+      else { const [op,v] = topOption(p); label=q.label; val=op+'  '+Math.round(v*100)+'%'; pct=v*100; }
+      return `<div class="q">
+        <div class="q-l"><span>${label}</span><span class="q-v">${val}</span></div>
+        <div class="bar"><i style="width:${pct.toFixed(0)}%;background:${m.color}"></i></div>
+      </div>`;
+    }).join('');
+    return `<div class="m">
+      <div class="m-h"><span class="dot" style="background:${m.color}"></span>
+        <span class="m-n">${m.name}</span><span class="m-o">${m.org}</span></div>
+      ${qs}</div>`;
+  }).join('');
+}
+
+function analyze(){
+  // 用神是否一致
+  const yongTop = MODELS.map(m => topOption(cur.probs.yong[m.id])[0]);
+  const yongAgree = new Set(yongTop).size === 1;
+
+  // 可成概率离散度
+  const cs = MODELS.map(m => cur.probs.cheng[m.id].noul);
+  const spread = Math.max(...cs) - Math.min(...cs);
+
+  // 应期选项
+  const qiTop = MODELS.map(m => topOption(cur.probs.qi[m.id])[0]);
+  const qiAgree = new Set(qiTop).size === 1;
+  return { yongAgree, yongTop, spread, qiAgree, qiTop, cs };
+}
+
+function renderMatrix(){
+  const a = analyze();
+  const rows = [];
+
+  // 取用神
+  rows.push({
+    lab:'取用神', type:'choice', dim:'yong',
+    cls: a.yongAgree ? ['hi','hi','hi'] : ['lo','lo','lo'],
+    verdict: a.yongAgree ? ['v-agree','一致'] : ['v-split','对立'],
+    txt: a.yongTop
+  });
+  // 旺衰
+  const ws = MODELS.map(m => topOption(cur.probs.wang[m.id]));
+  const wIdx = ws.map(([op]) => ['极弱','弱','平','旺','极旺'].indexOf(op));
+  const wSpread = Math.max(...wIdx) - Math.min(...wIdx);
+  rows.push({
+    lab:'旺衰倾向', type:'score', dim:'wang',
+    cls: wSpread === 0 ? ['hi','hi','hi'] : (wSpread >= 2 ? ['lo','lo','lo'] : ['mid2','mid2','mid2']),
+    verdict: wSpread === 0 ? ['v-agree','一致'] : (wSpread >= 2 ? ['v-split','程度对立'] : ['v-warn','程度分歧']),
+    txt: ws.map(([op])=>op)
+  });
+  // 可成
+  const cMin = Math.min(...a.cs), cMax = Math.max(...a.cs);
+  rows.push({
+    lab:'可成概率', type:'noul', dim:'cheng',
+    cls: a.spread < 0.10 ? ['hi','hi','hi'] : (a.spread >= 0.25 ? ['lo','lo','lo'] : ['mid2','mid2','mid2']),
+    verdict: a.spread < 0.10 ? ['v-agree','一致'] : (a.spread >= 0.25 ? ['v-split','结论冲突'] : ['v-warn','略分歧']),
+    txt: a.cs.map(v => Math.round(v*100)+'%')
+  });
+  // 应期
+  rows.push({
+    lab:'应期', type:'choice', dim:'qi',
+    cls: a.qiAgree ? ['hi','hi','hi'] : ['mid2','mid2','mid2'],
+    verdict: a.qiAgree ? ['v-agree','一致'] : ['v-warn','邻近分歧'],
+    txt: a.qiTop
+  });
+
+  $('matrix').innerHTML = rows.map(r => `
+    <div class="mrow">
+      <div class="lab">${r.lab}</div>
+      <div class="cells">
+        ${r.txt.map((t,i)=>`<div class="cell ${r.cls[i]}">${t}</div>`).join('')}
+      </div>
+      <div class="verdict ${r.verdict[0]}">${r.verdict[1]}</div>
+    </div>`).join('');
+}
+
+function renderRules(){
+  $('rules').innerHTML = cur.rules.map(([who,q]) => `
+    <div class="rule-row"><div class="who">${who}</div><div class="quote">${q.replace(/「(.+?)」/,'「<em>$1</em>」')}</div></div>
+  `).join('');
+}
+
+function renderProse(){
+  $('prose').innerHTML = MODELS.map((m,i) => `
+    <div class="m"><div class="m-h"><span class="dot" style="background:${m.color}"></span>
+      <span class="m-n">${m.name}</span></div><p>${cur.prose[i]}</p></div>
+  `).join('');
+}
+
+function renderBanner(){
+  const a = analyze();
+  let cls, html;
+  if(!a.yongAgree){
+    cls = 'red';
+    html = `<b>取用神分歧，判定为硬冲突。</b>三票分别落在
+      「${a.yongTop.join('」「')}」——用神不同，后面的旺衰与吉凶都在算不同的卦。
+      这不是流派差异，是取用规则没统一，应先由代码侧按问事类型锁定用神，再让模型判断吉凶。`;
+  } else if(a.spread >= 0.25){
+    cls = 'gold';
+    html = `<b>事实层全过，结论层分岔（${Math.round(Math.min(...a.cs)*100)}%–${Math.round(Math.max(...a.cs)*100)}%）。</b>
+      用神一致、盘面校验一致，但可成概率相差 ${Math.round(a.spread*100)} 个百分点——
+      这属于权重取舍的合法分歧（是否计入回头克、是否以日辰救应）。
+      建议：不裁决，两条路都留，事后回访时按「是否计入回头克」分桶统计命中率。`;
+  } else {
+    cls = 'teal';
+    html = `<b>三票一致，且事实层全部通过。</b>该卦可直接采用，样本可收入命中率统计池，作为后续校准的基准。`;
+  }
+  $('banner').innerHTML = `<div class="banner ${cls}">${html}</div>`;
+}
+
+function renderAll(){
+  renderCases(); renderStrip(); renderFacts();
+  renderModels(); renderMatrix(); renderRules(); renderProse();
+  if(!(LIVE && LIVE.loading)) renderBanner();     // 对账中由 fetchLive 自己占住横幅
+  if(LIVE && !LIVE.loading && LIVE.error && cur.live){
+    $('banner').innerHTML = '<div class="banner red"><b>对账失败：' + LIVE.error + '</b>' +
+      '三票均未取到，页面结构保留以便对照。若是「未绑定 Workers AI」，需在 Pages 设置里加 AI 绑定后再部署一次。</div>';
+  }
+}
+
+/* ===================== 启动 ===================== */
+(function boot(){
+  const spec = readCastSpec();
+  if(!spec){ renderAll(); return; }
+  const c = buildLiveCase(spec, []);
+  LIVE = { spec: spec, data: c, loading: false, error: null };
+  CASES.unshift(c);
+  cur = c;
+  renderAll();
+  fetchLive();
+})();
+</script>
+</body>
+</html>

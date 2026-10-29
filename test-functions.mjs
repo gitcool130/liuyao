@@ -24,6 +24,7 @@ import { onRequestGet as modelsGet } from './functions/api/models.js';
 import { onRequestPost as interpretPost, isRateLimited, __rlState, SYSTEM_PROMPT, deltaText, deltaReasoning } from './functions/api/interpret.js';
 import { onRequestGet as ogGet } from './functions/index.js';
 import { onRequestGet as readingsGet, onRequestPost as readingsPost, beijingToday } from './functions/api/readings.js';
+import { onRequestPost as votePost, onRequestGet as voteGet } from './functions/api/vote.js';
 import { decodeCast as facadeDecode } from './functions/api/_share.js';
 import { readFileSync } from 'node:fs';
 
@@ -1210,6 +1211,22 @@ const dbNo3 = mkDb();
 await postRaw('', { panText: '排盘', tosses: [], messages: [] }, { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbNo3, LIB_CODE: 'k' });
 eq('无 baseline 不派生（历史行为不变）', dbNo3.state.sqls.some(function (s) { return s.indexOf('readings') >= 0; }), false);
 
+// ④ 入库回执（2026-10-29 修）：POST 返回体须回显判据与回访状态。
+//    线上 20 卦 0 判据、readings 表 0 行长期不可见，根因之一就是旧版只回 {id}——
+//    「存进去了」与「存进去但事后无法统计」在客户端完全同形，前端无从提示。
+const dbEcho = mkDb();
+const rEcho = await postRaw('', { panText: '排盘', tosses: [], messages: [], datetime: '2026-10-01 10:00:00', baseline: BL_OK },
+  { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbEcho, LIB_CODE: 'k' });
+const jEcho = await rEcho.json();
+eq('回执带 hasBaseline=true', jEcho.hasBaseline, true);
+eq('回执带 reading=派生日（10-06）', jEcho.reading, '2026-10-06');
+const rEcho2 = await postRaw('', { panText: '排盘', tosses: [], messages: [] },
+  { 'X-Access-Code': 'k' }, { LIUYAO_DB: mkDb(), LIB_CODE: 'k' });
+const jEcho2 = await rEcho2.json();
+eq('无判据时回执 hasBaseline=false', jEcho2.hasBaseline, false);
+eq('无判据时回执 reading=null', jEcho2.reading, null);
+eq('回执仍保留 id（旧客户端不受影响）', typeof jEcho2.id, 'string');
+
 // ③ 回填成功 → 任务置 acted；显式清除回执不触发
 const dbAct = mkDb();
 await postRaw('?outcome=1', { id: 'ok-1', outcome: { result: 'success', yingqi: 'on_time', window: 'd3' } },
@@ -1583,6 +1600,88 @@ eq('M25 DEEPSEEK_PROMPT=full 可退回完整版（对照实验入口）',
 policyCalls.length = 0;
 await (await postModel('deepseek', 'deepseek-flash', { LLM_MAX_TOKENS: '2000' })).text();
 eq('M24 全局 LLM_MAX_TOKENS 仍优先于按模型默认', lastCall().body.max_tokens, 2000);
+
+// ---------- #26 三模型对账（/api/vote，Workers AI 免费额度）----------
+// 三票形状必须完全一致（yong/wang/cheng/qi），前端分歧矩阵才一套渲染吃遍；
+// chat 模型回散文，靠 extractJson + one-hot 归一；解析不出来一律判该票无效，绝不猜。
+const CLEF_OK = {
+  answers: {
+    yong: { type: 'choice', probabilities: { cai: 0.8, guan: 0.1, fu: 0.04, xiong: 0.03, zi: 0.03 } },
+    wang: { type: 'choice', probabilities: { ji_ruo: 0.02, ruo: 0.08, ping: 0.2, wang: 0.5, ji_wang: 0.2 } },
+    cheng: { type: 'noul', noul: 0.7 },
+    qi: { type: 'choice', probabilities: { ben_xun: 0.1, xia_xun: 0.3, yue_nei: 0.5, yue_wai: 0.1 } }
+  },
+  usage: { input_tokens: 520, output_tokens: 0 }
+};
+function mkAI(overrides) {
+  const calls = [];
+  const run = async function (model, body) {
+    calls.push({ model: model, body: body });
+    if (overrides && overrides[model]) {
+      const o = overrides[model];
+      return typeof o === 'function' ? o() : o;     // 函数即「抛错」用例，避免提前构造 rejected promise
+    }
+    if (model.indexOf('clef') >= 0) return CLEF_OK;
+    if (model.indexOf('qwen') >= 0) {
+      return { choices: [{ message: { content: '```json\n{"用神":"妻财","旺衰":"旺","可成":0.62,"应期":"月内"}\n```' } }],
+        usage: { prompt_tokens: 210, completion_tokens: 38, neurons: 2.1 } };
+    }
+    return { choices: [{ message: { content: '{"用神":"妻财","旺衰":"平","可成":"75%","应期":"下旬"}' } }],
+      usage: { prompt_tokens: 260, completion_tokens: 60, neurons: 14.6 } };
+  };
+  return { ai: { run: run }, calls: calls };
+}
+const voteCall = function (body, env) {
+  return votePost({
+    request: new Request('https://x/api/vote', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    env: env
+  });
+};
+
+const aiOk = mkAI();
+const rVote = await voteCall({ state: '丙午年 戊戌月 丙子日 丙申时 雷泽归妹之泽雷随', ask: '求财' }, { AI: aiOk.ai });
+eq('三票全绿 → 200', rVote.status, 200);
+const jVote = await rVote.json();
+eq('返回三票', jVote.votes.length, 3);
+const vClef = jVote.votes.find(function (v) { return v.id === 'clef'; });
+eq('clef 票有效', vClef.ok, true);
+eq('clef 概率按中文选项归一（妻财=0.8）', Math.abs(vClef.probs.yong['妻财'] - 0.8) < 1e-9, true);
+eq('clef 可成直接取 noul', vClef.probs.cheng.noul, 0.7);
+eq('clef 旺衰五档齐全', Object.keys(vClef.probs.wang).length, 5);
+const vQwen = jVote.votes.find(function (v) { return v.id === 'qwen'; });
+eq('chat 票从代码围栏里抠出 JSON', vQwen.ok, true);
+eq('chat 用神 one-hot 落在妻财', vQwen.probs.yong['妻财'], 1);
+eq('chat 旺衰 one-hot 落在旺', vQwen.probs.wang['旺'], 1);
+const vGpt = jVote.votes.find(function (v) { return v.id === 'gptoss'; });
+eq('百分数写法 "75%" 归一为 0.75', Math.abs(vGpt.probs.cheng.noul - 0.75) < 1e-9, true);
+eq('neurons 汇总为数字', typeof jVote.usage.neurons, 'number');
+const clefCallBody = aiOk.calls.find(function (c) { return c.model.indexOf('clef') >= 0; }).body;
+eq('clef questions 键全为 ASCII（中文键实测被 422 拒）',
+  Object.keys(clefCallBody.questions).every(function (k) { return /^[A-Za-z0-9_.-]{1,100}$/.test(k); }), true);
+eq('clef criteria 键也全为 ASCII',
+  Object.keys(clefCallBody.questions.yong.criteria).every(function (k) { return /^[A-Za-z0-9_.-]{1,100}$/.test(k); }), true);
+
+const aiBad = mkAI({ '@cf/openai/gpt-oss-120b': { choices: [{ message: { content: '抱歉，我无法判断。' } }] } });
+const jBad = await (await voteCall({ state: '盘面' }, { AI: aiBad.ai })).json();
+const vBad = jBad.votes.find(function (v) { return v.id === 'gptoss'; });
+eq('解析不出 JSON → 该票无效', vBad.ok, false);
+eq('错误码标为 UNPARSEABLE', vBad.error, 'UNPARSEABLE');
+eq('无效票不影响其余两票', jBad.votes.filter(function (v) { return v.ok; }).length, 2);
+
+const aiField = mkAI({ '@cf/qwen/qwen3-30b-a3b-fp8': { choices: [{ message: { content: '{"用神":"妻财"}' } }] } });
+const jField = await (await voteCall({ state: '盘面' }, { AI: aiField.ai })).json();
+const vField = jField.votes.find(function (v) { return v.id === 'qwen'; });
+eq('缺字段 → 无效票', vField.ok, false);
+eq('错误码列出缺的字段', vField.error.indexOf('BAD_FIELDS') === 0, true);
+
+const aiBoom = mkAI({ '@cf/qwen/qwen3-30b-a3b-fp8': function () { throw new Error('upstream 500'); } });
+const jBoom = await (await voteCall({ state: '盘面' }, { AI: aiBoom.ai })).json();
+eq('单票抛错不影响整体（其余两票照出）', jBoom.votes.filter(function (v) { return v.ok; }).length, 2);
+
+eq('未绑定 AI → 503', (await voteCall({ state: '盘面' }, {})).status, 503);
+eq('缺 state → 400', (await voteCall({ ask: '问点啥' }, { AI: mkAI().ai })).status, 400);
+eq('非对象 body → 400', (await voteCall([], { AI: mkAI().ai })).status, 400);
+eq('GET 不允许 → 405', voteGet().status, 405);
 
 globalThis.fetch = origFetch;
 if (fail > 0) process.exit(1);

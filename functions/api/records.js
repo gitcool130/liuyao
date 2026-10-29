@@ -317,13 +317,17 @@ export async function onRequestPost(context) {
     baseline ? jsonWithin(baseline, 1000) : null
   ).run();
   // 回访任务派生（M18）：主写入成功后追加，INSERT OR IGNORE 幂等；失败不回滚卦例本体
+  let readingDue = null;
   try {
     const rd = deriveReading(id, (b.datetime || '').toString().slice(0, 50), baseline ? jsonWithin(baseline, 1000) : null);
     if (rd) {
       await env.LIUYAO_DB.prepare(
         "INSERT OR IGNORE INTO readings (cast_id, due_at, status, source, note, created_at) VALUES (?, ?, 'pending', 'baseline_window', ?, ?)"
       ).bind(id, rd.due_at, rd.note, new Date().toISOString()).run();
+      readingDue = rd.due_at;
     }
   } catch (e) { /* 派生失败不阻断主流程（任务可重派） */ }
-  return json({ id: id });
+  // 回显判据与回访状态：旧版只回 {id}，于是「存进去了」与「存进去但事后无法统计」
+  // 在客户端完全同形——线上 20 卦 0 判据、readings 0 行由此长期不可见。
+  return json({ id: id, hasBaseline: !!baseline, reading: readingDue });
 }

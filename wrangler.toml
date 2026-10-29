@@ -18,6 +18,13 @@ binding = "LIUYAO_DB"
 database_name = "liuyao-db"
 database_id = "42279a23-7032-42bb-b675-bb7a2015fcc0"
 
+# ---- Workers AI（2026-10-29 加，三模型对账用）----
+# 生产绑定**已通过 CF API 写进 Pages 项目 Settings → Functions 的 ai_bindings**（键名 AI）；
+# Git 集成构建不读本文件的 bindings，故本段只为 `wrangler pages dev` 本地调试服务。
+# 免费额度 10000 neurons/天（UTC 0 点重置）；实测一轮三票约 17 neurons。
+[ai]
+binding = "AI"
+
 [vars]
 # 密钥用 secret（wrangler pages secret put 或 Pages 后台加密设置），不要写进此文件：
 #   GEMINI_API_KEY    Google AI Studio key（AIza 开头）

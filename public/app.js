@@ -1024,6 +1024,7 @@
     const cs = $('#aiConsensus'); if (cs) { cs.hidden = true; cs.innerHTML = ''; }
     const box = $('#chatBox'); if (box) box.hidden = true;
     const btn = $('#btnSave'); if (btn) btn.textContent = '存入卦例库';
+    const tip = $('#saveTip'); if (tip) { tip.hidden = true; tip.textContent = ''; }
     const btnAI = $('#btnAI'); if (btnAI) { btnAI.disabled = false; btnAI.textContent = '开始断卦'; }
   }
 
@@ -2177,8 +2178,27 @@
   // 判据快照：把断卦时刻的用神/粗判/应期窗口/置信度/区间宽度固化成 JSON，
   // 随 recordPayload 与 panText 同批入库。字段来源与缺失规则见 docs/proposal-baseline-column.md §三。
   // 缺失一律 null（不用空串/0）；无任何判据可存时整体返回 null（列保持 NULL）。
+  // 保存时刻若 lastAnalysis 为空（先摇卦后选事类、自定义事由推不出关键词、
+  // 或页面久未刷新仍跑旧脚本），现场按当前事类重算一次判据。
+  // 判据是一切回访任务的唯一入口：没有它 → 无应期窗口 → 无回访 → 命中率分母永远 0。
+  // 只读重算：不写 lastAnalysis、不动任何界面。
+  function analysisForSave() {
+    if (lastAnalysis) return lastAnalysis;
+    if (!pan) return null;
+    const target = $('#useSelect').value;
+    let effTarget = target, customKw = '';
+    if (target === '__custom__') {
+      const sug = (typeof C.suggestYongshen === 'function') ? C.suggestYongshen(currentQuestion()) : null;
+      if (sug) { effTarget = sug.rel; customKw = sug.kw; }
+    }
+    if (!target || (target === '__custom__' && !customKw)) return null;
+    try {
+      return C.analyze(pan, effTarget, customKw ? { topic: currentQuestion() } : undefined);
+    } catch (e) { return null; }
+  }
+
   function baselineSnapshot() {
-    const a = lastAnalysis;
+    const a = analysisForSave();
     if (!a) return null;
     const w = a.yingqiWindow || null;
     const y = a.yongshen;
@@ -2217,6 +2237,25 @@
   }
 
   let autoSavePromise = null;
+  // 入库回执：旧版只有一句静默 catch，于是「未登录被拒」「服务端 500」
+  // 「存进去了但没有判据」三种状态在界面上一模一样——线上 20 卦 0 判据、
+  // readings 表 0 行就这样空转了近一个月没人察觉。此处把三种状态分开显示。
+  function showSaveTip(ok, hasBaseline, msg) {
+    const tip = $('#saveTip');
+    if (!tip) return;
+    if (!ok) {
+      tip.hidden = false;
+      tip.textContent = '未入卦例库：' + (msg || '请检查登录状态后重试');
+      return;
+    }
+    if (hasBaseline === false) {
+      tip.hidden = false;
+      tip.textContent = '已入卦例库，但本卦没有判据快照（未选「所测之事」）→ 无应期窗口 → 不会派生回访任务，事后也不进命中率统计。选好事类后重新存入即可补上。';
+      return;
+    }
+    tip.hidden = true; tip.textContent = '';
+  }
+
   async function autoSaveCast() {
     if (!pan) return;
     // 串行化：旧版 autoSaveCast 与 [存入卦例库] 都不 await，用户在其在途时点手动保存，
@@ -2224,11 +2263,21 @@
     // 且后返回的把 castId 改成另一条的 id，后续自动保存更新的是另一条。
     const run = (autoSavePromise || Promise.resolve()).then(async function () {
       try {
-        // silent：未登录时不弹口令框，静默跳过
+        // silent：未登录时不弹口令框，静默跳过（但结果要回显，见 showSaveTip）
         const res = await apiFetch('/api/records', { method: 'POST', body: JSON.stringify(recordPayload()) }, true);
-        const data = await res.json();
-        if (res.ok && data.id) { castId = data.id; $('#btnSave').textContent = '已入卦例库 ✓'; }
-      } catch (e) { /* 静默：数据库未绑定或未登录时不打扰断卦 */ }
+        const data = await res.json().catch(function () { return {}; });
+        if (res.ok && data.id) {
+          castId = data.id;
+          $('#btnSave').textContent = '已入卦例库 ✓';
+          showSaveTip(true, data.hasBaseline !== false, '');
+        } else if (!readCode()) {
+          showSaveTip(false, null, '未口令登录（点「口令登录」后重新存入）');
+        } else {
+          showSaveTip(false, null, '服务端返回 ' + res.status + (data && data.message ? ' · ' + data.message : ''));
+        }
+      } catch (e) {
+        showSaveTip(false, null, '网络异常或数据库未绑定');
+      }
     });
     autoSavePromise = run.catch(function () {});
     return run;
@@ -2245,9 +2294,60 @@
       if (!res.ok) throw new Error(data.message || '保存失败');
       castId = data.id;
       btn.textContent = '已入卦例库 ✓';
+      showSaveTip(true, data.hasBaseline !== false, '');
     } catch (e) {
+      showSaveTip(false, null, e.message);
       alert('保存失败：' + e.message);
     } finally { btn.disabled = false; }
+  };
+
+  // ---------- 三模型对账（Workers AI 免费额度，2026-10-29）----------
+  // 只把「盘面事实 + 引擎口径」送出去，不送断语全文：三票回答的是同一道题，
+  // 差异才有比较价值；送散文只会引入文风噪音。
+  function voteStateText(a) {
+    const p = pan.pillars;
+    const lines = pan.lines.map(function (l) {
+      return (l.pos + 1) + '爻 ' + l.gan + l.zhi + ' ' + l.lq +
+        (l.moving ? ' 动→' + (l.bian ? l.bian.gan + l.bian.zhi : '') : ' 静');
+    });
+    return [
+      p.yearGZ + '年 ' + p.monthGZ + '月 ' + p.dayGZ + '日 ' + p.hourGZ + '时　旬空 ' + (p.kongStr || '—'),
+      '本卦 ' + pan.benName + (pan.hasBian ? ' 之 ' + pan.bianName : '（静卦）'),
+      '宫 ' + pan.palace + '（' + pan.palaceWx + '）　世' + (pan.shi + 1) + '爻　应' + (pan.ying + 1) + '爻',
+      lines.join('\n'),
+      '引擎取用神 ' + (a && a.yongshen ? a.yongshen.type + ' ' + a.yongshen.line.zhi : '未取') +
+        '　粗判 ' + ((a && a.trend) || '—')
+    ].join('\n');
+  }
+
+  const _btnVote = $('#btnVote');
+  if (_btnVote) _btnVote.onclick = function () {
+    if (!pan) { alert('先完成起卦，再对账。'); return; }
+    const a = analysisForSave();
+    const w = a && a.yingqiWindow;
+    const mv = [];
+    (pan.moving || []).forEach(function (on, i) { if (on) mv.push((i + 1) + '爻'); });
+    const askText = $('#useSelect').value === '__custom__'
+      ? currentQuestion()
+      : ($('#useSelect').value ? $('#useSelect option:checked').textContent : '');
+    const spec = {
+      ts: Date.now(),
+      state: voteStateText(a),
+      ask: askText || '',
+      gua: pan.benName,
+      bian: pan.hasBian ? pan.bianName : '（静卦）',
+      yong: (a && a.yongshen) ? (a.yongshen.type + ' ' + a.yongshen.line.zhi) : '',
+      trend: (a && a.trend) || '',
+      yingqi: (w && w.status === 'ok') ? (w.dateLo + '—' + w.dateHi) : ((w && w.text) || '—'),
+      meta: [
+        ['月建', pan.pillars.monthGZ],
+        ['日辰', pan.pillars.dayGZ],
+        ['旬空', pan.pillars.kongStr || '—'],
+        ['动爻', mv.length ? mv.join('、') : '无']
+      ]
+    };
+    try { localStorage.setItem('ly.vote.cast', JSON.stringify(spec)); } catch (e) { /* 隐私模式可能禁用，页面会退化为样例 */ }
+    window.open('/vote.html', '_blank');
   };
 
   // ---------- 卦例库口令登录 ----------
