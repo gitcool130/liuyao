@@ -372,6 +372,16 @@
     <input type="text" class="use-select" id="useCustom" maxlength="60"
       placeholder="例如：能否跳槽去新公司？孩子考研顺利吗？（旺衰粗判需选上方固定事类，此处交由 AI 细断）"
       hidden style="width:100%;box-sizing:border-box">
+    <!-- 用神兜底：自定义事由的关键词推不出用神时出现，由用户直接指定（古法按事取用，指定比猜准） -->
+    <select class="use-select" id="useYong" hidden style="width:100%;box-sizing:border-box;margin-top:8px">
+      <option value="">用神：未能从事由判定 —— 请在此指定（或改选上方固定事类）</option>
+      <option value="父母">父母 —— 文书 · 学业 · 房屋 · 车 · 长辈 · 雨</option>
+      <option value="官鬼">官鬼 —— 功名 · 官职 · 官司 · 疾病 · 夫</option>
+      <option value="妻财">妻财 —— 财物 · 妻 · 买卖 · 债务</option>
+      <option value="子孙">子孙 —— 子女 · 医药 · 宠物 · 解忧</option>
+      <option value="兄弟">兄弟 —— 朋友 · 同事 · 竞争者 · 破耗</option>
+      <option value="shi">世爻 —— 自身 · 身体 · 运势</option>
+    </select>
     <div id="senseBox" hidden></div>
     <div id="shapeBox" hidden style="margin-top:12px"></div>
     <ul class="concl" id="conclList"></ul>
@@ -428,14 +438,14 @@
 <script src="core/paipan.js?v=20261028d"></script>
 <script src="core/analyze.js?v=20261030a"></script>
 <script src="core/sensitive.js?v=20261028d"></script>
-<script src="core/domain-methods.js?v=20261030a"></script>
+<script src="core/domain-methods.js?v=20261031a"></script>
 <script src="core/question-shape.js?v=20261028d"></script>
 <script src="core/premise.js?v=20261028d"></script>
 <script src="core/fact-audit.js?v=20261028d"></script>
 <script src="core/coverage-audit.js?v=20261028d"></script>
 <script src="core/yingqi-window.js?v=20261028d"></script>
 <script src="core/share.js?v=20261028d"></script>
-<script src="app.js?v=20261030a"></script>
+<script src="app.js?v=20261031a"></script>
 <script src="bgm.js?v=20261028d"></script>
 </body>
 </html>

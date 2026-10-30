@@ -105,6 +105,8 @@
   let pan = null;
   let lastBullets = [];
   let lastAnalysis = null;
+  // 自定义且关键词推不出用神时，用户在 #useYong 里手动指定的六亲（空串＝未指定）
+  let lastManualYong = '';
   // 粗判走向的展示文案：renderAnalysis（粗判标题）与卦例库「判据对照」共用，不新造口径词
   const TREND_LABEL = { '吉': '趋吉', '凶': '趋凶', '平': '持平', '待审': '待审' };
 
@@ -301,6 +303,7 @@
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
     $('#useSelect').value = '';
     const uc = $('#useCustom'); if (uc) { uc.value = ''; uc.hidden = true; }
+    const uy = $('#useYong'); if (uy) { uy.value = ''; uy.hidden = true; lastManualYong = ''; }
     // 一并清掉新增四块的状态：敏感提示、问法提示、按卦名提示、被拦截而禁用的断卦按钮
     const sb = $('#senseBox'); if (sb) { sb.hidden = true; sb.innerHTML = ''; lastSensitive = null; }
     const shb = $('#shapeBox'); if (shb) { shb.hidden = true; shb.innerHTML = ''; }
@@ -550,11 +553,11 @@
        此前自定义一律 lastAnalysis=null，用神只能由模型自取，盘面也没有「用神：」行。
        2026-10-30：天气类由本处映射到父母——占雨以父母为用，但断法是三档现象判定，
        规程由 DOMAIN_METHODS['天气'] 给（见 buildPanText 的 domainBlock 调用）。 */
-    let effTarget = target, customKw = '', isWeather = (target === '天气');
+    let effTarget = target, customKw = '', isWeather = (target === '天气'), sug = null;
     if (isWeather) {
       effTarget = '父母';
     } else if (target === '__custom__') {
-      const sug = (pan && typeof C.suggestYongshen === 'function') ? C.suggestYongshen(currentQuestion()) : null;
+      sug = (pan && typeof C.suggestYongshen === 'function') ? C.suggestYongshen(currentQuestion()) : null;
       if (sug) {
         customKw = sug.kw;
         // analyze() 只认六亲名：天气类落到父母，其余照旧
@@ -562,11 +565,26 @@
         else effTarget = sug.rel;
       }
     }
+    /* 用神兜底下拉：关键词表推不出时不再静默置 lastAnalysis=null（盘面裸奔、用户只看到一行灰字），
+       改为让用户自己指定用神——古法本就「按事取用」，指定比猜测准。
+       选什么就按什么跑同一条规则链，盘面七块随之全部恢复。 */
+    const ySel = $('#useYong');
+    lastManualYong = '';
+    if (ySel) {
+      const needYong = (target === '__custom__' && !sug);
+      ySel.hidden = !needYong;
+      // 事由改到能推出关键词（或换到固定事类）时清掉旧的手动选择，
+      // 否则下次遇到推不出的题会莫名其妙沿用上一次的用神
+      if (!needYong) ySel.value = '';
+      if (needYong && ySel.value) { effTarget = ySel.value; lastManualYong = ySel.value; }
+      else if (needYong) effTarget = null;
+    }
 
-    if (!target || (target === '__custom__' && !customKw)) {
-      // 空选 / 自定义但无关键词可推：无固定用神可取，给出通用次第
+    if (!target || (target === '__custom__' && !customKw && !lastManualYong)) {
+      // 空选 / 自定义但既无关键词可推、也未手动指定用神
       list.innerHTML = '<li>选择所测之事，先观用神旺衰。通用次第：一观世爻旺衰，二观用神与世应，三审动爻生克，四定旬空月破与应期。</li>' +
-        (target === '__custom__' ? '<li>自定义未能从描述中推定用神，可补写事由（如「求财」「考试」「官司」），或改选上方对应类别。</li>' : '');
+        (target === '__custom__' ? '<li>自定义未能从描述中推定用神：请在上方「用神」下拉里直接指定一个六亲，' +
+          '或用事由补写明确事类（如「求财」「考试」「官司」「下雨」），或改选上方对应类别。</li>' : '');
       vBox.hidden = true; lastBullets = [];
       // 清空旧分析：否则断后审查会拿「上一次所选事类」的 judgments
       // 去撞自定义事由的断语，必然误报（如旧选妻财、新问跳槽取官鬼）。
@@ -582,7 +600,12 @@
     }
     // 自定义事由带具体文本时，把事由一并交给规则链：「用神克世」的吉凶随占类翻转
     // （求财必得／行人即归／医药即愈／功名非祸即灾），没有事由就只能给全量书证。
-    const res = C.analyze(pan, effTarget, customKw ? { topic: currentQuestion() } : undefined);
+    const res = C.analyze(pan, effTarget, (customKw || lastManualYong) ? { topic: currentQuestion() } : undefined);
+    if (lastManualYong) {
+      const yname = res.yongshen ? res.yongshen.type : lastManualYong;
+      res.bullets.unshift('自定义事由未能由关键词推定用神，已按手动指定的「' + yname +
+        '」为用（占类取舍本在人为；若取错，改选上方用神即按新用神重算）');
+    }
     if (customKw) {
       const yname = isWeather ? '父母（雨）' : (res.yongshen ? res.yongshen.type : effTarget);
       res.bullets.unshift('自定义事由按关键词「' + customKw + '」推定为「' + yname +
@@ -641,7 +664,14 @@
       '<div class="muted" style="margin-top:4px;font-size:12px">区间由出空／冲空／值日／出月／逢冲等盘面要素换算；' +
       '置信度只表示要素之间的自洽程度，不是命中概率。</div>';
   }
-  $('#useSelect').onchange = function () { renderAnalysis(); if ($('#useCustom').hidden === false) $('#useCustom').focus(); };
+  // 换事类即清空手动用神：否则「上次自定义选了父母」会带进下一个不相关的事由
+  $('#useSelect').onchange = function () {
+    const ys = $('#useYong'); if (ys) ys.value = '';
+    renderAnalysis();
+    if ($('#useCustom').hidden === false) $('#useCustom').focus();
+  };
+  // 手动指定用神：选了立刻按新用神重跑规则链（不必再点别的）
+  $('#useYong').onchange = function () { renderAnalysis(); };
   // 自定义事由逐字输入即重算分流：写到「能不能活多久」这类词时立刻拦截，
   // 不必等点击断卦才提示（粗判不重算——自定义本就不作旺衰粗判）。
   // 自定义事由逐字输入：立刻重算分流；用神推断加 250ms 防抖，避免每敲一个字重排规则链
@@ -742,7 +772,9 @@
     }
     if (forAI && HAS_ABSORB) {
       // 领域分析方法注入：只规定看盘次序与常见误判，不预设吉凶，也不得被当成古籍引文。
-      const blk = C.domainBlock($('#useSelect').value, currentQuestion());
+      // 手动指定用神时改用该六亲的专门规程，否则「项目能不能上线」只能拿到自定义通用次第。
+      const domKey = (lastManualYong && $('#useSelect').value === '__custom__') ? lastManualYong : $('#useSelect').value;
+      const blk = C.domainBlock(domKey, currentQuestion());
       if (blk) txt += '\n' + blk;
       // 多选一问法处理指令：模型须按条件决策树输出，不得强制站队——
       // 实测此类问法两模型各执一象，断出完全相反的建议。
