@@ -60,7 +60,7 @@
       const mz0 = pan.pillars ? pan.pillars.monthZhi : 0;
       const makeFu = function (fl) {
         return Object.assign({}, fl, {
-          zhi: fl.fu.zhi, wx: fl.fu.wx, zhiIdx: fl.fu.zhiIdx,
+          gan: fl.fu.gan, zhi: fl.fu.zhi, wx: fl.fu.wx, zhiIdx: fl.fu.zhiIdx,
           lq: target, isFu: true, moving: false, bian: null
         });
       };
@@ -81,12 +81,12 @@
       const v = makeFu(fuLine);
       return {
         primary: v, all: fus.map(makeFu), source: '伏神',
-        note: '用神' + target + '不上卦，取伏神' + target + fuLine.fu.zhi + '（伏于' + LINE_NAMES[fuLine.pos] + '，飞神' + fuLine.lq + fuLine.zhi +
+        note: '用神' + target + '不上卦，取伏神' + target + (fuLine.fu.gan || '') + fuLine.fu.zhi + '（伏于' + LINE_NAMES[fuLine.pos] + '，飞神' + fuLine.lq + fuLine.zhi +
           (fus.length > 1 ? '；伏神' + fus.length + '现，取' + why : '') + '）'
       };
     }
     if (found.length === 1) {
-      return { primary: found[0], all: found, source: '本卦', note: '用神' + target + found[0].zhi + '（' + LINE_NAMES[found[0].pos] + '）' };
+      return { primary: found[0], all: found, source: '本卦', note: '用神' + target + (found[0].gan || '') + found[0].zhi + '（' + LINE_NAMES[found[0].pos] + '）' };
     }
     // 两现取舍（古法次序）：发动者 → 临世应者 → 旺者 → 在前之爻
     let pick = found.find(function (l) { return l.moving; });
@@ -112,7 +112,7 @@
     }
     return {
       primary: pick, all: found, source: '两现取舍',
-      note: '用神' + target + '两现，古法宜取' + how + '为主，余为辅——今取' + LINE_NAMES[pick.pos] + pick.zhi + '为主'
+      note: '用神' + target + '两现，古法宜取' + how + '为主，余为辅——今取' + LINE_NAMES[pick.pos] + (pick.gan || '') + pick.zhi + '为主'
     };
   }
 
@@ -1234,7 +1234,7 @@
     const out = {
       yongshen: {
         type: target === 'shi' ? '世爻' : target,
-        line: { pos: L.pos, zhi: L.zhi, wx: L.wx, lq: L.lq, moving: L.moving, isFu: !!L.isFu },
+        line: { pos: L.pos, gan: L.gan || '', zhi: L.zhi, wx: L.wx, lq: L.lq, moving: L.moving, isFu: !!L.isFu },
         source: pick.source,
         dupMode: LY.ysDupMode,
         wang: month.grade
@@ -1292,6 +1292,54 @@
   LY.yjcState = yjcState;
   LY.ruleYJC = ruleYJC;
   LY.aggregateTrend = aggregateTrend;
+
+  // ---------- 爻位状态清单（确定性 · 非推断） ----------
+  // 逐爻列出「动静、月令旺衰、月破真假、日冲（暗动／日破／冲散）、日合、旬空」。
+  // 只陈述规则链判定结果，不作吉凶、不涉用神取舍。
+  // 起因：排盘文本原只有「旺衰粗判」，且只围绕用神一条线展开，六爻层面的月破日冲要靠模型心算。
+  // 2026-10-30 同盘实测：Gemini 漏掉二爻辰土月破、DeepSeek 把五爻未土（旺相逢日冲）判成日破。
+  // 两条都是硬事实层错判，且都是「引擎算得准、却没有输出」——故补此节，让模型只解释、不重算。
+  function lineStates(pan) {
+    const pil = pan.pillars;
+    const rows = [];
+    for (let i = 0; i < 6; i++) {
+      const L = pan.lines[i];
+      const grade = wangXiangXiuQiuSi(L.wx, pil.monthZhi);
+      const strong = STRONG.indexOf(grade) >= 0;
+      const weak = WEAK.indexOf(grade) >= 0;
+      const kong = pil.kong.indexOf(L.zhiIdx) >= 0;
+      const yuePo = chong(L.zhiIdx, pil.monthZhi);
+      const riChong = chong(L.zhiIdx, pil.dayZhi);
+      const riHe = liuhe(L.zhiIdx, pil.dayZhi);
+      const rel = relation5(L.wx, ZHI_WX[pil.dayZhi]);
+      // 日辰生扶口径与 ruleDay 一致：临日辰、得生、比和算扶；受克／泄／耗不算
+      const daySupports = (pil.dayZhi === L.zhiIdx) || rel === '得生' || rel === '比和';
+      const marks = [L.moving ? '发动' : '安静', '月令' + grade];
+      if (yuePo) {
+        const zhen = weak && !daySupports;
+        marks.push('月破' + (zhen
+          ? '（休囚无救·真破，逢值逢合方解）'
+          : '（旺相或得日辰扶·假破，出月或逢合逢值可解）'));
+      }
+      if (riChong) {
+        marks.push(L.moving
+          ? '日冲·冲散（动逢冲则散，事多反复）'
+          : (strong ? '日冲·暗动（旺相逢冲为冲起，非日破）' : '日冲·日破（休囚逢冲，败象）'));
+      } else if (riHe) {
+        marks.push(L.moving ? '日合·合绊' : (strong ? '日合·合起' : '日合·合绊'));
+      }
+      if (kong) marks.push(L.moving ? '旬空（动不为空，出空转实）' : '旬空（静空）');
+      rows.push({
+        pos: i, kong: kong, yuePo: yuePo, riChong: riChong, grade: grade,
+        text: LINE_NAMES[i] + ' ' + L.lq + (L.gan || '') + L.zhi +
+          (L.shi ? '（世）' : '') + (L.ying ? '（应）' : '') +
+          (L.isFu ? '' : '') + '：' + marks.join('，')
+      });
+    }
+    return rows;
+  }
+  LY.lineStates = lineStates;
+
   LY.analyze = analyze;
 
   // 旧 API 兼容：语义同 relation5，仅输出名沿用旧版。

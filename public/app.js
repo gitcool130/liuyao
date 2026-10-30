@@ -468,6 +468,9 @@
   // 当前所测之事的文本（固定事类返回标签，自定义返回输入内容）
   function currentQuestion() {
     const t = $('#useSelect').value;
+    // 天气：地点与日期是断占雨的必需要素，用户填的原文优先；未填则给兜底标签，
+    // 否则 premiseBlock 拿到空串 → 判不出「明天」这个日级刻度，整块前提预检消失。
+    if (t === '天气') return ($('#useCustom').value || '').trim() || '天时·雨晴';
     if (t === '__custom__') return ($('#useCustom').value || '').trim();
     const useMap = { '妻财': '求财·买卖', '官鬼': '功名·官司·疾病', '父母': '考试·文书', '子孙': '子女·医药', '兄弟': '朋友·竞争', 'shi': '自身运势' };
     return useMap[t] || '';
@@ -530,7 +533,15 @@
     const list = $('#conclList');
     const vBox = $('#verdictBox');
     const customInput = $('#useCustom');
-    customInput.hidden = (target !== '__custom__');
+    // 天气类同样开放事由输入：地点与日期（「明天·新郑」）必须进盘面，
+    // 否则 premiseBlock 判不出日级刻度，模型只能给「近期」这种无法核对的应期。
+    const needInput = (target === '__custom__' || target === '天气');
+    customInput.hidden = !needInput;
+    if (needInput) {
+      customInput.placeholder = target === '天气'
+        ? '写明地点与日期，例如：明天新郑会下雨吗？（占雨以父母为用，断雨／阴云不雨／晴三档）'
+        : '例如：能否跳槽去新公司？孩子考研顺利吗？（旺衰粗判需选上方固定事类，此处交由 AI 细断）';
+    }
     renderSensitive();     // 每次改选事类都重算分流（含把拦截态解除）
     renderQuestionShape(); // 多选一问法检测同轮重算（改选固定事类即解除提示）
 
@@ -683,6 +694,17 @@
       lastBullets.forEach(function (b) {
         txt += '- ' + b.replace(/<[^>]+>/g, '') + '\n';
       });
+    }
+    // 爻位状态：逐爻的月破／日冲／旬空是硬事实，模型只能采纳、不能重算。
+    // 只给 AI 版（forAI），人工复制文本保持简洁。
+    if (forAI && typeof C.lineStates === 'function') {
+      const rs = C.lineStates(pan);
+      if (rs && rs.length) {
+        txt += '\n【爻位状态（规则链 · 非推断）】\n';
+        rs.forEach(function (r) { txt += '- ' + r.text + '\n'; });
+        txt += '- 本节为确定性标记，须原样采纳：月破真假、日冲属暗动/日破/冲散已由规则链定死，' +
+          '不得以「旺衰另算」为由改判，也不得把旺相逢冲写作日破。\n';
+      }
     }
     // 应期窗口：由规则链把出空／冲空／值日／出月／逢冲换算成具体天数。
     // 不注入这一段时，模型只能写「近期会有变化」——线索里没有时间刻度，
