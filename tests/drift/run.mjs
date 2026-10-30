@@ -90,13 +90,17 @@ if (asJson) {
     console.log('');
   }
 
-  console.log('== 四指标（' + report.caseCount + ' case 全量，含 legacy） ==');
+  console.log('== 四指标（' + report.caseCount + ' case 全量'
+    + (judgedOn ? '，含 legacy）' : '）') + ' ==');
   rows.forEach(function (r) {
     if (r.got === null) {
       console.log('  ' + pad(r.label, 6) + ' ' + pad('—', 8) + ' ' + (r.note || ''));
       return;
     }
-    console.log('  ' + pad(r.label, 6) + ' ' + pad(fmtPct(r.got), 8) + ' 门槛 ' + pad(r.want, 8) + ' ' + (r.ok ? 'PASS' : 'FAIL'));
+    // 混入 legacy 后本块不参与判定（门禁只看当期），故不标 PASS/FAIL——
+    // 否则 legacy 把当期拉低的那几条会显示 FAIL，而进程 exit 0，极易被读成「红着还放行」。
+    const mark = judgedOn ? '—（含 legacy，不参与判定）' : (r.ok ? 'PASS' : 'FAIL');
+    console.log('  ' + pad(r.label, 6) + ' ' + pad(fmtPct(r.got), 8) + ' 门槛 ' + pad(r.want, 8) + ' ' + mark);
   });
 
   // 有分代时，达标与否以当期为准；全量数字保留可见，但不作为门禁依据。

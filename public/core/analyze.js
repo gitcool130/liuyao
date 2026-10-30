@@ -154,9 +154,13 @@
       js.push({ tag: '月建', rule: '月建克伤', text: nm + '被月建' + ZHI[mz] + mWx + '所克（' + grade + '），失令。', basis: '月建为提纲，克则衰' });
     } else if (rel === '泄') {
       js.push({ tag: '月建', rule: '泄气于月', text: nm + '生月建' + ZHI[mz] + mWx + '，泄气于时令（' + grade + '）。', basis: '生令者休' });
-    } else {
+    } else if (rel === '耗') {
+      // 用神克月建 = 耗气（与 ruleDay 的「耗于日辰」同口径，两处均显式写「耗」而不用 else 兜底）。
+      // 旧版此处为 else：五值当时恰好穷举，故等价；但一旦 relation5 返回意外值就会被静默判成克月建。
       js.push({ tag: '月建', rule: '克月建', text: nm + '克月建' + ZHI[mz] + mWx + '，力耗于时令（' + grade + '）。', basis: '克令者囚' });
     }
+    // 五值（比和/得生/受克/泄/耗）已穷举，故**不设 else 兜底**：
+    // 宁可这一条不出断语，也不把未预期的关系静默判成「克月建」（ruleDay 同此处理）。
     return { grade: grade, judgments: js };
   }
 

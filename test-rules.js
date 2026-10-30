@@ -367,6 +367,48 @@ eq('日辰生扶路径仍生效', C.ruleDay(Lmu, mkPil({ monthZhi: 2, dayZhi: 0 
 // 对照：日辰寅木临用神 → 临日辰
 eq('临日辰路径仍生效', C.ruleDay(Lmu, mkPil({ monthZhi: 2, dayZhi: 2 }), '官鬼').judgments[0].rule, '临日辰');
 
+// #3 月建侧的「耗」（用神克月建）：旧版由 else 兜底，五值恰好穷举故等价，
+//     但全仓无一条正面断言——实测禁用该分支后 64 卦×12 月建×5 用神共 768 例输出变化，而全部测试仍全绿。
+const Ltu = mkLine({ zhi: '辰', zhiIdx: 4, wx: '土', lq: '妻财' });
+const mTu = C.ruleMonth(Ltu, mkPil({ monthZhi: 0 }), '妻财'); // 月建子水，土克水 = 耗
+const mTuRule = (mTu.judgments[0] || {}).rule || '';
+const mTuText = (mTu.judgments[0] || {}).text || '';
+eq('用神土克月子水 → 克月建（耗）', mTuRule, '克月建');
+eq('克月建文本含「克月建」', mTuText.indexOf('克月建') >= 0, true);
+eq('克月建时 grade 为囚', mTu.grade, '囚');
+eq('克月建不误报月建生扶（且非无输出）', mTuRule !== '' && mTuRule !== '月建生扶', true);
+// 对照：用神金生月子水 → 泄气于月（与耗相邻，防两分支互相穿落）
+const Ljin = mkLine({ zhi: '申', zhiIdx: 8, wx: '金', lq: '妻财' });
+const mJin = C.ruleMonth(Ljin, mkPil({ monthZhi: 0 }), '妻财');
+eq('用神金生月子水 → 泄气于月', (mJin.judgments[0] || {}).rule, '泄气于月');
+eq('泄气于月时 grade 为休', mJin.grade, '休');
+// 口径：耗/泄于月建都不算生扶（与「耗于日辰」「泄气于月不入 supports」同口径）
+const aggKeYue = C.aggregateTrend({
+  hasYongshen: true, grade: '囚', zhenKong: false, zhenYuePo: false, daySupports: false,
+  judgments: [{ tag: '月建', rule: '克月建' }]
+});
+eq('克月建不入 supports', aggKeYue.supports.length, 0);
+eq('克月建不入 harms（非四大凶）', aggKeYue.harms.length, 0);
+// 结构：ruleMonth 五值 × 12 月建全有输出（无 else 兜底后，漏值必须由此变红）
+(function () {
+  const WXS = ['金', '木', '水', '火', '土'];
+  const ZHI_OF = { 金: ['申', 8], 木: ['寅', 2], 水: ['亥', 11], 火: ['午', 6], 土: ['辰', 4] };
+  const RULES = ['临月建', '月建同气', '月建生扶', '月建克伤', '泄气于月', '克月建'];
+  let missing = 0, unexpected = 0, noText = 0;
+  WXS.forEach(function (wx) {
+    for (let mz = 0; mz < 12; mz++) {
+      const z = ZHI_OF[wx];
+      const r = C.ruleMonth(mkLine({ zhi: z[0], zhiIdx: z[1], wx: wx, lq: '妻财' }), mkPil({ monthZhi: mz }), '妻财');
+      if (r.judgments.length !== 1) missing++;
+      else if (RULES.indexOf(r.judgments[0].rule) < 0) unexpected++;
+      else if (!r.judgments[0].text) noText++;
+    }
+  });
+  eq('ruleMonth 五值×12 月建组合均有且仅有一条断语（60 组合）', missing, 0);
+  eq('ruleMonth 不产出名单外规则名', unexpected, 0);
+  eq('ruleMonth 断语文本均非空', noText, 0);
+})();
+
 // ---------- 14. #3 其余动爻对用神的作用（原判定链缺环） ----------
 (function () {
   const pan = {
