@@ -861,6 +861,25 @@
     return stable ? stable.id : m;
   }
 
+  /* 残篇补发该用哪个模型（2026-10-30）。
+     retryModelFor 只解决「同供应商有更稳的兄弟」，对 deepseek 这种单模型供应商
+     直接返回自己 —— 于是「deepseek 首稿断在 1000 字 → 补发又用 deepseek 从头重跑」。
+     而补发的时间预算（AI_RETRY_DEADLINE 180s）连它一次完整生成都不够
+     （首字节 60~90s + 长正文），第 2、3 次 attempt 只剩 AI_RETRY_MIN_TIMEOUT 的 15s，
+     必然秒败。用户侧看到的就是「连续 3 次尝试都没有拿到完整断语」——
+     三次都是在重跑同一件第一次就没做完的活，不是模型三次都拒绝。
+     这里补上「兄弟模型不存在时换一家」：deepseek → gemini-3.6-flash（52s 完篇）。
+     但 gemini 家族**不换**：3.8 残篇时 fallbackModelFor 会优先挑 3.6，
+     而 3.6 的残篇率是 46%，属于降级，宁可原地重跑。 */
+  function repairModelFor(m) {
+    const sib = retryModelFor(m);
+    if (sib !== m) return sib;
+    const cur = MODELS.filter(function (x) { return x.id === m; })[0];
+    if (!cur || cur.pv === 'Google') return m;
+    const fb = fallbackModelFor(m);
+    return fb || m;
+  }
+
   /* 「这个模型压根不产出正文」时的替补（2026-10-28）。
      与 retryModelFor 分工不同：那个只在同供应商里挑「更稳的兄弟」（gemini 3.6→3.8），
      对 deepseek 这种单模型供应商等于原地重跑，重试十次也是十次一样的空转。
@@ -1957,19 +1976,30 @@
           const bareReply = stripStreamWarn(reply);
           const wasTruncated = String(bareReply).length !== String(reply || '').length;
           if (reply && reply.length > 30 && (!/结[论局]\s*[：:]/.test(bareReply) || wasTruncated)) {
-            const alt = retryModelFor(m);
+            const alt = repairModelFor(m);
             const label = alt !== m ? '断语未写完，改用 ' + alt + ' 重新生成' : '断语未写完，正在重新生成';
             curDraft = mdLite(reply);   // 残篇也要留着现形，用户才知道「往哪儿补」
             let retry = '';
             try {
+              /* 补发只给 2 次（2026-10-30，原 3 次）。
+                 补发是一次**完整重生成**，不是续写：deepseek 单次要 60~90s 首字节 + 长正文，
+                 180s 总预算连一次都紧。原参数下第 3 次必然只剩 15s 最小超时，白烧一次调用，
+                 用户侧读到的却是「连续 3 次尝试都没有拿到完整断语」——把预算不足伪装成模型不行。
+                 2 次 + 换快模型（repairModelFor）足够：gemini-3.6 一次约 52s 完篇。 */
               retry = await callInterpret(alt, [], rwStatus(label), rwStream(label),
-                { gen: myGen, signal: mySignal, maxAttempts: 3 });
+                { gen: myGen, signal: mySignal, maxAttempts: 2 });
             } catch (e) {
               if (e && e.kind === 'aborted') throw e;
               // 补发失败不得清空首稿：用户手里那段残篇已经比空白失败框更有信息量。
               retry = '';
+              /* 把首稿的中断原因一并留在提示里（2026-10-30）。
+                 旧版只说「补发失败」，看不出首稿是模型自己停、被 length 截断、还是上游静默——
+                 而这三者的处置完全不同。带着这句，用户一张截图就能定位，不必再翻日志。 */
+              const cutWhy = (String(reply || '').match(/本卦断语(未完篇|传输中断)[（(]([^）)]*)[）)]/) || []);
               reply = String(reply || '') + '\n\n> ⚠ 本卦断语补发失败（' +
-                (e && e.message ? e.message : '接口暂不可用') + '），以上为首稿残篇。';
+                (e && e.message ? e.message : '接口暂不可用') + '）' +
+                (cutWhy[1] ? '；首稿' + cutWhy[1] + '（' + cutWhy[2] + '）' : '') +
+                '，以上为首稿残篇。';
             }
             if (myGen !== aiGen) return;
             const retryBare = stripStreamWarn(retry);

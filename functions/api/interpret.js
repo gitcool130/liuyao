@@ -35,11 +35,14 @@
  *   SSE_HEARTBEAT_MS  选填，SSE 空闲心跳间隔（毫秒），默认 10000，下限 1000（测试用）。
  *                      上游思考期可能数十秒无输出，CF 边缘约 100s 无数据即 524。
  *                      客户端把心跳也算作「链路还活着」，故它必须显著小于客户端 30s 空闲阈值。
- *   UPSTREAM_IDLE_MS  选填，**上游已吐过首字节之后**静默多久判挂死（毫秒），默认 30000。
+ *   UPSTREAM_IDLE_MS  选填，**上游已吐过首字节之后**静默多久判挂死（毫秒），默认 45000。
  *                      与心跳是两件事：心跳证明「本服务还活着」，它证明「模型还在输出」。
  *                      首字节之前的等待由 LLM_FIRST_BYTE_MS 单独管（DeepSeek 实测 60~90s，
  *                      用 30s 去套会把正常慢启动误杀）。判死后下发 UPSTREAM_STALL，
  *                      前端据此切换模型而不是盲目原地重试。
+ *                      这个阈值**不再需要**小于客户端空闲阈值（2026-10-30 更正）：客户端那条
+ *                      只判链路（心跳 10s 一次即可续命），上游死活由本层独判；取 45s 以容忍
+ *                      长输出中的正常停顿——30s 会把停顿当挂死，把首稿砍在半句。
  *   LLM_MAX_TOKENS    选填，单次生成上限；未设置则不传（由上游按自身默认值裁定）。
  *   GPT_EFFORT        选填，gpt-5 / o 系思考模型的推理强度（minimal/low/medium/high），
  *                      默认 low（防超时）；对这些模型会自动剔除其不支持的 temperature。
@@ -872,12 +875,14 @@ export async function onRequestPost(context) {
        用一个 60s 同时套两者，结果是对 a 太长（客户端 45s 早就 abort，看门狗永远轮不到）、
        对 b 又太长（用户干等）。现在拆成两段：
          - 首字节之前：用 LLM_FIRST_BYTE_MS（默认 80s，低于边缘 ~100s 的 reset 阈值）；
-         - 首字节之后：用 UPSTREAM_IDLE_MS（默认 30s）。
-       并且**必须**比客户端的空闲判死（30s，计入心跳帧）更早给出可读终止事件，
-       否则客户端先 abort，这套优雅降级在生产里就是死代码——499 就是这么来的。 */
-    const UPSTREAM_IDLE_MS = Math.max(1000, parseInt(env.UPSTREAM_IDLE_MS || '30000', 10) || 30000);
+         - 首字节之后：用 UPSTREAM_IDLE_MS（默认 45s）。
+       2026-10-30 更正：原注释要求「必须早于客户端空闲判死（30s）」，那是客户端还不认心跳时
+       的约束。现在客户端那条只问「还有没有字节到达」（心跳帧也算），本服务心跳 10s 一次 →
+       客户端永不因「上游不出字」触发，判定上游死活的只有本层，不必再被 30s 绑架。
+       反过来，压到 30s 会把长输出里 30~45s 的正常停顿当成挂死，首稿被砍在半句。 */
+    const UPSTREAM_IDLE_MS = Math.max(1000, parseInt(env.UPSTREAM_IDLE_MS || '45000', 10) || 45000);
     let lastUp = Date.now(), stalled = false, gotFirst = false;
-    // 轮询间隔跟着最小阈值缩（生产 30s → 每 5s 一查；测试把它设成 1s → 每 250ms 一查）
+    // 轮询间隔跟着最小阈值缩（生产 45s → 每 5s 一查；测试把它设成 1s → 每 250ms 一查）
     const stallTickMs = Math.min(5000, Math.max(200, Math.floor(Math.min(UPSTREAM_IDLE_MS, firstByteMs) / 4)));
     const stallTimer = setInterval(function () {
       if (stalled) return;
