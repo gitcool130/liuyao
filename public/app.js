@@ -536,11 +536,20 @@
 
     /* 自定义事由：先按关键词推出用神（复用 domain-methods 的 INTENT_YONGSHEN），
        再走与固定事类完全相同的规则链。推不出关键词才退回通用次第。
-       此前自定义一律 lastAnalysis=null，用神只能由模型自取，盘面也没有「用神：」行。 */
-    let effTarget = target, customKw = '';
-    if (target === '__custom__') {
+       此前自定义一律 lastAnalysis=null，用神只能由模型自取，盘面也没有「用神：」行。
+       2026-10-30：天气类由本处映射到父母——占雨以父母为用，但断法是三档现象判定，
+       规程由 DOMAIN_METHODS['天气'] 给（见 buildPanText 的 domainBlock 调用）。 */
+    let effTarget = target, customKw = '', isWeather = (target === '天气');
+    if (isWeather) {
+      effTarget = '父母';
+    } else if (target === '__custom__') {
       const sug = (pan && typeof C.suggestYongshen === 'function') ? C.suggestYongshen(currentQuestion()) : null;
-      if (sug) { effTarget = sug.rel; customKw = sug.kw; }
+      if (sug) {
+        customKw = sug.kw;
+        // analyze() 只认六亲名：天气类落到父母，其余照旧
+        if (sug.rel === '天气') { effTarget = '父母'; isWeather = true; }
+        else effTarget = sug.rel;
+      }
     }
 
     if (!target || (target === '__custom__' && !customKw)) {
@@ -564,8 +573,18 @@
     // （求财必得／行人即归／医药即愈／功名非祸即灾），没有事由就只能给全量书证。
     const res = C.analyze(pan, effTarget, customKw ? { topic: currentQuestion() } : undefined);
     if (customKw) {
-      res.bullets.unshift('自定义事由按关键词「' + customKw + '」推定为「' + (res.yongshen ? res.yongshen.type : effTarget) +
+      const yname = isWeather ? '父母（雨）' : (res.yongshen ? res.yongshen.type : effTarget);
+      res.bullets.unshift('自定义事由按关键词「' + customKw + '」推定为「' + yname +
         '」用神（规则链已按此取用；若卦理显见他亲更切，可在追问中说明理由）');
+    }
+    if (isWeather) {
+      // 占天时不论吉凶，只论现象成否：把口径写在页面首条，与 domainBlock 的【结论语义】呼应。
+      // 「事体难成」「诸占大凶」是规则链按通用吉凶口径写的，占天时只取其中的生克事实
+      // （谁克父母、用神旺静与否），不取吉凶措辞——不说这一句，模型会把「诸占大凶」读成
+      // 「不宜出行」，正是两份报告里「凶→无雨」误推的来源之一。
+      res.bullets.unshift('占天时：以父母为雨、子孙为晴、妻财为云雾、兄弟为风、官鬼为雷雨之源；' +
+        '断「有雨／阴云不雨／晴明」三档，不判吉凶。下方「事体难成」「诸占大凶」等为通用吉凶判语，' +
+        '本占类只取其生克事实，不取其吉凶之义');
     }
     lastBullets = res.bullets;
     lastAnalysis = res;
@@ -640,7 +659,7 @@
     // 用神由规则链先定，明确写进盘面文本：模型自取用神是断错整盘的首要来源。
     if (lastAnalysis && lastAnalysis.yongshen) {
       const y = lastAnalysis.yongshen, yl = y.line;
-      txt += '用神：' + y.type + ' ' + yl.lq + yl.zhi + '（' + LINE_NAMES[yl.pos] + '，' + yl.wx +
+      txt += '用神：' + y.type + ' ' + (yl.gan || '') + yl.zhi + '（' + LINE_NAMES[yl.pos] + '，' + yl.wx +
         '，' + y.wang + '，' + (yl.moving ? '发动' : '安静') + (yl.isFu ? '，伏神' : '') + '）\n';
     }
     // 卦型行：六冲/六合/游魂/归魂/相变——确定性陈述（与 ruleGuaXing 同一判定，非推断）
@@ -1894,6 +1913,21 @@
 
   $('#btnAI').onclick = async function () {
     if (!pan) return;
+    /* 裸盘面守卫（2026-10-30）：未定用神时，排盘文本不带「用神：」行、旺衰粗判、
+       应期窗口与引擎判定，模型只能自取用神——实测同一张盘 Gemini 断无雨、
+       DeepSeek 断有雨，分歧全部集中在这一层，与模型能力无关。
+       与其让用户拿到两份互相矛盾的断语，不如先要求选定所测之事。 */
+    if (!lastAnalysis || !lastAnalysis.yongshen) {
+      const box = $('#conclList');
+      if (box) {
+        box.insertAdjacentHTML('afterbegin',
+          '<li class="warn">⚠ 请先选定所测之事（问天气请选「天时 · 雨晴」）。' +
+          '未定用神时盘面不带旺衰粗判／应期窗口／引擎判定，模型会各自取用神，两份断语必然互相矛盾。</li>');
+      }
+      const sel = $('#useSelect');
+      if (sel) { try { sel.focus(); sel.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { sel.focus(); } }
+      return;
+    }
     const btn = $('#btnAI');
     btn.disabled = true; btn.textContent = '卦师推敲中…';
     // 整体 try/finally：renderCols()/colBody()/Promise.all() 任一在 try 之外抛错，
