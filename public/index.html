@@ -367,10 +367,10 @@
       <option value="兄弟">朋友 · 同事 · 竞争 · 破耗</option>
       <option value="天气">天时 · 雨晴 · 风雪 · 阴云</option>
       <option value="shi">自身 · 身体 · 运势</option>
-      <option value="__custom__">自定义（手动输入所测之事）…</option>
+      <option value="__custom__">自定义（不选类别，按描述推断用神）…</option>
     </select>
     <input type="text" class="use-select" id="useCustom" maxlength="60"
-      placeholder="例如：能否跳槽去新公司？孩子考研顺利吗？（旺衰粗判需选上方固定事类，此处交由 AI 细断）"
+      placeholder="补充一句具体问题（选填）：写明时间范围与细节，断语的刻度才准"
       hidden style="width:100%;box-sizing:border-box">
     <!-- 用神兜底：自定义事由的关键词推不出用神时出现，由用户直接指定（古法按事取用，指定比猜准） -->
     <select class="use-select" id="useYong" hidden style="width:100%;box-sizing:border-box;margin-top:8px">
@@ -438,14 +438,14 @@
 <script src="core/paipan.js?v=20261028d"></script>
 <script src="core/analyze.js?v=20261030a"></script>
 <script src="core/sensitive.js?v=20261028d"></script>
-<script src="core/domain-methods.js?v=20261031a"></script>
+<script src="core/domain-methods.js?v=20261031b"></script>
 <script src="core/question-shape.js?v=20261028d"></script>
 <script src="core/premise.js?v=20261028d"></script>
 <script src="core/fact-audit.js?v=20261028d"></script>
 <script src="core/coverage-audit.js?v=20261028d"></script>
 <script src="core/yingqi-window.js?v=20261028d"></script>
-<script src="core/share.js?v=20261028d"></script>
-<script src="app.js?v=20261031a"></script>
+<script src="core/share.js?v=20261031b"></script>
+<script src="app.js?v=20261031b"></script>
 <script src="bgm.js?v=20261028d"></script>
 </body>
 </html>

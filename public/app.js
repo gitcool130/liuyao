@@ -468,25 +468,76 @@
   }
 
   // ---------- 断卦 ----------
-  // 当前所测之事的文本（固定事类返回标签，自定义返回输入内容）
+  /* 事由分两层，勿再合成一个字符串（2026-10-31）：
+       userText()      用户亲手写的那句话，没有就空串；
+       questionText()  交给规则链的题面（premise 的时间刻度、analyze 的 topic）；
+       currentQuestion() 盘面文本里「所测：」一行，标签 + 原文，供人看。
+     为什么要分开：固定事类原先只往规则链送硬编码短标签（「求财·买卖」），
+     标签里没有「这个月」「明天」，premise 永远判不出明示刻度，只能按本类典型
+     刻度兜底；同时 analyze 的 topic 恒为 undefined，「用神克世」只能给四类书证
+     全摆一遍。天气与自定义能吃原文，固定五类不能，是不一致而非有意设计。
+     注意：有原文时**只送原文**，不与标签拼接——标签里的「买卖」「官司」「医药」
+     会抢先命中 premise 的 KEYWORD_PACKS，把用户真正问的事类的刻度顶掉。 */
+  function userText() {
+    const el = $('#useCustom');
+    return el ? String(el.value || '').trim() : '';
+  }
+  const FIXED_LABEL = {
+    '妻财': '求财·买卖', '官鬼': '功名·官司·疾病', '父母': '考试·文书',
+    '子孙': '子女·医药', '兄弟': '朋友·竞争', 'shi': '自身运势', '天气': '天时·雨晴'
+  };
+  // 类别的兜底标签：未填原文时用它，保证 premiseBlock 不因空串而整块消失（同旧行为）
+  function domainLabel() {
+    const t = $('#useSelect').value;
+    if (!t) return '';
+    if (t === '__custom__') return userText();
+    const M = (C.DOMAIN_METHODS && C.DOMAIN_METHODS[t]) || null;
+    const lab = (M && M.label) ? String(M.label).replace(/\s*·\s*/g, '·').trim() : '';
+    return lab || FIXED_LABEL[t] || t;
+  }
+  // 给规则链的题面：原文优先；无原文退回标签（保留旧的前提预检块）
+  function questionText() {
+    return userText() || domainLabel();
+  }
+  // 盘面文本「所测：」一行：标签说明所选用神，原文是他的实际问题
   function currentQuestion() {
     const t = $('#useSelect').value;
-    // 天气：地点与日期是断占雨的必需要素，用户填的原文优先；未填则给兜底标签，
-    // 否则 premiseBlock 拿到空串 → 判不出「明天」这个日级刻度，整块前提预检消失。
-    if (t === '天气') return ($('#useCustom').value || '').trim() || '天时·雨晴';
-    if (t === '__custom__') return ($('#useCustom').value || '').trim();
-    const useMap = { '妻财': '求财·买卖', '官鬼': '功名·官司·疾病', '父母': '考试·文书', '子孙': '子女·医药', '兄弟': '朋友·竞争', 'shi': '自身运势' };
-    return useMap[t] || '';
+    if (!t) return '';
+    if (t === '__custom__') return userText();
+    const lab = domainLabel(), u = userText();
+    return u ? lab + '｜' + u : lab;
+  }
+
+  /* 固定事类的补充提示：锚点取自该类规程自己声明的 premise.anchors
+     （domain-methods.js），不另起一套文案——规程要求「先区分收入、回款、
+     单笔交易」，提示就直接问这一句。示例各配一条，避免提示读起来像表单标签。 */
+  const SUPPLEMENT_EXAMPLE = {
+    '妻财': '这笔货款本月能到账吗',
+    '官鬼': '这次面试能进复试吗',
+    '父母': '论文答辩能不能过',
+    '子孙': '孩子的病几时能好',
+    '兄弟': '这单会不会被同行截走',
+    'shi': '这趟出差顺不顺利'
+  };
+  function supplementHint(t) {
+    const M = (C.DOMAIN_METHODS && C.DOMAIN_METHODS[t]) || null;
+    const anchors = (M && M.premise && M.premise.anchors) || [];
+    const ex = SUPPLEMENT_EXAMPLE[t] || '';
+    let s = anchors.length ? '可补：' + anchors.join('、') + '。' : '';
+    if (ex) s += '例：' + ex + '（选填；填了才能判出时间刻度与占类口径）';
+    else s += '可补充具体问题与时间范围（选填）';
+    return s;
   }
 
   // ---------- 敏感问题确定性分流（core/sensitive.js） ----------
   // 只对「用户自己写下的事由」分流：固定事类的下拉标签（如「功名·官司·疾病」）
   // 带「疾病」二字纯属分类说明，拿它去分流会让每个选官鬼的人都吃到就医提示。
+  // 2026-10-31 补充事由放开到全部事类后，判据由「选的是不是自定义」改成
+  // 「有没有写下原文」——「官鬼 + 孩子发烧不退」也是用户自述，同样要过边界。
   let lastSensitive = null;
   function sensitiveDecision() {
     if (!HAS_ABSORB) return { category: 'not_sensitive', action: 'pass', urgent: false, message: '' };
-    const isCustom = $('#useSelect').value === '__custom__';
-    return C.classifySensitive(isCustom ? currentQuestion() : '');
+    return C.classifySensitive(userText());
   }
   function renderSensitive() {
     const box = $('#senseBox'), btn = $('#btnAI');
@@ -515,9 +566,9 @@
   // 排盘文本入模，约束模型按条件决策树输出。
   function questionShapeDecision() {
     if (!HAS_SHAPE) return null;
-    // 只看用户自己写下的事由：固定事类的下拉标签不是多选一问法
-    const isCustom = $('#useSelect').value === '__custom__';
-    const q = isCustom ? currentQuestion() : '';
+    // 只看用户自己写下的事由：固定事类的下拉标签不是多选一问法。
+    // 判据同 sensitiveDecision：有没有原文，而不是选的是不是自定义。
+    const q = userText();
     if (!q) return null;
     try { return C.questionShape(q); } catch (e) { return null; }
   }
@@ -536,14 +587,17 @@
     const list = $('#conclList');
     const vBox = $('#verdictBox');
     const customInput = $('#useCustom');
-    // 天气类同样开放事由输入：地点与日期（「明天·新郑」）必须进盘面，
-    // 否则 premiseBlock 判不出日级刻度，模型只能给「近期」这种无法核对的应期。
-    const needInput = (target === '__custom__' || target === '天气');
+    /* 补充事由对所有事类开放（2026-10-31）：原先只给「自定义」与「天气」开,
+       其余五类拿不到题面原文，premise 只能按典型刻度兜底、topic 恒缺。
+       类别定用神，原文定题面——两件事本就分开，合在一个字符串里是 bug 来源。 */
+    const needInput = !!target;
     customInput.hidden = !needInput;
     if (needInput) {
-      customInput.placeholder = target === '天气'
+      customInput.placeholder = (target === '天气')
         ? '写明地点与日期，例如：明天新郑会下雨吗？（占雨以父母为用，断雨／阴云不雨／晴三档）'
-        : '例如：能否跳槽去新公司？孩子考研顺利吗？（旺衰粗判需选上方固定事类，此处交由 AI 细断）';
+        : (target === '__custom__')
+          ? '例如：能否跳槽去新公司？孩子考研顺利吗？（旺衰粗判需选上方固定事类，此处交由 AI 细断）'
+          : supplementHint(target);
     }
     renderSensitive();     // 每次改选事类都重算分流（含把拦截态解除）
     renderQuestionShape(); // 多选一问法检测同轮重算（改选固定事类即解除提示）
@@ -557,7 +611,7 @@
     if (isWeather) {
       effTarget = '父母';
     } else if (target === '__custom__') {
-      sug = (pan && typeof C.suggestYongshen === 'function') ? C.suggestYongshen(currentQuestion()) : null;
+      sug = (pan && typeof C.suggestYongshen === 'function') ? C.suggestYongshen(userText()) : null;
       if (sug) {
         customKw = sug.kw;
         // analyze() 只认六亲名：天气类落到父母，其余照旧
@@ -598,9 +652,13 @@
       renderYingqi(null);
       return;
     }
-    // 自定义事由带具体文本时，把事由一并交给规则链：「用神克世」的吉凶随占类翻转
-    // （求财必得／行人即归／医药即愈／功名非祸即灾），没有事由就只能给全量书证。
-    const res = C.analyze(pan, effTarget, (customKw || lastManualYong) ? { topic: currentQuestion() } : undefined);
+    /* 事由原文一并交给规则链：「用神克世」的吉凶随占类翻转（求财必得／行人即归／
+       医药即愈／功名非祸即灾），没有事由就只能给全量书证。
+       2026-10-31：此前只有自定义与手动指定用神才带 topic，固定五类恒为 undefined,
+       于是选了「妻财」也只能拿到四类书证全摆一遍。改为任何事类只要写下原文就带,
+       用神仍由所选类别定（不受原文影响），topic 只影响措辞分流。 */
+    const hasTopic = !!(customKw || lastManualYong || userText());
+    const res = C.analyze(pan, effTarget, hasTopic ? { topic: questionText() } : undefined);
     if (lastManualYong) {
       const yname = res.yongshen ? res.yongshen.type : lastManualYong;
       res.bullets.unshift('自定义事由未能由关键词推定用神，已按手动指定的「' + yname +
@@ -664,11 +722,15 @@
       '<div class="muted" style="margin-top:4px;font-size:12px">区间由出空／冲空／值日／出月／逢冲等盘面要素换算；' +
       '置信度只表示要素之间的自洽程度，不是命中概率。</div>';
   }
-  // 换事类即清空手动用神：否则「上次自定义选了父母」会带进下一个不相关的事由
+  // 换事类即清空手动用神：否则「上次自定义选了父母」会带进下一个不相关的事由。
+  // 补充事由同样要清：旧原文属于旧问题，留着会让「这笔货款何时到」去当官鬼的题面。
   $('#useSelect').onchange = function () {
     const ys = $('#useYong'); if (ys) ys.value = '';
+    const uc = $('#useCustom'); if (uc) uc.value = '';
     renderAnalysis();
-    if ($('#useCustom').hidden === false) $('#useCustom').focus();
+    // 只在「自定义」时抢焦点（那里必须输入才能定用神）；固定事类的补充是选填，
+    // 每选一类就弹软键盘会打断选类动作，移动端尤甚。
+    if ($('#useSelect').value === '__custom__' && uc && uc.hidden === false) uc.focus();
   };
   // 手动指定用神：选了立刻按新用神重跑规则链（不必再点别的）
   $('#useYong').onchange = function () { renderAnalysis(); };
@@ -766,7 +828,11 @@
       // 第三参：本次盘面是否带了引擎的日级节点窗口（有则预检块补一行「窗口是节点、不是应期」，
       // 否则模型要么违背窗口、要么把节点当日期，前端一致性校验会判它冲突）。
       const w = lastAnalysis && lastAnalysis.yingqiWindow;
-      const pb = C.premiseBlock(currentQuestion(), $('#useSelect').value,
+      /* 第二参是 domainKey（定领域包），第一参是题面原文（定时间刻度与关键词包）。
+         2026-10-31 前第一参传的是固定类的硬编码短标签，标签里没有「这个月」「明天」,
+         spanOf 永远判不出明示刻度，预检恒写「未见明示 → 按本类典型刻度兜底」。
+         现改为原文优先、无原文才退回标签——退回时行为与旧版完全一致。 */
+      const pb = C.premiseBlock(questionText(), $('#useSelect').value,
         { dayNodeWindow: !!(w && (w.dayLo || w.dayHi)) });
       if (pb) txt += '\n' + pb;
     }
@@ -774,7 +840,7 @@
       // 领域分析方法注入：只规定看盘次序与常见误判，不预设吉凶，也不得被当成古籍引文。
       // 手动指定用神时改用该六亲的专门规程，否则「项目能不能上线」只能拿到自定义通用次第。
       const domKey = (lastManualYong && $('#useSelect').value === '__custom__') ? lastManualYong : $('#useSelect').value;
-      const blk = C.domainBlock(domKey, currentQuestion());
+      const blk = C.domainBlock(domKey, userText());
       if (blk) txt += '\n' + blk;
       // 多选一问法处理指令：模型须按条件决策树输出，不得强制站队——
       // 实测此类问法两模型各执一象，断出完全相反的建议。
@@ -818,7 +884,9 @@
       time: selectedDate,
       vals: records.map(function (r) { return r.val; }),
       use: useVal,
-      question: useVal === '__custom__' ? currentQuestion() : ''
+      // 补充事由对所有事类都成立（2026-10-31）：固定类写了「这笔货款本月能到吗」
+      // 也必须随链接走，否则收链方看到的只是「求财·买卖」四个字。
+      question: userText()
     });
   }
   $('#btnShare').onclick = function () {
@@ -2134,7 +2202,9 @@
           let yqCheck = null, pj = null;
           if (HAS_PREMISE) {
             try {
-              pj = C.premise.judge(currentQuestion(), $('#useSelect').value);
+              // 与 premiseBlock 取同一题面：否则预检按标签判月级、校验按原文判日级，
+              // 同一份断语会被自己判成冲突。
+              pj = C.premise.judge(questionText(), $('#useSelect').value);
               yqCheck = C.premise.checkYingqi(cc.yingqi, pj);
               cc.spanUnit = pj.effUnit;
               cc.premiseJudge = pj;
@@ -2238,7 +2308,7 @@
         const prev = concl[active[0]];
         if (prev && prev.yingqi) {
           try {
-            const hint = C.premise.followUpHint(prev, currentQuestion() + ' ' + q);
+            const hint = C.premise.followUpHint(prev, questionText() + ' ' + q);
             if (hint) followUpNote = '【同盘追问 · 前提变动】' + hint;
           } catch (e) { /* 预检失败不影响追问主流程 */ }
         }
@@ -2306,12 +2376,14 @@
     const target = $('#useSelect').value;
     let effTarget = target, customKw = '';
     if (target === '__custom__') {
-      const sug = (typeof C.suggestYongshen === 'function') ? C.suggestYongshen(currentQuestion()) : null;
+      const sug = (typeof C.suggestYongshen === 'function') ? C.suggestYongshen(userText()) : null;
       if (sug) { effTarget = sug.rel; customKw = sug.kw; }
     }
     if (!target || (target === '__custom__' && !customKw)) return null;
     try {
-      return C.analyze(pan, effTarget, customKw ? { topic: currentQuestion() } : undefined);
+      // 与 renderAnalysis 同口径：写了原文就带 topic，否则保存的判据与页面所见会不同源
+      const hasTopic = !!(customKw || userText());
+      return C.analyze(pan, effTarget, hasTopic ? { topic: questionText() } : undefined);
     } catch (e) { return null; }
   }
 
@@ -2343,9 +2415,9 @@
       id: castId,
       datetime: fmtDT(selectedDate),
       pillars: pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时',
-      question: $('#useSelect').value === '__custom__'
-        ? currentQuestion()
-        : ($('#useSelect').value ? $('#useSelect option:checked').textContent : ''),
+      // 卦例库统一存「标签｜原文」：原先固定类存的是整条选项文案
+      // （「求财 · 买卖 · 财物 · 妻（男测婚姻）」），既长又丢用户原话。
+      question: currentQuestion(),
       hex: pan.benName + (pan.hasBian ? ' 之 ' + pan.bianName : '（静卦）'),
       tosses: records,
       panText: buildPanText(true),
@@ -2445,9 +2517,8 @@
     const w = a && a.yingqiWindow;
     const mv = [];
     (pan.moving || []).forEach(function (on, i) { if (on) mv.push((i + 1) + '爻'); });
-    const askText = $('#useSelect').value === '__custom__'
-      ? currentQuestion()
-      : ($('#useSelect').value ? $('#useSelect option:checked').textContent : '');
+    // 对账记录同理存「标签｜原文」，与卦例库保持一致
+    const askText = currentQuestion();
     const spec = {
       ts: Date.now(),
       state: voteStateText(a),
@@ -2912,8 +2983,10 @@
     if (d.use) {
       const sel = $('#useSelect');
       sel.value = (d.use === '__custom__' && !d.question) ? '' : d.use;
+      // 补充事由不限自定义（2026-10-31）：固定事类带回来的原文也要回填，
+      // 否则「求财·买卖｜这笔货款本月能到吗」在收链一方只剩前半截。
       const uc = $('#useCustom');
-      if (d.use === '__custom__' && d.question && uc) { uc.value = d.question; uc.hidden = false; }
+      if (d.question && uc) { uc.value = d.question; uc.hidden = false; }
     }
     renderTime(); renderCoins(); renderTossHint(); renderStack();
     computePan();

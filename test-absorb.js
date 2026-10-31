@@ -87,6 +87,13 @@ ok('domainBlock 明示非古籍引文', C.domainBlock('妻财').indexOf('非古�
 ok('domainBlock 明示不预设吉凶', C.domainBlock('妻财').indexOf('不预设吉凶') >= 0);
 eq('未收录取值→空串（不炸）', C.domainBlock('不存在的键'), '');
 eq('自定义取值带入原文', C.domainBlock('__custom__', '能否跳槽').indexOf('能否跳槽') >= 0, true);
+/* 固定事类也必须带原文（2026-10-31）：此漏洞原先只修了自定义分支，
+   「选妻财 + 这笔货款本月能到吗」进模型时只剩标签，后半句蒸发。 */
+eq('固定事类取值带入原文', C.domainBlock('妻财', '这笔货款本月能到吗').indexOf('这笔货款本月能到吗') >= 0, true);
+ok('固定事类无原文时不出现空竖线', C.domainBlock('妻财', '').indexOf('｜') < 0);
+ok('固定事类原文排在标签之后（先说明用神再给题面）',
+  C.domainBlock('妻财', '这笔货款本月能到吗').indexOf('求财') < C.domainBlock('妻财', '这笔货款本月能到吗').indexOf('这笔货款'));
+eq('自定义未填事由给出明示兜底', C.domainBlock('__custom__', '').indexOf('未填事由') >= 0, true);
 eq('意图→用神：求财', C.INTENT_YONGSHEN['求财'], '妻财');
 eq('意图→用神：考试', C.INTENT_YONGSHEN['考试'], '父母');
 

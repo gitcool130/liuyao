@@ -137,5 +137,23 @@ ok('share.js 不含 eval / Function 构造',
   src.indexOf('eval(') < 0 && src.indexOf('new Function') < 0);
 ok('share.js 只解码为字符串，不写入 DOM', src.indexOf('innerHTML') < 0 && src.indexOf('document.') < 0);
 
+// ---------- 9. 事类编解码全覆盖：漏一项等于分享后丢用神 ----------
+// 天时补于 2026-10-30 却漏登记 USE_TO_CODE，分享码里落成 '-'，还原后所选事类丢失。
+// 这里直接拿 index.html 的 #useSelect 选项去撞编码表：新增事类忘了同步，此处即红。
+const selM = fs.readFileSync('public/index.html', 'utf8')
+  .match(/<select[^>]*id="useSelect"[^>]*>([\s\S]*?)<\/select>/);
+ok('index.html 中存在 #useSelect', !!selM);
+const useVals = [];
+if (selM) {
+  selM[1].replace(/<option value="([^"]+)"/g, function (m, v) { if (v) useVals.push(v); return m; });
+}
+ok('界面事类选项已解析（' + useVals.length + ' 项）', useVals.length >= 8);
+useVals.forEach(function (u) {
+  const c2 = C.encodeCast({ time: DT, vals: VALS, use: u, question: '明天新郑会下雨吗' });
+  ok('事类「' + u + '」可编码', !!c2);
+  eq('事类「' + u + '」往返一致', C.decodeCast(c2).use, u);
+  eq('事类「' + u + '」原话随链接往返', C.decodeCast(c2).question, '明天新郑会下雨吗');
+});
+
 console.log('\n分享链接自检：PASS ' + pass + '　FAIL ' + fail);
 process.exit(fail ? 1 : 0);

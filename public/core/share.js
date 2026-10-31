@@ -29,7 +29,10 @@
   const FROM_CODE = { a: 1, b: 0, c: 9, d: 6 };
   const USE_TO_CODE = {
     '妻财': 'c', '官鬼': 'g', '父母': 'f', '子孙': 'z', '兄弟': 'x',
-    'shi': 's', '__custom__': 'u'
+    'shi': 's', '__custom__': 'u',
+    // 天时补于 2026-10-30，此前漏在此表：分享码里落成 '-'，还原后所选事类丢失。
+    // 编解码表必须与 index.html #useSelect 的 value 同步，新增事类时勿忘此处。
+    '天气': 't'
   };
   const CODE_TO_USE = (function () {
     const m = {};
