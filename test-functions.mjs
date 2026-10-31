@@ -1632,9 +1632,9 @@ function mkAI(overrides) {
   };
   return { ai: { run: run }, calls: calls };
 }
-const voteCall = function (body, env) {
+const voteCall = function (body, env, headers) {
   return votePost({
-    request: new Request('https://x/api/vote', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    request: new Request('https://x/api/vote', { method: 'POST', headers: Object.assign({ 'content-type': 'application/json' }, headers || {}), body: JSON.stringify(body) }),
     env: env
   });
 };
@@ -1715,6 +1715,12 @@ eq('未绑定 AI → 503', (await voteCall({ state: '盘面' }, {})).status, 503
 eq('缺 state → 400', (await voteCall({ ask: '问点啥' }, { AI: mkAI().ai })).status, 400);
 eq('非对象 body → 400', (await voteCall([], { AI: mkAI().ai })).status, 400);
 eq('GET 不允许 → 405', voteGet().status, 405);
+
+// 口令闸：与 interpret/records 同源，设 ACCESS_CODE 后无口令应被拦（独立 IP 避免计数干扰）
+eq('vote 设 ACCESS_CODE 后无口令 → 401',
+  (await voteCall({ state: '盘面' }, { AI: mkAI().ai, ACCESS_CODE: 'a' }, { 'CF-Connecting-IP': '198.51.100.20' })).status, 401);
+eq('vote 带正确口令 → 200',
+  (await voteCall({ state: '盘面' }, { AI: mkAI().ai, ACCESS_CODE: 'a' }, { 'CF-Connecting-IP': '198.51.100.20', 'X-Access-Code': 'a' })).status, 200);
 
 globalThis.fetch = origFetch;
 if (fail > 0) process.exit(1);

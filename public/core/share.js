@@ -139,6 +139,11 @@
     const wall = { y: date.y, m: date.m, d: date.d, h: Math.floor(rem / 60), min: rem % 60 };
     if (wall.y < YEAR_MIN || wall.y > YEAR_MAX) return bad('占时超出 1900–2100');
     if (wall.h > 23 || wall.min > 59 || wall.m > 12 || wall.d > 31) return bad('占时分量非法');
+    // 回验月内日数合法性：2 月 30 日、4 月 31 日等会被 Date 归一化进位。
+    // 虽然解码路径经 jdnToDate 反解本已合法，但 wallOf() 读 __wall 锚点时不做校验，
+    // 若未来 __wall 由别处注入非法分量，月柱(m)与日柱(jdn 进位)会不自洽（审计 P2-1）。
+    const _chk = new Date(wall.y, wall.m - 1, wall.d);
+    if (_chk.getMonth() !== wall.m - 1 || _chk.getDate() !== wall.d) return bad('占时分量非法');
 
     const vals = p[2].split('').map(function (c) { return FROM_CODE[c]; });
     for (let i = 0; i < 6; i++) {

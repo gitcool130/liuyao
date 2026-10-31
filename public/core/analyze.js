@@ -992,7 +992,7 @@
       if (st.moving && st.bianKind === '回生') reasons.push('动化回头生');
       if (st.moving && st.bianKind === '进神') reasons.push('动化进神');
       if (st.moving && STRONG.indexOf(st.grade) >= 0 && st.kong) reasons.push('旺动临空化空');
-      if (st.shengwangYuRi) reasons.push('长生帝旺与日辰');
+      if (st.shengwangYuRi) reasons.push('长生帝旺于日辰');
       const chouDong = yjc.choushen.some(function (x) { return x.line && x.line.moving; });
       if (chouDong) reasons.push('与仇神同动');
       if (reasons.length) {

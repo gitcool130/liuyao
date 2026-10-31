@@ -14,7 +14,7 @@
  *        basis 是**模型自述的规则名**（已剥书名号），一律未经原典核验 —— 前端据此渲染「依据层」，
  *        不得当作可回溯的古籍引文；可回溯的引文只在 core/analyze.js 的 basis 字段里。
  */
-import { json } from './_lib.js';
+import { json, requireCode as requireCodeGate } from './_lib.js';
 
 const MAX_STATE = 1500;
 const MAX_ASK = 200;
@@ -200,6 +200,10 @@ export async function onRequestPost(context) {
   if (!env || !env.AI) {
     return json({ error: 'NO_AI_BINDING', message: '未绑定 Workers AI（wrangler.toml 加 [ai] binding = "AI"，或在 Pages 设置里添加 AI 绑定）' }, 503);
   }
+  // 口令闸：与 interpret/records 同源（_lib.js requireCode）。vote 虽走 Workers AI 免费额度，
+  // 但 README 承诺「所有接口都需口令」，故设 ACCESS_CODE 后此处同样拦截（审计 P1-2）。
+  const denied = await requireCodeGate(request, env.ACCESS_CODE, '需要访问口令');
+  if (denied) return denied;
   const len = Number(request.headers.get('content-length') || 0);
   if (len > 32 * 1024) return json({ error: 'TOO_LARGE' }, 413);
 
