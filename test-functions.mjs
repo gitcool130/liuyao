@@ -28,6 +28,7 @@ import { onRequestPost as votePost, onRequestGet as voteGet, _internals as voteI
 const _vCleanBasis = voteInternals.cleanBasis;
 import { decodeCast as facadeDecode } from './functions/api/_share.js';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 let pass = 0, fail = 0;
 // 服务端每次收流会打一行 {"ev":"stream_end",…} 采样日志（2026-10-21 加，用于区分
@@ -729,6 +730,61 @@ eq('长草稿仍会补发（不为空响应）', sseText(evDraft).indexOf('我�
 eq('长草稿无结论行 → 触发 INCOMPLETE_STRUCTURE',
   evDraft.some(function (e) { return e.warn === 'INCOMPLETE_STRUCTURE'; }), true);
 globalThis.fetch = origFetch;
+globalThis.fetch = origFetch;
+
+// ---------- #25 fact-audit 端到端回归探针（2026-10-13 草稿污染焊死） ----------
+// 事故复盘：思考模型把 reasoning_content（草稿）与 content（正式稿）分字段返回，
+// 旧版 pipeMergedSSE 把两者一并拼接下传。草稿里的临时错判（「四爻为妻财」）与
+// 正式稿（「三爻为妻财」）自相矛盾，fact-audit 对全文字面匹配 → 撞出「六亲」假阳性，
+// app.js 收到未 accepted 结果后把冲突回灌模型整篇重写。修复后正文只透传 content。
+// 本组把「草稿污染 → fact-audit 假阳性」这条完整因果链端到端锁死：
+//   正链路：mock 思考模型分字段流 → interpret 透传 → 拼接正文 → fact-audit 零假阳性；
+//   反链路：手工还原旧版「草稿+正式稿拼接」→ fact-audit 必撞六亲冲突（证探针有咬合力）。
+const nodeRequire = createRequire(import.meta.url);
+const CORE = nodeRequire('./core.js');
+// 天地否：世在三爻、三爻妻财卯木、四爻官鬼午火——与事故「四爻妻财↔三爻妻财」同构
+const faPan = CORE.paipan([0, 0, 0, 1, 1, 1], new Date(2024, 2, 5, 12, 0));
+eq('探针前置：天地否世在三爻', faPan.shi, 2);
+eq('探针前置：天地否三爻为妻财', faPan.lines[2].lq, '妻财');
+eq('探针前置：天地否四爻为官鬼（草稿写妻财即错）', faPan.lines[3].lq, '官鬼');
+
+// 正链路：草稿「四爻为妻财」+ 正式稿「三爻为妻财」分字段返回
+globalThis.fetch = function () {
+  const enc = new TextEncoder();
+  const rows = [
+    { choices: [{ delta: { reasoning_content: '先看世爻，四爻为妻财辰土，取妻财为用。' } }] },
+    { choices: [{ delta: { content: '三爻为妻财卯木，' } }] },
+    { choices: [{ delta: { reasoning_content: '不对，世在三爻。' } }] },
+    { choices: [{ delta: { content: '用神妻财得月建生扶。' } }] }
+  ];
+  const body = new ReadableStream({
+    start: function (c) {
+      rows.forEach(function (r) { c.enqueue(enc.encode('data: ' + JSON.stringify(r) + '\n')); });
+      c.enqueue(enc.encode('data: [DONE]\n'));
+      c.close();
+    }
+  });
+  return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+};
+const rFaProbe = await interpretPost({
+  request: new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panText: '占测试', provider: 'gpt', model: 'gpt-6-luna' })
+  }),
+  env: ENV_GPT
+});
+const evFaProbe = await readSSEEvents(rFaProbe);
+const faText = sseText(evFaProbe);
+eq('正链路：草稿「四爻为妻财」不入正文', faText.indexOf('四爻为妻财') < 0, true);
+eq('正链路：正式稿「三爻为妻财」保留', faText.indexOf('三爻为妻财') >= 0, true);
+eq('正链路：正文经 fact-audit 零假阳性（核心）', CORE.auditFactClaims(faText, faPan).accepted, true);
+
+// 反链路：手工还原旧版「草稿+正式稿拼接」→ fact-audit 必撞六亲冲突
+const faPolluted = '四爻为妻财辰土，取妻财为用。三爻为妻财卯木，用神妻财得月建生扶。';
+const faPollutedAudit = CORE.auditFactClaims(faPolluted, faPan);
+eq('反链路：旧版污染正文被 fact-audit 识别为冲突', faPollutedAudit.accepted, false);
+eq('反链路：冲突类型为六亲（四爻妻财≠官鬼）', faPollutedAudit.errors.some(function (e) { return e.type === '六亲' && e.at === '四爻'; }), true);
 globalThis.fetch = origFetch;
 
 // ---------- #22 Google 原生流式（alt=sse）与 SSE 心跳（2026-10-17） ----------
