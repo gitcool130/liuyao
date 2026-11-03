@@ -23,6 +23,20 @@ function eq(name, got, want) {
   else { fail++; console.log('  ✗ ' + name + ' got=' + JSON.stringify(got) + ' want=' + JSON.stringify(want)); }
 }
 
+/* 统一「选定所测之事」（2026-11-03 补）
+ * app.js:2106 的裸盘面守卫（2026-10-30 上线）规定：未定用神时点「开始断卦」只弹
+ * 提示、**不发请求**——因为裸盘面下模型各取用神，两份断语必然互相矛盾。
+ * 而 B 组各段此前假设「摇完六爻即可断卦」，守卫上线后 B 组全线变红
+ * （实测 captured.length===0，随后 captured[0] 崩在 undefined）：
+ * 这是**测试落后于产品行为**，不是代码缺陷。
+ * 此处统一补上前置；已显式选过的段不覆盖，保持原有语义。 */
+async function pickUse(page) {
+  const cur = await page.$eval('#useSelect', e => e.value).catch(() => '');
+  if (cur) return;
+  await page.selectOption('#useSelect', '妻财');
+  await page.waitForTimeout(120);
+}
+
 // 浏览器通道回退：本地 Windows 直接用系统 Edge（免下载浏览器）；
 // CI（ubuntu-latest）通常无 msedge，则依次尝试 chrome，最后回落到 Playwright 自带 chromium
 // （CI 步骤里已 `npx playwright-core install chromium`）。避免「本地能跑、CI 跑不了」的割裂。
@@ -100,6 +114,7 @@ async function launchBrowser() {
     console.log('B. 追问历史');
     for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.waitForTimeout(60); await page.click('#btnConfirm'); await page.waitForTimeout(60); }
     await page.waitForTimeout(200); // 六爻落定后再点 AI，避免状态机未收敛
+    await pickUse(page);   // 2026-11-03：裸盘面守卫要求先定用神（见 pickUse 注释）
     await page.click('#btnAI');
     await page.waitForTimeout(800);
     eq('首次断卦请求已发出', captured.length >= 1, true);
@@ -135,6 +150,7 @@ async function launchBrowser() {
     // 必须先选事类：不选则规则链不取用神，lastAnalysis 为 null，无 trend 可注入
     await page.selectOption('#useSelect', '妻财');
     await page.waitForTimeout(300);
+    await pickUse(page);   // 2026-11-03：裸盘面守卫要求先定用神（见 pickUse 注释）
     await page.click('#btnAI');
     await page.waitForTimeout(800);
 
@@ -193,6 +209,7 @@ async function launchBrowser() {
     await page.click('.mchip[data-m="deepseek-flash"]');
     await page.waitForTimeout(220);
     eq('只选 3.6 一列（补发测试前提）', await page.$$eval('.mchip.on', els => els.map(e => e.dataset.m)), ['gemini-3.6-flash']);
+    await pickUse(page);   // 2026-11-03：裸盘面守卫要求先定用神（见 pickUse 注释）
     await page.click('#btnAI');
     await page.waitForTimeout(2500);
 
@@ -238,6 +255,7 @@ async function launchBrowser() {
     await page.waitForTimeout(80);
     await page.click('.mchip[data-m="deepseek-flash"]');
     await page.waitForTimeout(160);
+    await pickUse(page);   // 2026-11-03：裸盘面守卫要求先定用神（见 pickUse 注释）
     await page.click('#btnAI');
     await page.waitForFunction(() => document.body.innerText.indexOf('补发失败') >= 0, null, { timeout: 12000 });
     const shownB4 = await page.evaluate(() => document.body.innerText);
@@ -278,6 +296,7 @@ async function launchBrowser() {
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#btnRandom', { timeout: 15000 });
     for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.waitForTimeout(60); await page.click('#btnConfirm'); await page.waitForTimeout(60); }
+    await pickUse(page);   // 2026-11-03：裸盘面守卫要求先定用神（见 pickUse 注释）
     await page.click('#btnAI');
     await page.waitForFunction(() => document.body.innerText.indexOf('结论：吉') >= 0, null, { timeout: 8000 });
     await page.fill('#chatInput', '这件事还要等多久？');
@@ -322,6 +341,7 @@ async function launchBrowser() {
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.mchip', { state: 'attached', timeout: 15000 });
     for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.waitForTimeout(60); await page.click('#btnConfirm'); await page.waitForTimeout(60); }
+    await pickUse(page);   // 2026-11-03：裸盘面守卫要求先定用神（见 pickUse 注释）
     await page.click('#btnAI');
     await page.waitForFunction(() => document.body.innerText.indexOf('动态清单正式回答') >= 0, null, { timeout: 10000 });
     eq('已下架模型不会从 localStorage 复活', calls.some(c => c.model === 'gone-model'), false);
