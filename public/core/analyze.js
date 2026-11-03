@@ -89,6 +89,11 @@
       return { primary: found[0], all: found, source: '本卦', note: '用神' + target + (found[0].gan || '') + found[0].zhi + '（' + LINE_NAMES[found[0].pos] + '）' };
     }
     // 两现取舍（古法次序）：发动者 → 临世应者 → 旺者 → 在前之爻
+    // P2-CORE-4（2026-11-03，待验证·只注不改）：两现**皆动**并列时，find(moving) 取**初现**，
+    // 不再比旺衰/空破（进临世应、月令旺衰各维度亦不比较）。《增删卜易·两现章第三十二》
+    // 对「两现皆动」如何取舍无明文（野鹤原文只论「舍其不空而用旬空」一解，且以空破为轴，
+    // 非皆动场景）。当前取初现属工程约定——**不是缺陷**，外部审计勿按缺陷重报；
+    // 若将来要改（如改比旺衰），须先补古籍依据并同步 test-rules §11·六。
     let pick = found.find(function (l) { return l.moving; });
     let how = '发动者';
     if (!pick) { pick = found.find(function (l) { return l.shi || l.ying; }); how = '临世应者'; }
@@ -219,6 +224,18 @@
     const nm = nameOf(L, target);
     const kong = pil.kong.indexOf(L.zhiIdx) >= 0;
     if (L.moving) {
+      // 动爻逢冲：值旬空则「冲空则实」——《卜筮正宗》「冲空则实」，语料
+      // zsby-00791/03474 均为冲空填实而非冲散。旧版恒判冲散，与同盘 ruleXunKong
+      // 「动不为空，出空之日即有用」输出两句互斥结论（一次断卦自相矛盾），
+      // 且「日冲:冲散」入 harms 让 trend 由吉降平（中-2，2026-11-03 审计订正）。
+      if (kong) {
+        js.push({
+          tag: '日冲', rule: '冲实',
+          text: nm + '发动而值旬空，又被日辰' + ZHI[pil.dayZhi] + '冲，冲空则实——出空之日即有用。',
+          basis: '《卜筮正宗》：冲空则实；旬空之爻逢日冲，出空之日有用'
+        });
+        return { kind: 'chongshi', judgments: js };
+      }
       js.push({ tag: '日冲', rule: '冲散', text: nm + '发动而被日辰' + ZHI[pil.dayZhi] + '冲，动逢冲为冲散，事体恐有反复。', basis: '动而逢日冲则散' });
       return { kind: 'chongsan', judgments: js };
     }
@@ -371,8 +388,11 @@
       if (!M.moving) return;
       if (M.pos === L.pos) return; // 用神自身动变由 ruleDongBian 判。
       // 用神为伏神时 L.pos 承自飞神（makeFu 用 Object.assign 保留 pos），故 M.pos === L.pos
-      // 即「飞神自身发动」——此路径被跳过：飞伏生克（含飞神及其变爻对伏神的作用）统一由
-      // ruleFu 处理，此处不重复判，也不单独检查飞神化出之变爻。属可接受边界，非缺陷。
+      // 即「飞神自身发动」——此路径被跳过：飞伏生克由 ruleFu（规则 10）处理，此处不重复判。
+      // P2-CORE-6（2026-11-03）：订正旧注——旧注称「飞神及其变爻对伏神的作用统一由
+      // ruleFu 处理」与实现不符：ruleFu 只按飞神**本支**判飞来生克／同气／日冲飞神，
+      // **飞神化出之变爻对伏神的作用**两处都未实现（本函数不判、ruleFu 也不判）。
+      // 属已登记未实现点（非缺陷）；如将来补做，须连 tests/guji 飞伏用例一起评估。
       const rel = relation5(L.wx, M.wx);
       const who = LINE_NAMES[M.pos] + M.lq + M.zhi + M.wx;
       if (rel === '得生') {
@@ -447,7 +467,11 @@
       if (target === '妻财') return '用神（妻财）克世爻，占求财者「财爻克世者必得」——财来就我，主可得，惟得之须费些心力。';
       return general;
     }
-    if (/行人|寻人|走失|失联|外出|归来|回来|回程|返程|到家/.test(t)) return '用神克世爻，占行人者「用神克世者即归」——主其人自回。';
+    // P2-CORE-3（2026-11-03）：「外出」在行人分支会误伤「外出打工/求职/务工/上学」等
+    // 非归返语义（人不在"归"的语境里，旧版对这类题也输出「用神克世者即归」）——
+    // 对「外出」加负向条件排除上述非归返搭配；「外出」「外出何时归」等真行人语义保留
+    // （句中另有「回来/归」等词时不受影响，仍走本分支）。
+    if (/行人|寻人|走失|失联|外出(?!打工|求职|务工|上学|公干|办事)|归来|回来|回程|返程|到家/.test(t)) return '用神克世爻，占行人者「用神克世者即归」——主其人自回。';
     if (/功名|求官|升迁|仕途|科举|应试|考试|录取/.test(t)) {
       if (target === '官鬼') return '用神（官鬼）克世爻，占功名者「官鬼克世，非祸即灾」，主求名反受其累。';
       return general;
@@ -539,6 +563,20 @@
       // 匹配，变爻地支永远命中不了，三合局退化成「只可能由本卦动爻凑成」。
       src.push({ zhiIdx: ZHI.indexOf(l.bian.zhi), from: '变爻' + l.bian.lq + l.bian.zhi, owner: 'b' + l.pos });
     });
+    // 中-3（2026-11-03）：候选池纳入月建与日辰。《增删卜易》三处明文日月成局：
+    //   zsby-01525「虚一待用，果升于卯月」；zsby-03620「日月世爻其成三合」；
+    //   zsby-02355（月日与动爻成局）。旧版候选池只有本卦动爻+变爻，月建/日辰
+    //   永不成局——随机盘约 14.8% 存在可成局机会而引擎零输出。
+    // owner 用单例 'm'/'d'，月日同支时两 source 同 zhiIdx 但 owner 不同，
+    // used 去重按 owner 走，不会同支双算。
+    if (pan.pillars) {
+      if (typeof pan.pillars.monthZhi === 'number') {
+        src.push({ zhiIdx: pan.pillars.monthZhi, from: '月建' + ZHI[pan.pillars.monthZhi], owner: 'm' });
+      }
+      if (typeof pan.pillars.dayZhi === 'number') {
+        src.push({ zhiIdx: pan.pillars.dayZhi, from: '日辰' + ZHI[pan.pillars.dayZhi], owner: 'd' });
+      }
+    }
     if (src.length < 3) return js;
     // 用神：仅供吉凶映射。取不到（或调用方未传 target）则只陈述成局事实，不下助伤之断。
     const pickS = target ? pickYongshen(pan, target) : null;
@@ -552,21 +590,32 @@
     };
     LY.SANHE.forEach(function (sh) {
       const used = [], detail = [];
-      const hit = sh.zhis.every(function (z) {
+      // 中-3（2026-11-03）：every（三支全齐）→ 命中两支即成局（虚一待用）。
+      // 《增删卜易》zsby-01525「虚一待用，果升于卯月」——两支已现、第三支待值，
+      // 是成局的中间态而非不成局；缺两支（只临一支）仍不成局。
+      let got = 0;
+      sh.zhis.forEach(function (z) {
         const s = src.filter(function (x) { return x.zhiIdx === z && used.indexOf(x.owner) < 0; })[0];
-        if (!s) return false;
-        used.push(s.owner);
-        detail.push(ZHI[z] + '（' + s.from + '）');
-        return true;
+        if (s) {
+          used.push(s.owner);
+          detail.push(ZHI[z] + '（' + s.from + '）');
+          got++;
+        } else {
+          detail.push(ZHI[z] + '（待用）');
+        }
       });
-      if (!hit) return;
+      if (got < 2) return; // 至多临一支，不成局
+      const partial = got === 2;
       const byBian = detail.some(function (d) { return d.indexOf('（变爻') >= 0; });
       const rel = Y ? (REL_SANHE[relation5(Y.wx, sh.wx)] || { relation: '', verdict: '' }) : { relation: '', verdict: '' };
       js.push({
         tag: '三合', rule: sh.zhis.map(function (z) { return ZHI[z]; }).join('') + '三合' + sh.wx + '局',
         relation: rel.relation,
-        text: detail.join('、') + '成三合' + sh.wx + '局，党同气而势成。' + (byBian ? '（含动爻化出之支）' : '') + rel.verdict,
+        text: detail.join('、') + (partial
+          ? '二者齐备、一支待用，为虚一待用之三合' + sh.wx + '局，待第三支值日引动。'
+          : '成三合' + sh.wx + '局，党同气而势成。') + (byBian ? '（含动爻化出之支）' : '') + rel.verdict,
         basis: '三合成局，其力专；动爻与其化出之爻同参成局' +
+          (partial ? '；虚一待用依《增删卜易》「虚一待用，果升于卯月」（两支已现，第三支待值时引动）' : '') +
           (Y ? '。局之吉凶依《增删卜易·六合章》「用神旺则无不为吉」，局生用神为助、局克用神为伤' : '')
       });
     });
@@ -706,6 +755,11 @@
     const dongSheng = pan.lines.some(function (M) { return M.moving && sheng(M.wx, L.wx); });
     const strong = STRONG.indexOf(grade) >= 0 || daySupports || dongSheng;
     // 墓支逢冲（日辰/月建/动爻）则论生不论墓
+    // P2-CORE-5（2026-11-03，待验证·只注不改）：觉子曰「金爻虽墓于丑土，若得未土冲动，
+    // 或**卦中土多生金**，论生不论墓也」——本实现只落地「逢冲」一支，且开盆集合为
+    // [日支, 月支, 动爻**本支**]；「卦中土多生金」一支（数量维度）未实现，
+    // 动爻**变爻**亦未入开盆集合。均属已登记未实现点，非缺陷；外部审计勿按缺陷重报。
+    // 如将来补做，须连 tests/guji 生旺墓绝用例一起评估（「土多」的计数门槛古书无数）。
     const muOpeners = [pil.dayZhi, pil.monthZhi].concat(
       pan.lines.filter(function (M) { return M.moving; }).map(function (M) { return M.zhiIdx; }));
     const muOpened = function (muZhi) {
@@ -1003,7 +1057,10 @@
         });
       } else {
         const bad = [];
-        if (STRONG.indexOf(st.grade) < 0 && !st.moving) bad.push('休囚不动');
+        // P2-CORE-1（2026-11-03）：删去不可达分支 `if (休囚 && !st.moving) bad.push('休囚不动')`——
+        // 本分支开头 :1017 `if (!c.line || !c.line.moving) return;` 已保证恒为动爻，
+        // 故 `!st.moving` 永为 false，该条死代码（原 :1043）。
+        // 注意：元神侧同名分支（元神无力清单 :992）**可达**（静元神亦判有力/无力），勿误删。
         if (st.moving && STRONG.indexOf(st.grade) < 0) bad.push('动而休囚');
         if (st.kong || st.po) bad.push('临空破');
         if (st.muYuRiYue) bad.push('入三墓');
@@ -1067,7 +1124,10 @@
       if (['月建:临月建', '月建:月建同气', '月建:月建生扶', '日辰:临日辰', '日辰:日辰生扶', '日辰:日辰比和',
         '动变:化回头生', '动变:化进神', '日冲:暗动', '日合:合起', '伏神:飞来生伏', '伏神:飞伏同气', '伏神:日冲飞神',
         '动爻:动爻生用', '动爻:变爻生用'].indexOf(t) >= 0) supports.push(t);
-      if (['月建:月建克伤', '月破:真月破', '日辰:日辰克伤', '日冲:日破', '日冲:冲散',
+      // 「日冲:冲散」不纳入 harms：语料 zsby-0553 注记「余从来不言散……不据以改
+      // trend」——冲散只作 bullet 陈述（与刑害/世爻关系同范式），trend 汇聚不含它。
+      // 旧版入表：2 万随机盘 85 例 trend 因「冲散」迁移，与注记口径相悖（中-1）。
+      if (['月建:月建克伤', '月破:真月破', '日辰:日辰克伤', '日冲:日破',
         '旬空:真空', '动变:化回头克', '动变:化退神', '日合:合绊', '伏神:飞来克伏',
         '动爻:动爻克用', '动爻:变爻克用'].indexOf(t) >= 0) harms.push(t);
     });
@@ -1333,7 +1393,11 @@
         pos: i, kong: kong, yuePo: yuePo, riChong: riChong, grade: grade,
         text: LINE_NAMES[i] + ' ' + L.lq + (L.gan || '') + L.zhi +
           (L.shi ? '（世）' : '') + (L.ying ? '（应）' : '') +
-          (L.isFu ? '' : '') + '：' + marks.join('，')
+          // P2-CORE-2（2026-11-03）：补完伏神行标记。旧版 `(L.isFu ? '' : '')` 两分支同值
+          // 空操作（本想给伏神行加标记未写完）；且 isFu 只存在于 pickYongshen 造的用神副本上，
+          // pan.lines 永不携带——故按 L.fu（该爻之下伏有六亲）标记，与排盘文本伏神列同口径。
+          (L.fu ? '（伏' + L.fu.lq + L.fu.zhi + '）' : '') +
+          '：' + marks.join('，')
       });
     }
     return rows;

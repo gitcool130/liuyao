@@ -6,7 +6,7 @@
  *   → public/core/calendar.js → public/core/paipan.js
  *   → public/core/analyze.js
  *   → public/core/sensitive.js → public/core/domain-methods.js
- *   → public/core/question-shape.js
+ *   → public/core/question-shape.js → public/core/premise.js
  *   → public/core/fact-audit.js → public/core/coverage-audit.js
  *   → public/core/yingqi-window.js → public/core/share.js
  * （public/index.html 已如此引用；本文件不参与浏览器加载链路）
@@ -28,6 +28,12 @@ if (typeof window === 'undefined') {
   require('./public/core/sensitive.js');
   require('./public/core/domain-methods.js');
   require('./public/core/question-shape.js');
+  // P2-PRE-1（2026-11-03）：补载 premise.js——旧版聚合入口漏了它，干净进程
+  // require('./core.js') 时 C.premise === undefined（index.html:443 有挂载、
+  // test-premise.js 直接 require 兜底，基线才绿；任何基于 core.js 的测试/工具
+  // 都拿不到前提层）。位置对齐 index.html 的浏览器顺序：question-shape 之后、
+  // fact-audit 之前（packOf 依赖 domain-methods.js 的 DOMAIN_METHODS，须在其后）。
+  require('./public/core/premise.js');
   require('./public/core/fact-audit.js');
   require('./public/core/coverage-audit.js');
   require('./public/core/yingqi-window.js');
@@ -45,6 +51,7 @@ if (typeof window === 'undefined') {
       '  <script src="core/sensitive.js"></script>  <!-- 敏感分流 -->\n' +
       '  <script src="core/domain-methods.js"></script> <!-- 所测之事的分析规程 -->\n' +
       '  <script src="core/question-shape.js"></script> <!-- 多选一问法检测与改写建议 -->\n' +
+      '  <script src="core/premise.js"></script>       <!-- 前提元数据/缺项分级/应期同域 -->\n' +
       '  <script src="core/fact-audit.js"></script> <!-- 断语事实审计 -->\n' +
       '  <script src="core/coverage-audit.js"></script> <!-- 断语推理审查 -->\n' +
       '  <script src="core/yingqi-window.js"></script> <!-- 应期区间与置信度 -->\n' +

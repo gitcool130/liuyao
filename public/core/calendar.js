@@ -152,6 +152,12 @@
 
     // 夜子时流派：23:00-24:00 日柱归属
     let nightZi = false;
+    // 节气比较锚点：yearGanZhiIndex / monthZhiIndex 必须以**进位前的真实时刻**
+    // 与交节时刻比较。旧版 next 流派把 y/m/d 进位到次日、却仍传 23:xx 与交节
+    // 比，等价于拿「前一日 23:30」当「次日 23:30」——2024-02-03 23:30（立春
+    // 02-04 16:27 之前 17 小时）被判已过立春，年月柱双双提前一柱（中-4）。
+    // 节气是绝对时刻，与日柱进不进次日无关；日柱仍用进位后的 y/m/d。
+    let termY = y, termM = m, termD = d;
     if (h === 23) {
       if (LY.nightZiMode === 'next') {
         nightZi = true;
@@ -160,8 +166,8 @@
       }
     }
 
-    const yIdx = yearGanZhiIndex(y, m, d, h, min);
-    const mz = monthZhiIndex(y, m, d, h, min);
+    const yIdx = yearGanZhiIndex(termY, termM, termD, h, min);
+    const mz = monthZhiIndex(termY, termM, termD, h, min);
     const monthsFromYin = (mz - 2 + 12) % 12;
     const mGan = (WUHU[GAN[yIdx % 10]] + monthsFromYin) % 10;
     const dIdx = dayGanZhiIndex(y, m, d);

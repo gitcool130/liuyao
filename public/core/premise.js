@@ -71,12 +71,18 @@
   // 「半个月」不能被「月」抢走，「半年」属季而非年）。
   // 补词纪律（M21c）：只收**无歧义**的词——「这阵子」「等消息」类模糊词刻意不收，
   // 硬指派刻度等于替用户假定前提（违反本层自己的原则），落 unknown 走兜底才对。
+  // P2-PRE-2（2026-11-03）：补漏词——今早/明早（日级高频词，旧版落 unknown）、
+  //   这月（「本月/这个月」已在，独缺「这月」）、年初/年末（「年底」已在）、
+  //   一学期（「这学期」已被 season 规则覆盖，查重后只补「一学期」）。
+  // P2-PRE-3（2026-11-03）：从 month 规则移除「近期」——它与 :72-73 自述的
+  //   「『这阵子』类模糊词刻意不收」纪律矛盾（「近期」同样是模糊词，硬指派月级
+  //   等于替用户假定前提），移除后落 unknown 走典型刻度兜底，与该纪律一致。
   const SPAN_RULES = [
-    { unit: 'day', re: /今[天日夜晚]|明[天日晚]|后天|当天|当日|这两天|这几个小时|一会儿/ },
+    { unit: 'day', re: /今[天日夜晚早]|明[天日晚早]|后天|当天|当日|这两天|这几个小时|一会儿/ },
     { unit: 'xun', re: /这周|本周|下周|周末|这旬|下旬|上旬|中旬|近几[天日]|这几[天日]|半个月|十天内|一周|两周|一个礼拜|三五天|十来天/ },
-    { unit: 'season', re: /本学[期年]|这学[期年]|下学[期年]|季度|上半年|下半年|半年|一个季度|三个月/ },
-    { unit: 'month', re: /本月|这个月|下个月|下月|月底|月初|月内|几个月|一两个月|一个月|两个月|近期/ },
-    { unit: 'year', re: /今年|明年|后年|去年|本年|年度|年内|年底|过年|未来一年|一年内|两三年|几年|一年|两年|三年|三五年|五年|十年/ }
+    { unit: 'season', re: /本学[期年]|这学[期年]|下学[期年]|一学期|季度|上半年|下半年|半年|一个季度|三个月/ },
+    { unit: 'month', re: /本月|这个月|这月|下个月|下月|月底|月初|月内|几个月|一两个月|一个月|两个月/ },
+    { unit: 'year', re: /今年|明年|后年|去年|本年|年度|年内|年底|年初|年末|过年|未来一年|一年内|两三年|几年|一年|两年|三年|三五年|五年|十年/ }
   ];
 
   // 日历刻度词：用这些词时，若领域包声明了「非日历锚点」（如招生年度、结算周期），
@@ -84,8 +90,12 @@
   const CALENDAR_RE = /今年|明年|去年|本年|年度|年内|年底|本月|这个月|下个月|这周|本周|下周/;
 
   // ---- 槽位关键词 ----
+  // P2-PRE-7（2026-11-03）：stage 移除「孩子|老人|家长」——它们是**对象词**（回答
+  // 「为谁占」）不是**阶段词**（回答「哪个阶段」）：「孩子考研」旧版据此判 stage
+  // 已知，从而抑制升学包把 stage 列為高风险缺项（decisive 含 stage）。
+  // 保留应届/在读/在职/毕业 等真阶段词；「考生」与升学语境绑定、具阶段性，保留。
   const SLOT_RE = {
-    stage: /应届|在读|在校|大[一二三四]|高[一二三]|初[一二三]|研[一二三]|在职|离职|待业|失业|试用期|实习|刚毕业|毕业|退休|孕期|备孕|术后|康复期|住院|未成年|孩子|老人|考生|家长/,
+    stage: /应届|在读|在校|大[一二三四]|高[一二三]|初[一二三]|研[一二三]|在职|离职|待业|失业|试用期|实习|刚毕业|毕业|退休|孕期|备孕|术后|康复期|住院|未成年|考生/,
     // 目标标准：既认「目标」（考上／录取／入职…），也认「门槛」（分数线／名额／预算…）。
     // 只命中目标而不见门槛，仍算部分明示——提示里会要求写明所设门槛口径。
     standard: /分数线|录取线|达线|过线|达标|门槛|标准|要求|名额|指标|预算|金额|多少钱|几分|多少分|考上|录取|上榜|入职|拿到|签约|成交|通过|中标|晋升|提薪|offer/i,
@@ -99,7 +109,10 @@
   // 目标类问法：有明确「达成某结果」的动词，才存在「门槛」这个槽位。
   // 「这周会不会来电」是二元事件、无门槛，「今年能不能考上市重点」有门槛——
   // 二者缺「目标标准」的后果不同，不能同档处理。
-  const GOAL_RE = /考上|录取|上榜|签约|签合同|签下|成交|中标|通过|拿到|入职|晋升|提薪|涨|过线|达线|达标|够|选中|录上/;
+  // 中-16a（2026-11-03）：删去单字「够」「涨」——「这个月钱够用吗」「会涨价吗」
+  // 都是二元事件，旧版却因单字命中 GOAL_RE 把 standard 升为 high「首轮不得给出
+  // 单一吉凶」，与文件自述「二元事件不该升档」相悖（「够用/涨价/涨潮」全中过）。
+  const GOAL_RE = /考上|录取|上榜|签约|签合同|签下|成交|中标|通过|拿到|入职|晋升|提薪|过线|达线|达标|选中|录上/;
 
   const DEFAULT_PACK = {
     label: '通用事项',
@@ -177,6 +190,17 @@
     return out;
   }
 
+  // 关键词包挑选（中-16b，2026-11-03）：多包命中时**非天时包优先**。
+  // 旧版天时包置顶且首个命中即整体接管：「下雨会影响这个项目开工吗」被整体
+  // 判成天气（typicalSpan=day），同域校验随即对月刻度事项放行日级应期——
+  // 前提校验被静默关闭。纯天气题（只命中天时）行为不变。
+  function pickKeywordPack(q) {
+    const hits = KEYWORD_PACKS.filter(function (kp) { return kp.re.test(q); });
+    if (!hits.length) return null;
+    const nonTian = hits.filter(function (kp) { return kp.name !== '天时'; });
+    return nonTian.length ? nonTian[0] : hits[0];
+  }
+
   /**
    * 取领域适配包。领域包 = core/domain-methods.js 的 premise 字段（按用神分），
    * 自定义所测（__custom__）再按事由关键词挑一个（KEYWORD_PACKS）。
@@ -203,11 +227,28 @@
       typicalSpan: DEFAULT_PACK.typicalSpan,
       spanNote: DEFAULT_PACK.spanNote
     };
+    // 中-14（2026-11-03）：__custom__（或用神无 premise 字段）时，先按题面推
+    // 「自身/运势/身体」类用神——与断法层 domainBlock 的 suggestYongshen 同源同序。
+    // 旧版直接回落 DEFAULT_PACK：「我这周运势如何」前提层说典型刻度『月』，
+    // 断法层（运势→shi 包）自述『旬』，两层对「本类事项刻度」给矛盾陈述。
+    if (!p || domainKey === '__custom__') {
+      const sug = LY.suggestYongshen ? LY.suggestYongshen(question) : null;
+      const sm = sug && M[sug.rel];
+      if (sm && sm.premise) {
+        base = {
+          label: sm.label,
+          anchors: sm.premise.anchors || [],
+          decisive: sm.premise.decisive || DEFAULT_PACK.decisive,
+          typicalSpan: sm.premise.typicalSpan || DEFAULT_PACK.typicalSpan,
+          spanNote: sm.premise.spanNote || '',
+          matchedBy: '题面归入「' + sm.label + '」'
+        };
+      }
+    }
     const q = String(question == null ? '' : question);
     if (q) {
-      for (let i = 0; i < KEYWORD_PACKS.length; i++) {
-        const kp = KEYWORD_PACKS[i];
-        if (!kp.re.test(q)) continue;
+      const kp = pickKeywordPack(q);
+      if (kp) {
         if (domainKey === '__custom__' || !p) {
           // 自定义所测（或该用神值无 premise 字段）：事由包整体接管。
           base = {
@@ -224,7 +265,6 @@
             matchedBy: kp.name
           };
         }
-        break;
       }
     }
     return base;
@@ -236,16 +276,33 @@
    * @returns {{unit:string, rank:number, label:string, days:number, hit:string, calendar:boolean, explicit:boolean}}
    *   unit 为 'unknown' 表示题面没给跨度（此时应期只能给区间与条件，不给单一干支日）。
    */
+  // 否定前缀：刻度词紧邻否定结构时该词被否定——
+  // 「不是这几天，是明年考」里「这几天」被否，真跨度是「明年」。
+  // 否定结构 = 否定词 + 可选系词（是/为/在/算/并）+ 可选指近词（这/那/近）：
+  // 「不是」「非」「并非」「不算这周」「不在这半月」均覆盖。系词表刻意不含「的/就」，
+  // 「我说的是这周」「就看今年」不得误否。只允许上述至多两个间隔字，避免宽匹配。
+  // 旧版取首个命中即返回，被否定的从句抢走真跨度（中-12，2026-11-03）。
+  const NEG_BEFORE_RE = /[不没无未莫勿别非][是为在算并]?[这那近]?\s*$/;
+  function firstUnnegated(q, re) {
+    const g = new RegExp(re.source, 'g');
+    let m;
+    while ((m = g.exec(q)) !== null) {
+      if (NEG_BEFORE_RE.test(q.slice(0, m.index))) continue; // 该命中被否定，找下一个
+      return m[0];
+    }
+    return null;
+  }
+
   function spanOf(question) {
     const q = String(question == null ? '' : question);
     for (let i = 0; i < SPAN_RULES.length; i++) {
       const r = SPAN_RULES[i];
-      const m = q.match(r.re);
-      if (m) {
+      const hit = firstUnnegated(q, r.re);
+      if (hit) {
         const u = UNITS[r.unit];
         return {
           unit: r.unit, rank: u.rank, label: u.label, days: u.days,
-          hit: m[0], calendar: CALENDAR_RE.test(m[0]), explicit: true
+          hit: hit, calendar: CALENDAR_RE.test(hit), explicit: true
         };
       }
     }
@@ -388,6 +445,10 @@
         (j.effRank === 3 ? '，可按日给出节点，但须同时给公历区间与月份主刻度，不得只写干支日' :
           '，可给日／旬级节点，但须附公历区间')) +
       '。\n';
+    // P2-PRE-4（2026-11-03）：把领域包的刻度口径说明注入预检块——七个关键词包写的
+    // spanNote 此前算了但不注入（模型看不到）。仅当 pack.spanNote 非空时输出；
+    // 放在「应期同域」行附近，与刻度要求同读。
+    if (j.pack && j.pack.spanNote) out += '- 刻度口径：' + j.pack.spanNote + '\n';
     // 与【应期窗口】的和解（只有调用方明说「本次盘面带日级节点窗口」时才写）：
     // 引擎窗口由出空／值日／逢冲换算，天然是日级；若事项以年、季为刻度，
     // 两者并不矛盾——窗口是节点，不是应期。不写这一行，模型要么违背窗口、要么
@@ -397,18 +458,30 @@
         '本题以「' + j.effLabel + '」为刻度——窗口只能作为其中一个节点引用，不得直接当作应期；' +
         '应期须落到月／季或流程节点。\n';
     }
-    const toAsk = j.high.concat(j.mid).map(function (s) { return s.ask; });
+    // P2-PRE-8（2026-11-03）：二元题不再收「目标标准」补问——天气题「明天新郑会
+    // 下雨吗」旧版也输出「要达成的具体目标与门槛是什么」，与 GOAL_RE 的设计意图
+    // （只有「达成某结果」的问法才存在门槛槽）相悖，属提示噪音。
+    // standard 槽仅在 GOAL_RE.test(q) 命中时才收；已明示/部分明示的 standard 不在
+    // 收集范围（此处只收缺项），不受影响。
+    const toAsk = j.high.concat(j.mid).filter(function (s) {
+      return s.id !== 'standard' || GOAL_RE.test(q);
+    }).map(function (s) { return s.ask; });
     if (toAsk.length) {
       out += '- 如需补充（用户问一句即可，不必全填）：' + toAsk.slice(0, 2).join('；') + '。\n';
     }
     return out;
   }
 
-  // 日级应期的三种写法：干支日（甲子日）、相对日（第3–5日 / 三日内）、天数（12天内）。
-  const DAY_GRAIN_RE = /[甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥]\s*日|第\s*\d+\s*[–\-—~至到]\s*\d+\s*日|\d+\s*日内|[一二三四五六七八九十]日内/;
+  // 日级应期的写法：干支日（甲子日）、公历日期（11月4日）、区间（第3–5日）、
+  // 相对日（次日/三日内/一周内）、天数（12天内）。
+  // 2026-11-03 补三类（中-11）：
+  //   ① 公历日期——旧版漏收，「明日（约 11月4日）」被判月级过粗（正打中自家示例问法）；
+  //   ② 中文数字月份区间——「三月中旬甲子日前后」被误报 TOO_FINE；
+  //   ③ 相对日形式——旧版「次日/隔日」全放行，年刻度事项给日级应期完全漏拦。
+  const DAY_GRAIN_RE = /[甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥]\s*日|\d+\s*月\s*\d+\s*日|第\s*\d+\s*[–\-—~至到]\s*\d+\s*日|\d+\s*日内|[一二三四五六七八九十]日内|次日|隔日|即日|数日内|当周内/;
   const MONTH_GRAIN_RE = /\d+\s*月|[一二三四五六七八九十]月/;
   const YEAR_GRAIN_RE = /\d+\s*年|明年|后年|今年|年内|年度/;
-  // 粗刻度：月份（含「7月上旬」）、季度、流程节点（出分／公布／批次／节点…）
+  // 粗刻度：月份（含「7月上旬」/「三月中旬」）、季度、流程节点（出分／公布／批次／节点…）
   const COARSE_GRAIN_RE = /\d+\s*月|[一二三四五六七八九十]月|[上中下]旬|季度|上半[年季]|下半[年季]|流程|批次|节点|出分|公布|录取|签约|开庭|判决/;
   const SEASON_GRAIN_RE = /季度|[春夏秋冬]季|上半[年季]|下半[年季]/;
   const GRAIN_LABEL = { 1: '日', 2: '旬', 3: '月', 4: '季', 5: '年' };
@@ -420,6 +493,13 @@
     if (MONTH_GRAIN_RE.test(t)) return 3;
     if (DAY_GRAIN_RE.test(t)) return 1;
     return 0;
+  }
+
+  // 首个命中词的位置（用于判断「主刻度先行还是日级抢先」，中-11 配套）。
+  function firstGrainAt(t, re) {
+    const g = new RegExp(re.source, 'g');
+    const m = g.exec(t);
+    return m ? m.index : -1;
   }
 
   /**
@@ -440,6 +520,9 @@
     // 粗刻度：月份／季度／流程节点。应期里若已有粗刻度，日级节点只是辅助定位，
     // 不构成「粒度细于跨度」的硬冲突（引擎窗口本身就是「癸未日前后＋公历区间」的写法）。
     const coarse = COARSE_GRAIN_RE.test(t);
+    // 主刻度依据（rank===3 时用）：公历区间（11月4日/7月上旬）或中文数字月份区间
+    // （三月中旬）。旧版只认阿拉伯数字，「三月中旬甲子日前后」被误报 TOO_FINE（中-11）。
+    const hasRange = /\d+\s*月\s*\d+\s*日|\d+\s*月\s*[上中下]旬|\d+\s*月\s*[底初中]|[一二三四五六七八九十]月\s*[上中下]旬|[一二三四五六七八九十]月\s*[底初中]|[一二三四五六七八九十]月\s*\d+\s*日/.test(t);
     if (rank >= 4 && dayGrain && !coarse) {
       return {
         ok: false, code: 'YINGQI_TOO_FINE', level: 'violation',
@@ -447,12 +530,19 @@
       };
     }
     if (rank >= 4 && dayGrain && coarse) {
+      // 粗刻度词在首个日级词之前 = 主刻度先行——「11月中旬（约 11月10日—11月20日）」
+      // 正是提示词教模型写的「主刻度＋区间注」格式，合规；
+      // 日级抢在粗刻度前（「约11月10日应，11月中旬确认」）才是辅倒置，须提醒。
+      const dayAt = firstGrainAt(t, DAY_GRAIN_RE);
+      const coarseAt = firstGrainAt(t, COARSE_GRAIN_RE);
+      if (dayAt >= 0 && coarseAt >= 0 && coarseAt < dayAt) {
+        return { ok: true, code: 'OK', level: 'ok', msg: '' };
+      }
       return {
         ok: false, code: 'YINGQI_DAY_AS_AUX', level: 'warn',
         msg: '应期里的日级节点（' + t + '）只能作辅，主刻度须是月／季或流程节点——此处已给粗刻度，请确保日级不是唯一依据。'
       };
     }
-    const hasRange = /\d+\s*月\s*\d+\s*日|\d+\s*月\s*[上中下]旬|\d+\s*月\s*[底初中]/.test(t);
     if (rank === 3 && dayGrain && !hasRange) {
       return {
         ok: false, code: 'YINGQI_TOO_FINE', level: 'warn',

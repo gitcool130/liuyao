@@ -8,7 +8,7 @@
  * 只取 question 与 hex 供辨认），与「readings 不存正文」红线同向。
  */
 
-import { bodyTooLarge, payloadTooLarge, requireCode as requireCodeGate } from './_lib.js';
+import { bodyTooLarge, payloadTooLarge, requireCode as requireCodeGate, ID_RE } from './_lib.js';
 
 function json(data, status) {
   return new Response(JSON.stringify(data), {
@@ -17,7 +17,8 @@ function json(data, status) {
   });
 }
 
-const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+// cast_id 白名单与 records.js 共用 _lib.js 导出的同一份 ID_RE（P2-API-7，2026-11-03）：
+// 旧版两文件各存一份物理拷贝，违背「单一事实源」纪律，任一侧漏改即漂移。
 const TASK_LIMIT = 50;
 
 async function requireCode(request, env, message) {
@@ -40,8 +41,16 @@ export async function onRequestGet(context) {
     "WHERE r.status = 'pending' AND r.due_at <= ? " +
     'ORDER BY r.due_at LIMIT ?'
   ).bind(today, TASK_LIMIT).all();
+  // P2-API-8（2026-11-03）：旧版只有 LIMIT 50、无 offset 无总数——排尾部的任务在
+  // 头部被逐个处理（回填/dismissed）前永不出现，前端也无法提示「还有 N 条」。
+  // 补一条同 WHERE 的 COUNT(*)（参数化，与主查询同一 today 绑定），响应体加 total
+  // 字段；既有 today/tasks 字段不动，旧客户端不受影响。
+  const totalRow = await env.LIUYAO_DB.prepare(
+    "SELECT COUNT(*) AS n FROM readings WHERE status = 'pending' AND due_at <= ?"
+  ).bind(today).first();
+  const total = totalRow && typeof totalRow.n === 'number' ? totalRow.n : (results || []).length;
   // JOIN 不中（casts 已删）的孤儿任务照发但 question/hex 为空，前端按「原卦已删」降级展示
-  return json({ today: today, tasks: results || [] });
+  return json({ today: today, tasks: results || [], total: total });
 }
 
 export async function onRequestPost(context) {

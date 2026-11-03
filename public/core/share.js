@@ -105,7 +105,12 @@
     if (mins === null || mins < 0) return '';
 
     let s = VER + '.' + mins.toString(36) + '.' + vals.map(function (v) { return TO_CODE[v]; }).join('');
-    s += '.' + (USE_TO_CODE[o.use] || '-');
+    // P2-FE-5（2026-11-03）：USE_TO_CODE 是普通对象字面量，o.use==='__proto__'
+    // 会因原型属性 truthy 而串出脏码（当前不可达：use 只来自固定 option 与
+    // 分享码解码后的固定键；app.js 的 pick() 已修同族问题，此处漏网）。
+    // 与 pick() 同风格补 hasOwnProperty 校验，查不到一律落 '-'。
+    const useCode = Object.prototype.hasOwnProperty.call(USE_TO_CODE, o.use) ? USE_TO_CODE[o.use] : '';
+    s += '.' + (useCode || '-');
 
     const q = String(o.question == null ? '' : o.question).trim().slice(0, Q_MAX);
     if (q) {

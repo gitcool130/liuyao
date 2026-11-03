@@ -39,8 +39,11 @@ export function json(data, status) {
 // 局限：chunked 请求没有该头，只能靠字段限长与平台上限；故这是"早退"而非"边界"。
 export const MAX_JSON_BODY = 512 * 1024;
 export function bodyTooLarge(request) {
+  // P2-API-11（2026-11-03）：畸形 content-length 头（如 'abc'）parseInt 得 NaN，
+  // 旧版 NaN > MAX_JSON_BODY 为 false 直接放行——闸门可被一个畸形头绕过。
+  // 非有限数一律按超限处理（拒绝），正常路径行为不变。
   const cl = parseInt(request.headers.get('content-length') || '0', 10);
-  return cl > MAX_JSON_BODY;
+  return !isFinite(cl) || cl > MAX_JSON_BODY;
 }
 export function payloadTooLarge() {
   return json({ error: 'BODY_TOO_LARGE', message: '请求体过大（上限 512 KB）' }, 413);
@@ -76,8 +79,15 @@ const AUTH_WINDOW_MS = 10 * 60 * 1000;
 const AUTH_MAX_IPS = 5000;
 
 function authKey(request) {
-  // CF-Connecting-IP 由边缘写入、客户端伪造会被剥离；X-Forwarded-For 仅非 CF 部署回退
-  return request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
+  // CF-Connecting-IP 由边缘写入、客户端伪造会被剥离；X-Forwarded-For 仅非 CF 部署回退。
+  // P2-API-3(c)（2026-11-03）：非 CF 部署下 XFF 完全可伪造（客户端随手改头即可
+  // 换一个干净桶），失败计数对其不构成约束；生产走 CF 边缘、(a) 的不可达依赖
+  // 即建立在该前缀上，此处仅注释说明，不在代码里做不可靠的来源甄别。
+  // P2-API-3(a)（2026-11-03）：两个头都取不到时返回 ''（而非旧版的 'unknown'）。
+  // 旧版所有无 IP 客户端共用一个 'unknown' 桶——任意来源 20 次失败即把
+  // 全部无 IP 客户端一并锁定 10 分钟（fail-close 被放大成全员拒绝服务）。
+  // 现在取不到 IP 时跳过计数（fail-open，不锁定），由上层口令本身承担校验。
+  return request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
 }
 
 // 返回 null 表示放行；否则返回应直接下发的 Response（401 / 429）
@@ -85,7 +95,8 @@ export async function requireCode(request, expected, message) {
   if (!expected) return null;   // 未配置口令：保持开放（向后兼容本地/测试环境）
   const key = authKey(request);
   const now = Date.now();
-  let rec = AUTH_FAILS.get(key);
+  // P2-API-3(a)：无 IP 不计数（fail-open）——查表、锁定、累计三处都按 key 为空跳过
+  let rec = key ? AUTH_FAILS.get(key) : undefined;
   if (rec && now >= rec.until) { AUTH_FAILS.delete(key); rec = undefined; }
   if (rec && rec.n >= AUTH_MAX_FAILS) {
     return json({ error: 'TOO_MANY_ATTEMPTS', message: '口令错误次数过多，请 10 分钟后再试' }, 429);
@@ -95,14 +106,33 @@ export async function requireCode(request, expected, message) {
     if (rec) AUTH_FAILS.delete(key);
     return null;
   }
-  if (!rec) rec = { n: 0, until: now + AUTH_WINDOW_MS };
-  rec.n++;
-  AUTH_FAILS.set(key, rec);
-  if (AUTH_FAILS.size > AUTH_MAX_IPS) {
-    AUTH_FAILS.forEach(function (v, k) { if (now >= v.until) AUTH_FAILS.delete(k); });
+  if (key) {
+    if (!rec) rec = { n: 0, until: now + AUTH_WINDOW_MS };
+    rec.n++;
+    AUTH_FAILS.set(key, rec);
+    // P2-API-3(b)（2026-11-03）：超 AUTH_MAX_IPS 时旧版只删已过期条目——未过期
+    // 条目不受影响，Map 仍可无界增长（注释声称的「成本抑制上限」实际不存在）。
+    // 现在先删过期，仍超限则淘汰最旧条目：Map 迭代序即插入序，取第一个 key 删。
+    // 代价是被淘汰 IP 的计数清零（多换一轮试错机会），换取计数表内存有界。
+    if (AUTH_FAILS.size > AUTH_MAX_IPS) {
+      AUTH_FAILS.forEach(function (v, k) { if (now >= v.until) AUTH_FAILS.delete(k); });
+      while (AUTH_FAILS.size > AUTH_MAX_IPS) {
+        const oldest = AUTH_FAILS.keys().next().value;
+        if (oldest === undefined) break;
+        AUTH_FAILS.delete(oldest);
+      }
+    }
   }
   return json({ error: 'ACCESS_REQUIRED', message: message }, 401);
 }
+
+// 卦例 id / 回访任务 cast_id 白名单（P2-API-7，2026-11-03）：写路径（客户端可自带 id）
+// 与读路径（库里可能存有历史脏 id）都必须过这一关——早期版本（e8e86e1 ~ f5a0ca4，
+// 2026-09-24 ~ 09-26）写入时无任何格式校验，那些行至今可能仍在线上 D1 中，
+// 且会被前端拼进 data-id 属性。
+// 旧版 records.js 与 readings.js 各存一份物理拷贝，违背本文件「单一事实源」纪律：
+// 任一侧漏改即出现「一端放行、一端拦截」的漂移，故收敛到此统一导出、两处 import。
+export const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 // 模型 id 字符集白名单：模型名会进入前端 DOM（芯片 data-m / 文本）与上游请求体，
 // 只允许字母数字与 . _ - / : ，从源头杜绝引号/尖括号等注入字符

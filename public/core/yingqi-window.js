@@ -19,7 +19,10 @@
  *   · 暗动  —— 其应极速（1–3 日）；若同时旬空，则「出空之日方显」，取较晚者
  *   · 合绊  —— 逢冲之日应
  *   · 伏神  —— 冲开飞神之日为引拔之期
- *   · 无空破冲合显象 —— 以本旬出旬为最宽窗口（诚实的最弱档，不作细断）
+ *   · 无空破冲合显象 —— 以用神值日为最弱档（P2-PRE-5，2026-11-03：旧注称「以本旬
+ *     出旬为最宽窗口（诚实的最弱档，不作细断）」与实现不符——`!kongNow` 时值日必
+ *     push、`kongNow` 时出空/冲空必 push，cands 永不为空，那个 default 分支不可达，
+ *     已删；真实行为就是「无显象时以值日为最弱档」，不夸大）
  *
  * 边界（诚实声明）：
  *   1. 本层只做**算术换算**，不新增断法。窗口宽窄（spread）是工程约定，不是古法。
@@ -34,7 +37,7 @@
   const WEAK = ['休', '囚', '死'];
   const CONF_LABEL = { '高': '高', '中': '中等', '低': '低' };
 
-  // 窗口宽度（日）：极速类 2、常规 2、慢速类（出月/引拔/默认）3
+  // 窗口宽度（日）：极速类 2、常规 2、慢速类（出月/引拔）3
   const SPREAD = { fast: 2, normal: 2, slow: 3 };
 
   function chong(a, b) { return ((a - b + 12) % 12) === 6; }
@@ -56,6 +59,16 @@
     if (!dt || typeof dt.getTime !== 'function' || isNaN(dt.getTime())) return null;
     if (typeof LY.termMoment !== 'function' || typeof LY.jdn !== 'function') return null;
     const y = dt.getFullYear(), m = dt.getMonth() + 1, d = dt.getDate();
+    // 先看当月之节：占时若落在 [当月1日, 当月节) 窗口（约占全年 20% 日期），
+    // 真正的下一交节就是本月之节。旧版无条件取下一公历月之节，隐含「当月之节
+    // 已过」的假设，该窗口内出月天数虚高近一整月——实证 2026-02-03 报
+    // 「出月约 30 日后」而立春在 1 日后；且虚高的出月让值日反成主候选，
+    // 窗口起点从第 11 日变成第 11–13 日（中-13，2026-11-03 审计订正）。
+    const tCur = LY.termMoment(y, m);
+    if (tCur) {
+      const diffCur = LY.jdn(tCur.y, tCur.m, tCur.day) - LY.jdn(y, m, d);
+      if (diffCur >= 0) return diffCur;
+    }
     const ny = (m === 12) ? y + 1 : y;
     const nm = (m === 12) ? 1 : m + 1;
     const t = LY.termMoment(ny, nm);
@@ -144,8 +157,11 @@
       const d = Math.min(a, b);
       cands.push({
         d: d, spread: SPREAD.normal, key: 'kong',
-        why: '旬空：出空在第 ' + a + ' 日（' + gzOfDayIdx(dayIdx + a) + '），冲空在第 ' + b +
-          ' 日（' + gzOfDayIdx(dayIdx + b) + '）；两者取近'
+        // P2-PRE-6（2026-11-03）：b===0（用神支即日支之冲）时旧注文写「冲空在第 0 日」，
+        // 而 lo=max(1,0)=1——依据与窗口起点口径不一致。改为「冲空即在今日」，
+        // 与 lo 的「第 1 日起」对齐（冲空日本在第 0 日，窗口自第 1 日起算）。
+        why: '旬空：出空在第 ' + a + ' 日（' + gzOfDayIdx(dayIdx + a) + '），冲空在' +
+          (b === 0 ? '今日' : '第 ' + b + ' 日') + '（' + gzOfDayIdx(dayIdx + b) + '）；两者取近'
       });
     }
 
@@ -202,6 +218,11 @@
       });
     }
 
+    // P2-PRE-5（2026-11-03）：删去 default 候选分支（原 :222-228）——它不可达：
+    // `!kongNow` 时「用神值日」候选必 push（:186-193），`kongNow` 时出空/冲空候选必
+    // push（:152-160），cands 永不为空；且其 hi=lo+3 用 slow 档实际越出「本旬」边界，
+    // 头注宣传的「诚实最弱档」永不生效（死代码 + 名不副实）。随分支一并删去下方
+    // near 统计里的 `c.key !== 'default'` 条件（该键已不存在，留着是悬空引用）。
     if (has('动变:化回头克')) {
       cands.push({
         d: chuXun, spread: SPREAD.normal, key: 'huikou',

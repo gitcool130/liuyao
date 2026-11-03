@@ -233,6 +233,22 @@
 </div>
 
 <script>
+/* ===================== DOM 注入纪律（P2-FE-9 · 2026-11-03） ===================== */
+// 与主站 app.js 同款 esc：外部文本进入 innerHTML 前必须转义。本页的外部数据有两源——
+// ① 主站带入的盘面快照（localStorage ly.vote.cast：spec.ask/gua/bian/meta/yong/trend/yingqi，
+//    其中 ask 会经分享还原路径灌入，链条与主站相同）；
+// ② 模型输出（v.answer/v.basis/v.probs 的选项键/v.error，cleanBasis 只剥引号不剥 < >）。
+// 虽属 self-XSS（数据源为本人浏览器），但与主站 esc 纪律不一致，此处统一收口。
+// 转义 & " < > 四种（引号一并转掉，属性位拼接也安全）；纯字符串实现，
+// 不依赖 DOM，tools/check-vote-page.js 的 DOM 桩环境下同样可跑。
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 /* ===================== 演示数据 ===================== */
 const MODELS = [
   { id:'clef',   name:'clef 27B',     org:'Cloudflare',   color:'#a8822a' },
@@ -478,9 +494,9 @@ function renderCases(){
 
 function renderStrip(){
   $('strip').innerHTML = `
-    <div class="gua">${cur.gua} <b>之</b> ${cur.bian}</div>
-    ${cur.meta.map(([k,v]) => `<div class="kv"><span>${k}</span>${v}</div>`).join('')}
-    <div class="ask">${cur.ask}</div>`;
+    <div class="gua">${esc(cur.gua)} <b>之</b> ${esc(cur.bian)}</div>
+    ${cur.meta.map(([k,v]) => `<div class="kv"><span>${esc(k)}</span>${esc(v)}</div>`).join('')}
+    <div class="ask">${esc(cur.ask)}</div>`;
 }
 
 function renderFacts(){
@@ -488,13 +504,13 @@ function renderFacts(){
     ${MODELS.map(m=>`<th class="mid">${m.name}</th>`).join('')}</tr></thead>`;
   const body = cur.facts.map(row => {
     const [item, fact, ...vals] = row;
-    return `<tr><td>${item}${fact?`<div class="note">${fact}</div>`:''}</td>
+    return `<tr><td>${esc(item)}${fact?`<div class="note">${esc(fact)}</div>`:''}</td>
       ${vals.map(v=>{
         let cls = 'ok', mark = '✓ ';
         if(/不一致|漏算|错|缺票/.test(v)) { cls='bad'; mark='✗ '; }
         else if(/^—/.test(v)) { cls=''; mark=''; }          // 无代码真值的格只陈列，不判对错
         else if(/弱（|以鬼论/.test(v)) { cls='warn'; mark='△ '; }
-        return `<td class="mid ${cls}">${mark}${v}</td>`;
+        return `<td class="mid ${cls}">${mark}${esc(v)}</td>`;
       }).join('')}</tr>`;
   }).join('');
   $('facts').innerHTML = head + `<tbody>${body}</tbody>`;
@@ -518,7 +534,7 @@ function renderModels(){
       if(q.type === 'noul'){ label='可成'; val = Math.round(p.noul*100)+'%'; pct = p.noul*100; }
       else { const [op,v] = topOption(p); label=q.label; val=op+'  '+Math.round(v*100)+'%'; pct=v*100; }
       return `<div class="q">
-        <div class="q-l"><span>${label}</span><span class="q-v">${val}</span></div>
+        <div class="q-l"><span>${esc(label)}</span><span class="q-v">${esc(val)}</span></div>
         <div class="bar"><i style="width:${pct.toFixed(0)}%;background:${m.color}"></i></div>
       </div>`;
     }).join('');
@@ -585,7 +601,7 @@ function renderMatrix(){
     <div class="mrow">
       <div class="lab">${r.lab}</div>
       <div class="cells">
-        ${r.txt.map((t,i)=>`<div class="cell ${r.cls[i]}">${t}</div>`).join('')}
+        ${r.txt.map((t,i)=>`<div class="cell ${r.cls[i]}">${esc(t)}</div>`).join('')}
       </div>
       <div class="verdict ${r.verdict[0]}">${r.verdict[1]}</div>
     </div>`).join('');
@@ -593,14 +609,14 @@ function renderMatrix(){
 
 function renderRules(){
   $('rules').innerHTML = cur.rules.map(([who,q]) => `
-    <div class="rule-row"><div class="who">${who}</div><div class="quote">${q.replace(/「(.+?)」/,'「<em>$1</em>」')}</div></div>
+    <div class="rule-row"><div class="who">${who}</div><div class="quote">${esc(q).replace(/「(.+?)」/,'「<em>$1</em>」')}</div></div>
   `).join('');
 }
 
 function renderProse(){
   $('prose').innerHTML = MODELS.map((m,i) => `
     <div class="m"><div class="m-h"><span class="dot" style="background:${m.color}"></span>
-      <span class="m-n">${m.name}</span></div><p>${cur.prose[i]}</p></div>
+      <span class="m-n">${m.name}</span></div><p>${esc(cur.prose[i])}</p></div>
   `).join('');
 }
 
@@ -610,7 +626,7 @@ function renderBanner(){
   if(!a.yongAgree){
     cls = 'red';
     html = `<b>取用神分歧，判定为硬冲突。</b>三票分别落在
-      「${a.yongTop.join('」「')}」——用神不同，后面的旺衰与吉凶都在算不同的卦。
+      「${a.yongTop.map(esc).join('」「')}」——用神不同，后面的旺衰与吉凶都在算不同的卦。
       这不是流派差异，是取用规则没统一，应先由代码侧按问事类型锁定用神，再让模型判断吉凶。`;
   } else if(a.spread >= 0.25){
     cls = 'gold';
@@ -630,7 +646,7 @@ function renderAll(){
   renderModels(); renderMatrix(); renderRules(); renderProse();
   if(!(LIVE && LIVE.loading)) renderBanner();     // 对账中由 fetchLive 自己占住横幅
   if(LIVE && !LIVE.loading && LIVE.error && cur.live){
-    $('banner').innerHTML = '<div class="banner red"><b>对账失败：' + LIVE.error + '</b>' +
+    $('banner').innerHTML = '<div class="banner red"><b>对账失败：' + esc(LIVE.error) + '</b>' +
       '三票均未取到，页面结构保留以便对照。若是「未绑定 Workers AI」，需在 Pages 设置里加 AI 绑定后再部署一次。</div>';
   }
 }

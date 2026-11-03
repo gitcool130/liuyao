@@ -287,6 +287,11 @@
   // 撤销（M6 修复）：撤销必须彻底重置当前爻状态（含 curCoins 与盲摆内定值），
   // 杜绝「复制上一爻」与「摇后撤销再摇」两类状态残留
   $('#btnUndo').onclick = function () {
+    // 中-9：撤销等同放弃本卦——在途 AI 请求必须一并中断。旧版只隐藏卡片，
+    // 旧 cast 的重试循环跑满 maxAttempts（每次真实付费生成），且完成时
+    // autoSaveCast→recordPayload 读 pan.pillars 遇 pan=null 抛 TypeError，
+    // 被 catch 成「网络异常或数据库未绑定」——空指针报成网络错误。
+    resetAIState();
     if (!records.length) { resetTossState(); renderCoins(); renderTossHint(); renderStack(); return; }
     records.pop(); pan = null; lastBullets = []; lastAnalysis = null;
     resetTossState(); // ★ 关键修复：清掉 curCoins / pendingToss
@@ -295,6 +300,10 @@
   };
 
   $('#btnReset').onclick = function () {
+    // 中-9：重新起卦 = 放弃本卦。resetAIState 中断在途请求并递增代数，
+    // 与 :1119-1122 注释宣称的行为对齐（旧版两按钮只隐藏卡片，不断流）；
+    // 顺带复位 #btnAI 文案（P2 前端-7：旧版残留「重新断卦」）。
+    resetAIState();
     records = []; pan = null; lastBullets = []; lastAnalysis = null;
     resetTossState();
     timeLocked = false;           // 重新起卦解锁时间，等待新的首摇
@@ -486,6 +495,14 @@
     '妻财': '求财·买卖', '官鬼': '功名·官司·疾病', '父母': '考试·文书',
     '子孙': '子女·医药', '兄弟': '朋友·竞争', 'shi': '自身运势', '天气': '天时·雨晴'
   };
+  // 中-14（2026-11-03）：前提层的领域包 key 与断法层 domainBlock 取同一个推导——
+  // 旧版前提层恒传 useSelect.value（__custom__），断法层却用 lastManualYong，
+  // 同一题面两层对「本类事项刻度」给矛盾陈述（如手动指定用神为 shi 时，
+  // 断法层走 shi 包『旬』，前提层回落 DEFAULT『月』）。
+  function premiseDomainKey() {
+    return (lastManualYong && $('#useSelect').value === '__custom__') ? lastManualYong : $('#useSelect').value;
+  }
+
   // 类别的兜底标签：未填原文时用它，保证 premiseBlock 不因空串而整块消失（同旧行为）
   function domainLabel() {
     const t = $('#useSelect').value;
@@ -680,8 +697,13 @@
     }
     lastBullets = res.bullets;
     lastAnalysis = res;
+    // P2-FE-3（2026-11-03）：bullets 入 innerHTML 前过 esc——全仓纪律
+    // 「外部文本进 DOM 前先转义」。已核实当前不可利用（topic 从不回显、
+    // customKw 为固定表键），但分享还原路径会把 d.question 灌进同一条链，
+    // 纪律上不留这个 sink。（test-shake.js 不在本次允许修改的文件列表，
+    // 对应 UI 断言未补，见修复汇报。）
     list.innerHTML = res.bullets.map(function (b) {
-      return '<li' + (b.indexOf('⚠') >= 0 ? ' class="warn"' : '') + '>' + b + '</li>';
+      return '<li' + (b.indexOf('⚠') >= 0 ? ' class="warn"' : '') + '>' + esc(b) + '</li>';
     }).join('');
     vBox.hidden = false;
     // 应期三层展示（主应期 / 辅助节点 / 风险窗口）：结构化视图优先，
@@ -697,7 +719,8 @@
     } else if (res.yingqiClues && res.yingqiClues.length) {
       yq = '<div class="muted" style="margin-top:6px">应期线索：' + esc(res.yingqiClues.join('；')) + '</div>';
     }
-    vBox.innerHTML = '<b>粗判（' + TREND_LABEL[res.trend] + '）</b>　' + res.verdict + yq;
+    // P2-FE-3（2026-11-03）：verdict 同样过 esc 再入 innerHTML（见上方 bullets 处注释）
+    vBox.innerHTML = '<b>粗判（' + TREND_LABEL[res.trend] + '）</b>　' + esc(res.verdict) + yq;
     renderYingqi(res.yingqiWindow);
   }
 
@@ -832,7 +855,7 @@
          2026-10-31 前第一参传的是固定类的硬编码短标签，标签里没有「这个月」「明天」,
          spanOf 永远判不出明示刻度，预检恒写「未见明示 → 按本类典型刻度兜底」。
          现改为原文优先、无原文才退回标签——退回时行为与旧版完全一致。 */
-      const pb = C.premiseBlock(questionText(), $('#useSelect').value,
+      const pb = C.premiseBlock(questionText(), premiseDomainKey(),
         { dayNodeWindow: !!(w && (w.dayLo || w.dayHi)) });
       if (pb) txt += '\n' + pb;
     }
@@ -1114,7 +1137,8 @@
   // 提为模块级：追问要据此判断「原应期是否还成立」（R5 应期撤回），
   // 旧版只在断卦处理函数内可见，追问拿不到。
   let concl = {};
-  let lastVerify = ''; // 本轮断语给出的「验证标志」；重新起卦时清空
+  // 验证标志随各模型的 cc 存 concl[m].verify——勿退回模块级单变量：
+  // 双模型经 Promise.all 并行、完成顺序不定，单变量会让 A 列显示 B 的标志（中-8）。
   let castId = null;
   // AI 请求代际管理：每次「开始断卦」递增代数并新建 AbortController；
   // resetAIState（重新起卦/撤销）时 abort 在途请求并递增代数，
@@ -1179,7 +1203,7 @@
     aiGen++;
     if (aiAbort) { try { aiAbort.abort(); } catch (e) { /* 已 abort 则忽略 */ } }
     aiAbort = null;
-    aiStates = {}; concl = {}; castId = null; lastVerify = '';
+    aiStates = {}; concl = {}; castId = null;
     $('#aiReply').innerHTML = '';
     const cs = $('#aiConsensus'); if (cs) { cs.hidden = true; cs.innerHTML = ''; }
     const box = $('#chatBox'); if (box) box.hidden = true;
@@ -1200,14 +1224,24 @@
     try {
       const s = sessionStorage.getItem(CODE_KEY);
       if (s) return s;
-      const legacy = localStorage.getItem(CODE_KEY);
-      if (legacy) {
-        sessionStorage.setItem(CODE_KEY, legacy);
-        localStorage.removeItem(CODE_KEY); // 迁移即清除，不留第二份明文
-        return legacy;
-      }
-    } catch (e) { /* 存储不可用：退回 memCode */ }
-    return memCode;
+    } catch (e) { /* sessionStorage 不可用：转入下方 localStorage legacy 分支 */ }
+    // P2-FE-4（2026-11-03）：sessionStorage 抛错但 localStorage 可用时，旧版直接
+    // catch 后返回 memCode（空串）——老用户留在 localStorage 的 legacy 口令既没迁成
+    // 也没清，表现为静默登出。改为：先读 legacy（读不到或读失败才退回 memCode），
+    // 再尝试迁进 sessionStorage；写入失败（会话存储不可写）时把口令交给 memCode
+    // 兜底本页会话，两种分支都按「迁移即清除」纪律清掉 localStorage 旧残留。
+    // 两种存储全部不可用时行为不变：返回 memCode。
+    let legacy = '';
+    try { legacy = localStorage.getItem(CODE_KEY) || ''; } catch (e) { legacy = ''; }
+    if (!legacy) return memCode;
+    let moved = false;
+    try {
+      sessionStorage.setItem(CODE_KEY, legacy);
+      moved = true;
+    } catch (e) { /* 会话存储不可写：本页会话靠 memCode 兜底 */ }
+    if (!moved) memCode = legacy;
+    try { localStorage.removeItem(CODE_KEY); } catch (e) { /* 清残留失败无妨：口令已在本会话内生效 */ }
+    return legacy;
   }
   function writeCode(code) {
     memCode = code || '';
@@ -1343,9 +1377,11 @@
     '对象阶段＝应届在读、目标标准＝该校录取线、进程状态＝未开考、规则环境＝当地招生政策。）' +
   '古法「须指其所疑之事而占之」，即此意：所疑不明，卦无落点；不知对象阶段，则远近无从定。',
     '【缺项分级】缺项按影响分两级，不得一律回避也不得一律追问：' +
-    '高风险（缺了会改变结论方向或应期量级——时间范围、进程状态、目标标准、对象阶段）——' +
+    '高风险（缺了会改变结论方向或应期量级——进程状态、目标标准、对象阶段；' +
+    '是否高风险由「领域适配包」的 decisive 与问法共同决定，以排盘文本的「前提预检」块为准）——' +
     '首轮不得给出单一吉凶与单一应期，须先用一句话说明缺什么、为何影响判断，再按可能情形给条件分支，并提示用户补充；' +
     '低风险（只影响细节与措辞）——标注「前提未定」照常输出结论，可给条件性判断，但须写明所设假设。' +
+    '时间范围缺失按低风险处理：以本类事项的典型刻度兜底，但必须在正文写明「按典型刻度X推断」这一假设，不得默默假定。' +
     '不得替用户假定未说出的前提（如把某一年的考试默认为今年、把「今年」默认为会计年度或自然年）。',
     '【应期同域】古法总纲「远事定之以年月，近事应之于日时」（远近当分），本条即其落实——' +
   '应期粒度不得细于事项的时间跨度：跨月跨年之事只能给月／季／年或流程节点，' +
@@ -1466,14 +1502,16 @@
 
   // 验证清单：把「怎么算应验」写成可核对的三条，逼出可回填的样本。
   // 只读规则链已给出的用神/应期，不新增判断，也不改断语。
-  function checklistHTML() {
+  function checklistHTML(model) {
     if (!pan || !lastAnalysis) return '';
     const y = lastAnalysis.yongshen;
     const lay = lastAnalysis.yingqiLayers || {};
     const main = (lay.main || [])[0] || '';
     const aux = (lay.auxiliary || [])[0] || '';
     const items = [];
-    if (lastVerify) items.push('验证标志：' + lastVerify);
+    // 验证标志取本列模型自己的 cc（中-8：模块级 lastVerify 会串显）
+    const ccSelf = (model && concl[model]) || {};
+    if (ccSelf.verify) items.push('验证标志：' + ccSelf.verify);
     if (main) items.push('应期：' + main + (aux ? '（辅助：' + aux + '）' : ''));
     else if (aux) items.push('应期：' + aux);
     if (y && y.line) {
@@ -1843,8 +1881,18 @@
             };
           }
           // 流结束但内容为空，按空响应重试
+          // P2-FE-2（2026-11-03）：客户端本地判定的空稿也计入 emptyHits。
+          // 旧版只统计服务端 EMPTY_UPSTREAM/EMPTY 两个错误码，而「SSE 流正常
+          // 结束但正文为空」与服务端 502 空返回是同一种失败——不计数则
+          // 「连续两次空稿换模型」对这条真实路径失效，用户仍要退避重试满 6 次。
+          // 阈值与处置和下方 EMPTY_UPSTREAM/EMPTY 分支保持一致（>=2 即换模型或收手）。
+          emptyHits++;
           details.push('第' + attempt + '次：大模型返回为空');
           lastErr = { kind: 'empty', message: '大模型返回为空' };
+          if (emptyHits >= 2) {
+            if (switchModelOnce('连续空返回')) continue;
+            throw { kind: 'api', message: '大模型连续两次没有返回内容，请换一个模型或稍后再试', detail: details.join(' | '), code: 'EMPTY' };
+          }
           const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));
           if (Date.now() - start + delay >= AI_RETRY_DEADLINE) break;
           if (onStatus) onStatus('模型返回为空，' + Math.round(delay / 1000) + ' 秒后重试…');
@@ -1973,8 +2021,16 @@
         throw err;
       }
       if (!data.reply) {
+        // P2-FE-2（2026-11-03）：非流式 JSON 响应里 reply 为空，与服务端
+        // EMPTY 错误码是同一种失败，同样计入 emptyHits——旧版这条本地判空
+        // 路径不计数，「连续两次空稿换模型」对它失效。
+        emptyHits++;
         details.push('第' + attempt + '次：大模型返回为空');
         lastErr = { kind: 'empty', message: '大模型返回为空' };
+        if (emptyHits >= 2) {
+          if (switchModelOnce('连续空返回')) continue;
+          throw { kind: 'api', message: '大模型连续两次没有返回内容，请换一个模型或稍后再试', detail: details.join(' | '), code: 'EMPTY' };
+        }
         const delay = Math.min(AI_RETRY_MAX_DELAY, AI_RETRY_MIN_DELAY * Math.pow(2, attempt - 1));
         if (Date.now() - start + delay >= AI_RETRY_DEADLINE) break;
         if (onStatus) onStatus('模型返回为空，' + Math.round(delay / 1000) + ' 秒后重试…');
@@ -2035,6 +2091,14 @@
 
   $('#btnAI').onclick = async function () {
     if (!pan) return;
+    /* P2-FE-8（2026-11-03）：自定义事由的 renderAnalysis 带 250ms 防抖
+       （见 #useCustom.oninput）。防抖窗口内点「开始断卦」会用旧 lastAnalysis：
+       buildPanText 的「所测：」行读实时 DOM（新题面），而「用神：」行读
+       lastAnalysis（旧用神）——模型收到「所测：考试」配「用神：妻财」
+       的自相矛盾盘面。此处先把待执行的防抖重算立即冲掉，再进守卫与断卦。
+       （无需重算 computePan：pan 只取决于爻值与占时，与题面/用神无关，
+       会随题面过期的只有 lastAnalysis。） */
+    if (customTimer) { clearTimeout(customTimer); customTimer = null; renderAnalysis(); }
     /* 裸盘面守卫（2026-10-30）：未定用神时，排盘文本不带「用神：」行、旺衰粗判、
        应期窗口与引擎判定，模型只能自取用神——实测同一张盘 Gemini 断无雨、
        DeepSeek 断有雨，分歧全部集中在这一层，与模型能力无关。
@@ -2042,9 +2106,14 @@
     if (!lastAnalysis || !lastAnalysis.yongshen) {
       const box = $('#conclList');
       if (box) {
-        box.insertAdjacentHTML('afterbegin',
-          '<li class="warn">⚠ 请先选定所测之事（问天气请选「天时 · 雨晴」）。' +
-          '未定用神时盘面不带旺衰粗判／应期窗口／引擎判定，模型会各自取用神，两份断语必然互相矛盾。</li>');
+        // P2-FE-6（2026-11-03）：连点 N 次「开始断卦」会插 N 条相同 warn。
+        // 插入前查重：首条已是同文案 warn 则跳过（选定事由后 renderAnalysis
+        // 会整体重写 #conclList，旧 warn 自然消失，不会漏提示）。
+        const warnTxt = '⚠ 请先选定所测之事（问天气请选「天时 · 雨晴」）。' +
+          '未定用神时盘面不带旺衰粗判／应期窗口／引擎判定，模型会各自取用神，两份断语必然互相矛盾。';
+        const first = box.firstElementChild;
+        const dup = !!first && first.className === 'warn' && first.textContent === warnTxt;
+        if (!dup) box.insertAdjacentHTML('afterbegin', '<li class="warn">' + warnTxt + '</li>');
       }
       const sel = $('#useSelect');
       if (sel) { try { sel.focus(); sel.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { sel.focus(); } }
@@ -2195,7 +2264,7 @@
           if (myGen !== aiGen) return;
 
           const cc = parseConclusion(stripStreamWarn(reply));
-          if (cc.verify) lastVerify = cc.verify;
+          // 验证标志随 cc 进 concl[m]（中-8：旧版写模块级 lastVerify 单变量会串显）
           // 输出前一致性校验（M21 · 应期同域）：模型给的「应期」粒度不得细于事项跨度。
           // 这一步是确定性的——引擎已判出跨度，模型写日级应期就是自相矛盾，
           // 与其让用户事后发现，不如此刻把冲突与撤回模板一并摆出来。
@@ -2204,7 +2273,7 @@
             try {
               // 与 premiseBlock 取同一题面：否则预检按标签判月级、校验按原文判日级，
               // 同一份断语会被自己判成冲突。
-              pj = C.premise.judge(questionText(), $('#useSelect').value);
+              pj = C.premise.judge(questionText(), premiseDomainKey());
               yqCheck = C.premise.checkYingqi(cc.yingqi, pj);
               cc.spanUnit = pj.effUnit;
               cc.premiseJudge = pj;
@@ -2247,7 +2316,7 @@
                   : '<div class="muted" style="margin-top:4px;font-size:12px">此卦未给出可核对标志，事后无法回填</div>') +
                 '</div>'
               : '';
-            bodyEl.innerHTML = card + '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply) + checklistHTML() +
+            bodyEl.innerHTML = card + '<div class="ai-block">' + mdLite(reply) + '</div>' + auditHTML(reply) + checklistHTML(m) +
               (corrected ? '<div class="muted" style="margin-top:6px;font-size:12px">已按盘面校正 1 次</div>' : '') +
               (retriedWith ? '<div class="muted" style="margin-top:6px;font-size:12px">首稿未完篇，本稿由 ' + esc(retriedWith) + ' 补全</div>' : '');
             // 复制的是模型原文（正文末尾本含「结论/应期」四行），不拼前端解析出的卡片，避免重复
@@ -2261,6 +2330,13 @@
           if (el) renderFailBox(el, m, [], e);
         }
       }));
+      // P2-FE-1（2026-11-03）：收尾三行同样要过代际守卫。旧轮次被新一轮
+      // （重新起卦/重新断卦递增 aiGen）打断后，Promise.all 仍会等到途中的
+      // 请求结束再往下走，无守卫时 renderConsensus/chatBox/autoSaveCast
+      // 会把旧轮的半成品状态刷上新一轮的界面（瞬闪），并多打一次半成品存档。
+      // 守卫写法与上方 catch 及函数内其余回调一致：return 会走 finally
+      // 恢复按钮，不会跳过必要的清理。
+      if (myGen !== aiGen) return;
       renderConsensus(concl);
       $('#chatBox').hidden = !Object.keys(aiStates).length;
       autoSaveCast();

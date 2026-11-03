@@ -87,10 +87,16 @@ const anDongKong = C.yingqiWindow(PAN, withJudgments([['日冲', '暗动'], ['�
 ok('暗动兼旬空时不早于出空（第 ' + anDongKong.lo + ' 日 >= 第 ' + chuXun + ' 日）', anDongKong.lo >= Math.min(chuXun, Math.max(1, chuXun)));
 
 // ---------- 5. 换算：假月破＝出月，用 jdn 独立复算 ----------
-const ny = DT.getMonth() + 1 === 12 ? DT.getFullYear() + 1 : DT.getFullYear();
-const nm = DT.getMonth() + 1 === 12 ? 1 : DT.getMonth() + 2;
+// 与 daysToNextTerm 同口径：先当月之节，未过则取当月，已过才取下一月。
+// 旧版此处只算下一月之节（与实现同款错误公式），把中-13 锁死——
+// 2026-11-03 审计订正为「先当月后下月」的真独立复算。
+const dtY = DT.getFullYear(), dtM = DT.getMonth() + 1, dtD = DT.getDate();
+const termCur = C.termMoment(dtY, dtM);
+const diffCur = C.jdn(termCur.y, termCur.m, termCur.day) - C.jdn(dtY, dtM, dtD);
+const ny = dtM === 12 ? dtY + 1 : dtY;
+const nm = dtM === 12 ? 1 : dtM + 1;
 const term = C.termMoment(ny, nm);
-const dTerm = C.jdn(term.y, term.m, term.day) - C.jdn(DT.getFullYear(), DT.getMonth() + 1, DT.getDate());
+const dTerm = diffCur >= 0 ? diffCur : C.jdn(term.y, term.m, term.day) - C.jdn(dtY, dtM, dtD);
 const yuePo = C.yingqiWindow(PAN, withJudgments([['月破', '月破有救（假破）']]));
 ok('假月破给出出月依据（' + dTerm + ' 日后交节）', yuePo.basis.join('').indexOf('出月') >= 0);
 eq('假月破窗口不晚于出月日', yuePo.lo <= dTerm, true);

@@ -41,9 +41,17 @@ const rp = C.ruleDayChong(L1, mkPil({ monthZhi: 11, dayZhi: 11 }), '死', '官�
 eq('休囚静爻被日冲=日破', rp.kind, 'ripo');
 // 闭环证明：grade 变化翻转结论（同一爻同一日辰）
 eq('闭环：旺衰翻转结论', ad.kind !== rp.kind, true);
-// 动爻被日冲 → 冲散（不论旺衰）
+// 动爻被日冲 → 冲散（不论旺衰；未值旬空）
 const cs = C.ruleDayChong(mkLine({ zhi: '巳', zhiIdx: 5, wx: '火', moving: true }), mkPil({ monthZhi: 5, dayZhi: 11 }), '旺', '官鬼');
 eq('动爻被日冲=冲散', cs.kind, 'chongsan');
+// 动爻逢冲且值旬空 → 冲空则实（中-2，2026-11-03 补）：
+// 与 ruleXunKong「动不为空」同向，一次断卦不再输出互斥结论。
+// 旧版此场景恒判冲散（test-rules.js:44-46 曾把它锁死，且构造无旬空、覆盖不到该分支）。
+const csKong = C.ruleDayChong(mkLine({ zhi: '巳', zhiIdx: 5, wx: '火', moving: true }), mkPil({ monthZhi: 5, dayZhi: 11, kong: [5], kongStr: '甲寅' }), '旺', '官鬼');
+eq('动爻逢冲且旬空=冲实', csKong.kind, 'chongshi');
+eq('冲实文本含「冲空则实」', csKong.judgments[0].text.indexOf('冲空则实') >= 0, true);
+// 闭环：同爻同日辰，空与不空翻转结论
+eq('闭环：旬空翻转冲散为冲实', cs.kind !== csKong.kind, true);
 // 不被冲 → 无判定
 const nc = C.ruleDayChong(L1, mkPil({ monthZhi: 5, dayZhi: 0 }), '旺', '官鬼');
 eq('不被日冲无判定', nc.kind, null);

@@ -54,26 +54,33 @@ function chatPrompt(state, ask) {
     '「依据」只写规则名称（如「用神月破无救」），不要写书名、不要加引号——本接口不核验古籍原文。';
 }
 
-// 从可能带围栏、带前言、带尾注的回复里抠出第一个完整 JSON 对象
+// 从可能带围栏、带前言、带尾注的回复里抠出第一个完整 JSON 对象。
+// 括号配对扫描**全部**候选组：遇 { 记下起始位置（入栈，深度即栈深，全局计数、
+// 不假设首个 { 是起点——前言里未配对的 { 只会挂在栈上，不影响后续配对），
+// 遇 } 且栈非空则弹出一段完整配平的组作为候选；全部候选按起始位置从外到内
+// 依次 try JSON.parse，第一个成功的返回；全部失败才返回 null。
+// 旧实现两个缺陷：(a) 第一个花括号组 parse 失败即 return null，不找后续候选；
+// (b) depth 从第一个 { 起算，前言有未配对 { 时永远回不到 0——中文技术散文
+// （'分析{略}：{…}'）两种形态都整票判 UNPARSEABLE。
 function extractJson(text) {
   if (!text) return null;
   let s = String(text).replace(/```json/gi, '```').replace(/```/g, '');
-  const i = s.indexOf('{');
-  if (i < 0) return null;
-  let depth = 0, inStr = false, esc = false;
-  for (let k = i; k < s.length; k++) {
+  const starts = [];   // 未配对 { 的起始位置栈（栈深 = 全局括号深度）
+  const cands = [];    // 完整配平的组：[start, end]
+  let inStr = false, esc = false;
+  for (let k = 0; k < s.length; k++) {
     const c = s[k];
     if (esc) { esc = false; continue; }
     if (c === '\\') { esc = true; continue; }
     if (c === '"') { inStr = !inStr; continue; }
     if (inStr) continue;
-    if (c === '{') depth++;
-    else if (c === '}') {
-      depth--;
-      if (depth === 0) {
-        try { return JSON.parse(s.slice(i, k + 1)); } catch (e) { return null; }
-      }
-    }
+    if (c === '{') starts.push(k);
+    else if (c === '}' && starts.length) cands.push([starts.pop(), k]);
+  }
+  // 从外到内：按起始位置升序，保证 '{"a":{"b":1}}' 取外层整组而非内层子对象
+  cands.sort(function (x, y) { return x[0] - y[0]; });
+  for (let i = 0; i < cands.length; i++) {
+    try { return JSON.parse(s.slice(cands[i][0], cands[i][1] + 1)); } catch (e) { /* 非合法 JSON，试下一候选 */ }
   }
   return null;
 }
@@ -87,33 +94,75 @@ function oneHot(labels, alias, raw) {
   return { probs: out, hit: hit };
 }
 
+// 中文概数词 → 概率（P2-API-4，2026-11-03）。chat 模型回「可成」时爱写
+// 「七成」「八成」「大半」这类概数，旧实现把非数字字符一律剥掉后 Number('')
+// === 0 且 isFinite 为真——「模型没说清」被静默变成「确定不成」（0），
+// 比判废票更糟：伪造的 0 会混进前端分歧矩阵。概数词按语义映射到数值；
+// 无法解析的一律返回 null，由调用方按缺失字段判废（BAD_FIELDS 口径）。
+const CN_NUM = { '一': 0.1, '二': 0.2, '三': 0.3, '四': 0.4, '五': 0.5, '六': 0.6, '七': 0.7, '八': 0.8, '九': 0.9 };
+
 function clamp01(v) {
   if (v == null) return null;
-  // 容忍 "0.62" / "75%" / "七成" 里的数字：先剥非数字字符，再按百分数拆
-  const n = typeof v === 'number' ? v : Number(String(v).replace(/[^\d.\-]/g, ''));
+  if (typeof v !== 'number') {
+    const s = String(v);
+    if (s.indexOf('大半以上') >= 0) return 0.8;
+    if (s.indexOf('大半') >= 0) return 0.7;
+    const cm = /[一二三四五六七八九]成/.exec(s);
+    if (cm) return CN_NUM[cm[0].charAt(0)];
+  }
+  if (typeof v === 'number') {
+    const x = v > 1 && v <= 100 ? v / 100 : v;
+    return x < 0 ? 0 : (x > 1 ? 1 : x);
+  }
+  // 容忍 "0.62" / "75%" 里的数字：先剥非数字字符，再按百分数拆
+  const digits = String(v).replace(/[^\d.\-]/g, '');
+  // P2-API-4（2026-11-03）：剥完一个不剩（'大概率'/'说不清'/''）说明模型没给数值，
+  // 旧版 Number('')===0 且 isFinite 为真 → 静默按 0（确定不成）处理，比判废票更糟：
+  // 伪造的 0 会混进前端分歧矩阵。无法解析一律 null，走缺失字段判废（BAD_FIELDS），
+  // 与 normalizeClef 修复后的口径一致（该函数对 clamp01 返回 null 即记 missing）。
+  if (!digits) return null;
+  const n = Number(digits);
   if (!isFinite(n)) return null;
   const x = n > 1 && n <= 100 ? n / 100 : n;
   return x < 0 ? 0 : (x > 1 ? 1 : x);
 }
 
-/** 把 clef 的 answers 归一化成 { yong, wang, cheng, qi } */
+/** 把 clef 的 answers 归一化成 { yong, wang, cheng, qi }；
+ *  口径与 normalizeChat 对齐：必需字段（用神/旺衰/可成/应期）缺失或概率非法
+ *  一律判废票（BAD_FIELDS），不再静默填 0.5/0——同一缺失两种判法会让伪造的
+ *  概率混进前端分歧矩阵，对账就失去「同题差异才有比较价值」的诊断前提。 */
 function normalizeClef(res) {
   const a = (res && res.answers) || {};
-  const pick = function (dim, labels) {
-    const node = a[dim] || {};
-    const src = node.probabilities || {};
+  const missing = [];
+  // 选项概率逐档校验，与 chat 侧 clamp01 同口径（选 clamp 而非直接废票，理由同 chat）：
+  // 越界（<0 或 >1）clamp 回 [0,1]；非有限数（缺选项档/NaN/非数值）→ null → 视为缺失字段走废票。
+  const pick = function (dim, labels, name) {
+    const node = a[dim];
+    const src = (node && node.probabilities) || null;
+    if (!src) { missing.push(name); return null; }
     const out = {};
     let covered = 0;
-    for (const k in labels) { out[labels[k]] = typeof src[k] === 'number' ? src[k] : 0; covered += out[labels[k]]; }
-    // 归一化到 1：模型偶尔只覆盖部分选项，缺的按 0 处理但总和须为 1，否则进度条会失真
+    for (const k in labels) {
+      const c = clamp01(src[k]);
+      if (c == null) { missing.push(name); return null; }
+      out[labels[k]] = c;
+      covered += c;
+    }
+    // 归一化到 1：模型偶尔只覆盖部分概率质量（总和不足 1），否则进度条会失真
     if (covered > 0 && Math.abs(covered - 1) > 1e-6) {
       for (const k in out) out[k] = out[k] / covered;
     }
     return out;
   };
-  const noul = a.cheng && typeof a.cheng.noul === 'number' ? a.cheng.noul : null;
+  // 可成（noul）同口径：缺失/非有限 → 废票；越界 → clamp（与 chat 侧「可成」一致）
+  const cnoul = a.cheng ? clamp01(a.cheng.noul) : null;
+  const yong = pick('yong', YONG_LABEL, '用神');
+  const wang = pick('wang', WANG_LABEL, '旺衰');
+  if (cnoul == null) missing.push('可成');
+  const qi = pick('qi', QI_LABEL, '应期');
+  if (missing.length) return { error: 'BAD_FIELDS:' + missing.join('/'), answer: null };
   return {
-    probs: { yong: pick('yong', YONG_LABEL), wang: pick('wang', WANG_LABEL), cheng: { noul: noul == null ? 0.5 : noul }, qi: pick('qi', QI_LABEL) },
+    probs: { yong: yong, wang: wang, cheng: { noul: cnoul }, qi: qi },
     answer: null
   };
 }
@@ -204,8 +253,11 @@ export async function onRequestPost(context) {
   // 但 README 承诺「所有接口都需口令」，故设 ACCESS_CODE 后此处同样拦截（审计 P1-2）。
   const denied = await requireCodeGate(request, env.ACCESS_CODE, '需要访问口令');
   if (denied) return denied;
+  // P2-API-11（2026-11-03）：畸形 content-length 头（如 'abc' → Number NaN）
+  // 旧版 NaN > 32768 为 false 直接放行——闸门可被一个畸形头绕过，恶意大 body
+  // 会先全量读进 isolate 内存。非有限数一律按超限处理（拒绝）；缺头/正常值不变。
   const len = Number(request.headers.get('content-length') || 0);
-  if (len > 32 * 1024) return json({ error: 'TOO_LARGE' }, 413);
+  if (!isFinite(len) || len > 32 * 1024) return json({ error: 'TOO_LARGE' }, 413);
 
   let b;
   try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }

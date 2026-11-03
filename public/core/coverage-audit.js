@@ -155,10 +155,10 @@
     if (!(r > idx)) return false;
     return /[\/、]|或/.test(src.slice(l + 1, r));
   }
-  /** 找 word 的非否定出现位置；全部出现都在否定/引述/标题/并列括注语境中则返回 -1。 */
-  function findAsserted(src, word) {
+  /** 找 word 的非否定出现位置（可从 from 起找）；全部出现都在否定/引述/标题/并列括注语境中则返回 -1。 */
+  function findAsserted(src, word, from) {
     const qs = quotedRanges(src);
-    let idx = src.indexOf(word);
+    let idx = src.indexOf(word, from || 0);
     while (idx >= 0) {
       const end = idx + word.length;
       // 列表标题：`- 月破：盘面未列爻逢月破` / `- 旬空月破：旬空戌亥…`
@@ -170,6 +170,59 @@
       idx = src.indexOf(word, end);
     }
     return -1;
+  }
+
+  // ---- A1 分爻归属（中-17）：deny 词必须描述用神爻才算误置 ----
+  // 用神判「动不为空」而断语写「真空/到底空」——若那句话说的是**另一静空之爻**，
+  // 那是正确的分爻陈述，不是误置。2026-01-05 地山谦实测：用神三爻兄弟申金动空
+  // （动不为空）、上爻兄弟酉金静空（真空），正确断语「……上爻兄弟酉金安静休囚
+  // 无扶，是为真空，到底空」被旧版全篇搜索判 2 处「旬空误置」假阳性。
+  // 判据：deny 词所在小句指认的爻位集合（小句无爻位词时向前回溯承前省略的
+  //       主语小句，如「是为真空」回溯到「上爻兄弟酉金……」）——
+  //       含用神爻位 → 误置，告警；全为非用神爻位 → 另有所指，放行；
+  //       全文无任何爻位指称 → 无法证明另有所指，退回旧行为全篇判（宁误报不漏报）。
+  // 只对旬空启用：月破/日冲的 deny 词维持旧口径（全篇搜索，保守优先）。
+  const POS_OF = { '初': 0, '二': 1, '三': 2, '四': 3, '五': 4, '上': 5 };
+  /** 小句指认的爻位集合（[初二三四五上]爻）；无指称返回空数组。 */
+  function clauseRefs(clause) {
+    const out = [];
+    const re = /([初二三四五上])爻/g;
+    let m;
+    while ((m = re.exec(clause)) !== null) {
+      const p = POS_OF[m[1]];
+      if (out.indexOf(p) < 0) out.push(p);
+    }
+    return out;
+  }
+  /** 用神爻位：优先 analysis.yongshen.line.pos，兜底从判语文本「（三爻）」提取。 */
+  function yongshenPosOf(analysis, hit) {
+    if (analysis && analysis.yongshen && analysis.yongshen.line && typeof analysis.yongshen.line.pos === 'number') {
+      return analysis.yongshen.line.pos;
+    }
+    for (let i = 0; i < hit.length; i++) {
+      const m = /（([初二三四五上])爻）/.exec((hit[i] && hit[i].text) || '');
+      if (m) return POS_OF[m[1]];
+    }
+    return null;
+  }
+  /**
+   * src 中 idx 处的 deny 词描述的是否用神爻。
+   * true=描述用神（维持误置告警）／false=描述别的爻（另有所指，放行）。
+   */
+  function denyRefersYongshen(src, idx, ysPos) {
+    const clauses = src.split(/[。；！？，,\n]/);
+    let acc = 0, ci = -1;
+    for (let i = 0; i < clauses.length; i++) {
+      if (idx >= acc && idx < acc + clauses[i].length) { ci = i; break; }
+      acc += clauses[i].length + 1; // +1 = 分隔符（单字符）
+    }
+    if (ci < 0) return true; // 定位失败（不应发生）→ 保守
+    for (let i = ci; i >= 0; i--) {
+      const refs = clauseRefs(clauses[i]);
+      if (!refs.length) continue;      // 本句无爻位指称：承前省略，继续向前找主语小句
+      return refs.indexOf(ysPos) >= 0; // 最近的主语小句说了算
+    }
+    return true; // 全文无爻位指称 → 退回旧行为（全篇判）
   }
 
   // ---- 全盘结构重算（A2 用） ----
@@ -242,14 +295,24 @@
       if (!tags[c.tag]) return;
       const hit = js.filter(function (j) { return j.tag === c.tag && c.pick(j); });
       if (!hit.length) return;
+      // 中-17：旬空 deny 词绑定用神爻位。断语分爻陈述另一静空之爻
+      // （「上爻兄弟酉金安静休囚无扶，是为真空，到底空」）是正确写法，
+      // 旧版全篇搜索 → 地山谦实测 2 处假阳性；改用 denyRefersYongshen
+      // 按分句归属判断所指爻位，另有所指的出现一律跳过。
+      const ysPos = c.tag === '旬空' ? yongshenPosOf(analysis, hit) : null;
       c.deny.forEach(function (w) {
-        if (findAsserted(src, w) >= 0) {
-          conflicts.push({
-            type: c.tag + '误置',
-            claimed: w,
-            actual: c.truth,
-            hint: '卦盘判为「' + c.truth + '」，断语却用了「' + w + '」——二者吉凶相反，须按卦盘改正。'
-          });
+        let idx = findAsserted(src, w);
+        while (idx >= 0) {
+          if (ysPos === null || denyRefersYongshen(src, idx, ysPos)) {
+            conflicts.push({
+              type: c.tag + '误置',
+              claimed: w,
+              actual: c.truth,
+              hint: '卦盘判为「' + c.truth + '」，断语却用了「' + w + '」——二者吉凶相反，须按卦盘改正。'
+            });
+            return; // 一词至多报一条（同旧行为）；其余出现不再逐条刷屏
+          }
+          idx = findAsserted(src, w, idx + w.length); // 该出现描述的是别的爻，继续找下一个
         }
       });
     });
