@@ -182,5 +182,32 @@ const codeOnly = src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
 ok('应期层不出现 score 字样', !/\bscore\b/i.test(codeOnly));
 ok('应期层不写 DOM（纯函数）', src.indexOf('innerHTML') < 0 && src.indexOf('document.') < 0);
 
+// ---------- 10. 键名契约（P2-PRE-10，2026-11-03） ----------
+// yingqi-window 用 has('tag:rule') 去查 analyze 的 judgments。键名一旦漂移——
+// analyze 改了规则名、或 yingqi 拼错一个 tag——对应候选就静默消失、窗口退化为
+// 值日档，而此前没有任何测试会红（§9 只查形状不查键名）。此处做**静态**契约：
+// 把 yingqi-window 源码里引用的每个 has() 键拆出 tag，断言该 tag 确实由
+// analyze.js 产出。静态比对不吃样本覆盖，不会假红，键名一漂必红。
+const fs = require('fs');
+const yqSrc = fs.readFileSync(__dirname + '/public/core/yingqi-window.js', 'utf8');
+const anSrc = fs.readFileSync(__dirname + '/public/core/analyze.js', 'utf8');
+const yqKeys = [];
+let hm;
+const reHas = /has\('([^':]+:[^']+)'\)/g;
+while ((hm = reHas.exec(yqSrc)) !== null) {
+  if (yqKeys.indexOf(hm[1]) < 0) yqKeys.push(hm[1]);
+}
+ok('读到 yingqi-window 的 has() 键引用（>=6 条）', yqKeys.length >= 6);
+const anTags = {};
+let tgm;
+const reTag = /tag:\s*'([^']+)'/g;
+while ((tgm = reTag.exec(anSrc)) !== null) anTags[tgm[1]] = true;
+ok('analyze 仍产出核心 tag（旬空/月破/日冲）',
+  !!anTags['旬空'] && !!anTags['月破'] && !!anTags['日冲']);
+yqKeys.forEach(function (k) {
+  const t = k.split(':')[0];
+  ok('键名契约：' + k + ' 的 tag「' + t + '」仍由 analyze 产出', !!anTags[t]);
+});
+
 console.log('\n应期窗口自检：PASS ' + pass + '　FAIL ' + fail);
 process.exit(fail ? 1 : 0);

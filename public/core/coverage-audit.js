@@ -104,6 +104,18 @@
     return /^(无|不|非|未)/.test(src.slice(endIdx, endIdx + 2));
   }
   /**
+   * 前置否定：否定词在被断言词**之前**——「非以妻财为事体，乃以父母为用神」。
+   * 先破后立是**正确**写法：C/C2 取用检查若把「以妻财」当取用，会产出
+   * 「用神不一致」+「取用两说」双误报（P2-PRE-9，2026-11-03 审计）。
+   * 窗口取紧邻 5 字、允许否定词后隔 0–2 个非标点字：C 的命中点落在六亲上，
+   * 「非以妻财为事体」的被断言词是「妻财」，前面隔着介词「以」，3 字窗口只能看到
+   * 「非以」却匹配不到末尾——首版就栽在这里（探针实测仍报「取用两说」）。
+   * 不许跨标点：跨标点会把「月破，无救」这类**真实断言**当成否定而漏报。
+   */
+  function isNegatedBefore(src, idx) {
+    return /[不非勿别无未][^，。；、]{0,2}$/.test(src.slice(Math.max(0, idx - 5), idx));
+  }
+  /**
    * 引述后否定：断语先引古法条文、再说它不适用——
    * 「《卜筮正宗》谓『旺不为空，动不为空』……故『动不为空』『旺不惧空』皆不适用」
    * 这是**正确**写法（先立后破），旧版只匹配子串，把引文当成主张，判「旬空误置」。
@@ -360,11 +372,21 @@
         if (!/(受|被|遭)[^，,]{0,10}冲/.test(sen)) return;
         if (EXEMPT.some(function (w) { return sen.indexOf(w) >= 0; })) return;
         const posArr = [];
-        const rePos = /([初二三四五上])爻/g;
+        // P2-PRE-9（2026-11-03）：指称不只「三爻」这种绝对位——「世爻受日辰冲动」
+        // 也是极常见写法，旧版正则只认 [初二三四五上]爻，世应类断语 A3 完全失效
+        // （实测 grep「世爻|应爻」在 A3 段零命中）。世应在 pan.lines 上有 shi/ying
+        // 布尔标记，按标记换算成绝对位后同路判定，不改判据。
+        const rePos = /([初二三四五上])爻|(世|应)爻/g;
         let pm;
         while ((pm = rePos.exec(sen)) !== null) {
-          const p = POSMAP[pm[1]];
-          if (posArr.indexOf(p) < 0) posArr.push(p);
+          let p = pm[1] ? POSMAP[pm[1]] : -1;
+          if (p < 0) {
+            const want = pm[2] === '世' ? 'shi' : 'ying';
+            for (let i = 0; i < pan.lines.length; i++) {
+              if (pan.lines[i] && pan.lines[i][want]) { p = i; break; }
+            }
+          }
+          if (p >= 0 && posArr.indexOf(p) < 0) posArr.push(p);
         }
         if (!posArr.length) return;
         const li = pan.lines.filter(function (L, i) { return posArr.indexOf(i) >= 0; });
@@ -387,6 +409,9 @@
     const reYs = /(?:以|取|用神(?:为|是|取)?)\s*(父母|兄弟|子孙|妻财|官鬼|世爻)/g;
     let m;
     while ((m = reYs.exec(src)) !== null) {
+      // P2-PRE-9（2026-11-03）：前置否定豁免。「非以妻财为事体，乃以父母为用神」
+      // 是先破后立的正确写法，旧版把「以妻财」当取用，报『用神不一致』误报。
+      if (isNegatedBefore(src, m.index)) continue;
       const tail = src.slice(m.index + m[0].length, m.index + m[0].length + 3);
       if (YS_SKIP.some(function (s) { return tail.indexOf(s) === 0; })) continue;
       if (analysis && analysis.yongshen) {
@@ -413,6 +438,8 @@
     const reTi = /(父母|兄弟|子孙|妻财|官鬼)[^。；，,]{0,10}?(?:为|作|即)[^。；，,]{0,4}?(?:之体|本体|事体|用神|用爻)/g;
     let tm;
     while ((tm = reTi.exec(src)) !== null) {
+      // P2-PRE-9（2026-11-03）：同 C 的前置否定豁免——「非以官鬼为事体之体」不算取用。
+      if (isNegatedBefore(src, tm.index)) continue;
       const tail2 = src.slice(tm.index + tm[0].indexOf(tm[1]) + tm[1].length, tm.index + tm[0].length);
       if (YS_SKIP.some(function (s) { return tail2.indexOf(s) >= 0; })) continue;
       if (ysSet.indexOf(tm[1]) < 0) ysSet.push(tm[1]);
