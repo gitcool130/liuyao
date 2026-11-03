@@ -230,12 +230,19 @@
       });
     }
 
+    // P2-PRE-5（2026-11-03）：原 default 候选已删（以「本旬出旬」充当最宽窗口）——
+    // 它不可达：`!kongNow` 时「用神值日」候选必 push，`kongNow` 时出空/冲空候选必
+    // push，cands 永不为空；且其 hi=lo+3 走 slow 档实际越出本旬边界，名不副实。
+    // 空集分支保留为**明确拒答**：真走到这里（未来新增线索改条件）宁可说「不立应期」，
+    // 也不编一个可核对的假窗口——与本文件「不用无法核对的话兜底」的边界一致。
     if (!cands.length) {
-      cands.push({
-        d: chuXun, spread: SPREAD.slow, key: 'default',
-        why: '卦无空破冲合之显象，以本旬出旬（第 ' + chuXun + ' 日，' +
-          gzOfDayIdx(dayIdx + chuXun) + '）为最宽窗口'
-      });
+      out.status = 'blocked';
+      out.blockedBy = 'no_clue';
+      out.confidence = '低';
+      out.text = '应期：卦中无空破冲合之显象，不立具体应期——宜再验盘面或另择用神';
+      out.basis.push('无可换算为日数的线索（无旬空/月破/日冲/合绊/伏神/回头克）');
+      out.downgrades.push('无显象可依：此处不给窗口，也不用「近期会有变化」这类无法核对的话兜底');
+      return out;
     }
 
     cands.sort(function (a, b) { return a.d - b.d; });
@@ -249,8 +256,10 @@
     else if (WEAK.indexOf(grade) >= 0) consistency -= 1;
 
     // 多条线索指向相近窗口（±3 日内）互为佐证
+    // P2-PRE-5：随 default 候选一并删去 `c.key !== 'default'` 条件（该键已不存在，
+    // 留着是悬空引用——旧版靠它把「兜底窗口」排除在佐证之外）。
     const near = cands.filter(function (c) {
-      return c.key !== 'default' && Math.abs(c.d - main.d) <= 3;
+      return Math.abs(c.d - main.d) <= 3;
     }).length;
     if (near >= 2) consistency += 1;
 
