@@ -101,6 +101,48 @@ const yuePo = C.yingqiWindow(PAN, withJudgments([['月破', '月破有救（假�
 ok('假月破给出出月依据（' + dTerm + ' 日后交节）', yuePo.basis.join('').indexOf('出月') >= 0);
 eq('假月破窗口不晚于出月日', yuePo.lo <= dTerm, true);
 
+// ---------- 5b. 交节日边界：分钟级比较（2026-11-06 审计订正） ----------
+// 旧版按日期粒度（JDN）比较，交节当日恒返回 0，分不清交节时刻前后：
+// 交节日午后月建已换、出月应指下一月之节（约 30 天），实得 0，且被调用处
+// if (d) 当假值吞掉——「出月」锚点静默丢失，还误报「超出节气表覆盖范围」。
+// 期望值在此用「分钟级独立复算」得出，不读实现。
+(function () {
+  function wallPan(y, m, d, h, min) {
+    const dt = new Date(y, m - 1, d, h, min);
+    dt.__wall = { y: y, m: m, d: d, h: h, min: min };
+    return C.paipan([1, 0, 9, 6, 1, 1], dt);
+  }
+  function expectTermDays(y, m, d, h, min) {
+    const curMin = C.jdn(y, m, d) * 1440 + h * 60 + min;
+    const tc = C.termMoment(y, m);
+    if (tc) {
+      const tm = C.jdn(tc.y, tc.m, tc.day) * 1440 + tc.hour * 60 + tc.minute;
+      if (curMin < tm) return Math.floor((tm - curMin) / 1440);
+    }
+    const ny2 = m === 12 ? y + 1 : y, nm2 = m === 12 ? 1 : m + 1;
+    const tn = C.termMoment(ny2, nm2);
+    return C.jdn(tn.y, tn.m, tn.day) - C.jdn(y, m, d);
+  }
+  const tLc = C.termMoment(2026, 2); // 立春 2026-02-04 04:02
+  // ① 交节日、交节时刻前：今日交节即出月——d=0 是合法值，不得被吞
+  const hB = Math.max(0, tLc.hour - 2);
+  const wb = C.yingqiWindow(wallPan(2026, 2, tLc.day, hB, 0), withJudgments([['月破', '月破有救（假破）']]));
+  ok('交节日交节前：出月候选在依据中', wb.basis.join('').indexOf('出月') >= 0);
+  ok('交节日交节前：如实陈述「今日交节」', wb.basis.join('').indexOf('今日交节') >= 0);
+  ok('交节日交节前：不得误报超出节气表', wb.downgrades.join('').indexOf('超出节气表') < 0);
+  // ② 交节日、交节时刻后：月建已换，出月须指下一月之节
+  const hA = Math.min(23, tLc.hour + 3);
+  const wa = C.yingqiWindow(wallPan(2026, 2, tLc.day, hA, 0), withJudgments([['月破', '月破有救（假破）']]));
+  const expA = expectTermDays(2026, 2, tLc.day, hA, 0);
+  ok('交节日交节后：出月候选在依据中', wa.basis.join('').indexOf('出月') >= 0);
+  ok('交节日交节后：出月天数指下一月之节（' + expA + ' 日 > 20）', expA > 20 && wa.basis.join('').indexOf('约 ' + expA + ' 日') >= 0);
+  ok('交节日交节后：不得误报超出节气表', wa.downgrades.join('').indexOf('超出节气表') < 0);
+  // ③ 非交节日行为不变：普通日期出月天数与分钟级复算一致
+  const wn = C.yingqiWindow(wallPan(2026, 10, 24, 8, 30), withJudgments([['月破', '月破有救（假破）']]));
+  const expN = expectTermDays(2026, 10, 24, 8, 30);
+  ok('普通日期出月天数与复算一致（' + expN + ' 日）', wn.basis.join('').indexOf('约 ' + expN + ' 日后') >= 0);
+})();
+
 // ---------- 6. 拒答：真空 / 真月破不立应期 ----------
 const zhenKong = C.yingqiWindow(PAN, withJudgments([['旬空', '真空']]));
 eq('真空 → 不立应期', zhenKong.status, 'blocked');

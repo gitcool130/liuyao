@@ -58,16 +58,28 @@
   function daysToNextTerm(dt) {
     if (!dt || typeof dt.getTime !== 'function' || isNaN(dt.getTime())) return null;
     if (typeof LY.termMoment !== 'function' || typeof LY.jdn !== 'function') return null;
-    const y = dt.getFullYear(), m = dt.getMonth() + 1, d = dt.getDate();
-    // 先看当月之节：占时若落在 [当月1日, 当月节) 窗口（约占全年 20% 日期），
-    // 真正的下一交节就是本月之节。旧版无条件取下一公历月之节，隐含「当月之节
-    // 已过」的假设，该窗口内出月天数虚高近一整月——实证 2026-02-03 报
-    // 「出月约 30 日后」而立春在 1 日后；且虚高的出月让值日反成主候选，
-    // 窗口起点从第 11 日变成第 11–13 日（中-13，2026-11-03 审计订正）。
+    // 取时口径与 fourPillars / share.wallOf 同源：优先 __wall 锚点，其次本机 getters。
+    // 2026-11-06 审计新发现：旧版用 JDN（日期粒度）比较，交节当日恒返回 0——
+    // 分不清「交节时刻前（下一节就在今天）」与「交节时刻后（月建已换，下一节在
+    // 下月）」。后果有二：① 交节日午后的月破假破盘应得约 30 天的出月天数，实得 0；
+    // ② 调用处 if (d) 把 0 当假值吞掉，静默丢失「出月」锚点，还落入 else 分支
+    // 误报「超出节气表覆盖范围」（立春明明在表内）。改为分钟级比较，与
+    // calendar.js monthZhiIndex 的 `d*1440+hh*60+mm >= term` 同口径。
+    const w = dt.__wall;
+    const hasWall = w && typeof w.y === 'number' && typeof w.h === 'number' && typeof w.min === 'number';
+    const y = hasWall ? w.y : dt.getFullYear();
+    const m = hasWall ? w.m : dt.getMonth() + 1;
+    const d = hasWall ? w.d : dt.getDate();
+    const hh = hasWall ? w.h : dt.getHours();
+    const mm = hasWall ? w.min : dt.getMinutes();
+    const curMin = LY.jdn(y, m, d) * 1440 + hh * 60 + mm;
+    // 先看当月之节：占时早于当月交节时刻（分钟级）时，真正的下一交节就是本月之节
+    // —— 含两种情形：[当月1日, 当月节) 窗口（约占全年 20% 日期，中-13 所修），
+    // 以及交节当日交节时刻之前（当天出月，返回 0，由调用方按「今日交节」如实陈述）。
     const tCur = LY.termMoment(y, m);
     if (tCur) {
-      const diffCur = LY.jdn(tCur.y, tCur.m, tCur.day) - LY.jdn(y, m, d);
-      if (diffCur >= 0) return diffCur;
+      const termMin = LY.jdn(tCur.y, tCur.m, tCur.day) * 1440 + tCur.hour * 60 + tCur.minute;
+      if (curMin < termMin) return Math.floor((termMin - curMin) / 1440);
     }
     const ny = (m === 12) ? y + 1 : y;
     const nm = (m === 12) ? 1 : m + 1;
@@ -167,10 +179,12 @@
 
     if (has('月破:月破有救（假破）')) {
       const d = daysToNextTerm(pan.date);
-      if (d) {
+      // 2026-11-06：判断改为 d !== null——d === 0 是合法值（交节当日交节时刻前，
+      // 今日交节即出月），旧版 if (d) 把它当假值吞掉，锚点静默丢失且误报超表。
+      if (d !== null) {
         cands.push({
           d: d, spread: SPREAD.slow, key: 'yuepo',
-          why: '月破有救（假破）：出月（交下一节）方解，约 ' + d + ' 日后'
+          why: '月破有救（假破）：出月（交下一节）方解' + (d === 0 ? '，今日交节即解' : '，约 ' + d + ' 日后')
         });
       } else {
         out.downgrades.push('月破假破须出月方解，但占时超出节气表覆盖范围，无法换算具体日数');
