@@ -80,3 +80,17 @@ CREATE INDEX IF NOT EXISTS idx_readings_due ON readings(status, due_at);
 -- acted/dismissed 是终态，同 cast 不再二次排队（重新占问同一事是新的 cast_id）。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_open ON readings(cast_id)
   WHERE status = 'pending';
+
+-- ── 限流计数（2026-11-09）──────────────────────────────────────────────
+-- 为什么落库：线上实测 Pages Functions 几乎不复用 isolate（连续 5 次请求各自
+-- 命中新实例），模块级 Map 的计数永远停在 1，内存限流在线上等于没有。
+-- 一行 = 某端点（bucket）+ 某 IP + 某一分钟（w = floor(now/60000)）的请求数。
+-- 写入走 UPSERT ... RETURNING n（_lib.rateLimit），概率清理删除 w - 180 之前的行。
+CREATE TABLE IF NOT EXISTS rate_hits (
+  bucket TEXT NOT NULL,
+  ip     TEXT NOT NULL,
+  w      INTEGER NOT NULL,
+  n      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket, ip, w)
+);
+CREATE INDEX IF NOT EXISTS idx_rate_w ON rate_hits(w);

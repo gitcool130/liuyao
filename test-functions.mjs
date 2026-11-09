@@ -1825,11 +1825,41 @@ eq('600 KB 且无 Content-Length → 413', (await interpretPost({ request: noClR
 // ④ 默认限流：未设 RATE_LIMIT_PER_MIN 时 20 次/分；显式 0 才关闭
 const rlDefault = [];
 for (let i = 0; i < 22; i++) {
-  rlDefault.push(isRateLimited(new Request('https://x/', { headers: { 'CF-Connecting-IP': '203.0.113.77' } }), {}));
+  rlDefault.push(await isRateLimited(new Request('https://x/', { headers: { 'CF-Connecting-IP': '203.0.113.77' } }), {}));
 }
 eq('默认 20 次/分：前 20 放行、后 2 拒绝', rlDefault.filter(Boolean).length, 2);
 eq('显式 RATE_LIMIT_PER_MIN=0 关闭限流',
-  isRateLimited(new Request('https://x/', { headers: { 'CF-Connecting-IP': '203.0.113.78' } }), { RATE_LIMIT_PER_MIN: '0' }), false);
+  await isRateLimited(new Request('https://x/', { headers: { 'CF-Connecting-IP': '203.0.113.78' } }), { RATE_LIMIT_PER_MIN: '0' }), false);
+
+// ④b D1 路径：有 LIUYAO_DB 时计数落库（线上 isolate 几乎不复用，内存计数等于没有）
+const mkRateDb = function () {
+  const rows = new Map();
+  return {
+    prepare: function () {
+      const st = { args: [], bind: function () { st.args = [].slice.call(arguments); return st; } };
+      st.first = async function () {
+        const k = st.args[0] + '|' + st.args[1] + '|' + st.args[2];
+        const n = (rows.get(k) || 0) + 1;
+        rows.set(k, n);
+        return { n: n };
+      };
+      st.run = async function () { return { meta: { changes: 0 } }; };
+      return st;
+    }
+  };
+};
+const rateDb = mkRateDb();
+const rlDb = [];
+for (let i = 0; i < 9; i++) {
+  rlDb.push(await isRateLimited(
+    new Request('https://x/', { headers: { 'CF-Connecting-IP': '203.0.113.90' } }),
+    { LIUYAO_DB: rateDb, RATE_LIMIT_PER_MIN: '6' }
+  ));
+}
+eq('D1 计数：6 次放行、后续拒绝', [rlDb.slice(0, 6).filter(Boolean).length, rlDb.slice(6).filter(Boolean).length], [0, 3]);
+eq('D1 与内存计数互不干扰（不同 IP 另起一行）',
+  await isRateLimited(new Request('https://x/', { headers: { 'CF-Connecting-IP': '203.0.113.91' } }),
+    { LIUYAO_DB: rateDb, RATE_LIMIT_PER_MIN: '6' }), false);
 
 // ⑤ 统一 json() 出口带 no-store / nosniff（旧版三份拷贝，加头只改一处）
 const hRes = libJson({ ok: true });

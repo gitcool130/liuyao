@@ -127,21 +127,30 @@ export async function readJsonLimited(request, max) {
 // 2026-11 复核时被判定为高危：/api/interpret 与 /api/vote 不设口令时是
 // 零成本额度消耗口，一条 curl 循环就能打光当日 Workers AI 免费额度。
 // 现行语义：
-//   RATE_LIMIT_PER_MIN 未设 → 用调用方给的默认值（interpret 10、vote 6）；
-//   显式设 0 或负数        → 关闭（本地压测/自建网关时用）；
+//   RATE_LIMIT_PER_MIN 未设 → 用调用方给的默认值（interpret 20、vote 6）；
+//   显式设 0 或负数        → 关闭（本地压测/自建网关前置时用）；
 //   取不到 IP              → 不计数（非 CF 环境下别假装有边界）。
-// 局限仍是「每 isolate 一份内存」，跨 isolate 不共享；真正的全局限流要在
-// Cloudflare 后台配 Rate Limiting 规则（见 docs/DEPLOY-SECURITY.md）。
-const RL_BUCKETS = new Map();   // name → Map(ip → number[])
+//
+// 存储：优先 D1（跨 isolate 全局一致），无 DB 绑定或表缺失时退化为 isolate 内存。
+// 为什么必须落库：2026-11-09 线上实测本 zone 的 Pages Functions **几乎不复用 isolate**——
+// 连续 5 次请求各自命中全新实例（自增计数停在 1）。纯内存计数在线上等于没有，
+// 这也是旧版「同 IP 错 20 次锁 10 分钟」从未在线上生效的原因。
+// 表结构见 schema.sql：
+//   rate_hits(bucket TEXT, ip TEXT, w INTEGER, n INTEGER, PRIMARY KEY(bucket, ip, w))
+// w = floor(now/60000)，一行代表「某端点 + 某 IP + 某一分钟」的计数。
+// 代价：每个受保护请求多一次 D1 写（免费额度 10 万行/日，本站在此量级下可忽略）。
+const RL_BUCKETS = new Map();   // 内存回退：name → Map(ip → number[])
 const RL_MAX_IPS = 5000;
 const RL_WINDOW_MS = 60000;
 
-export function rateLimit(request, env, name, defLimit) {
+function limitOf(env, defLimit) {
   const raw = env && env.RATE_LIMIT_PER_MIN;
   const limit = (raw === undefined || raw === null || raw === '') ? (defLimit || 10) : parseInt(raw, 10);
-  if (!isFinite(limit) || limit <= 0) return false;
-  const ip = clientIp(request);
-  if (!ip) return false;
+  return (!isFinite(limit) || limit <= 0) ? 0 : limit;
+}
+
+// 内存回退实现（无 DB 时用；测试也走这条，便于断言滑窗边界）
+function memoryHit(name, ip, limit) {
   let bucket = RL_BUCKETS.get(name);
   if (!bucket) { bucket = new Map(); RL_BUCKETS.set(name, bucket); }
   const now = Date.now();
@@ -160,11 +169,42 @@ export function rateLimit(request, env, name, defLimit) {
   return false;
 }
 
+// D1 实现：UPSERT + RETURNING 一次往返拿到自增后的计数
+async function dbHit(env, name, ip, limit) {
+  const w = Math.floor(Date.now() / RL_WINDOW_MS);
+  const row = await env.LIUYAO_DB.prepare(
+    'INSERT INTO rate_hits (bucket, ip, w, n) VALUES (?, ?, ?, 1) ' +
+    'ON CONFLICT(bucket, ip, w) DO UPDATE SET n = n + 1 RETURNING n'
+  ).bind(name, ip, w).first();
+  const n = row ? Number(row.n != null ? row.n : row['n']) : 0;
+  // 概率清理（1%）：只删 3 小时前的行，避免表随时间无限增长
+  if (Math.random() < 0.01) {
+    try { await env.LIUYAO_DB.prepare('DELETE FROM rate_hits WHERE w < ?').bind(w - 180).run(); }
+    catch (e) { /* 清理失败不影响本次判定 */ }
+  }
+  return n > limit;
+}
+
+export async function rateLimit(request, env, name, defLimit) {
+  const limit = limitOf(env, defLimit);
+  if (!limit) return false;
+  const ip = clientIp(request);
+  if (!ip) return false;
+  if (!env || !env.LIUYAO_DB) return memoryHit(name, ip, limit);
+  try {
+    return await dbHit(env, name, ip, limit);
+  } catch (e) {
+    // 表缺失（尚未执行 schema.sql）/D1 抖动：退化为内存计数，绝不因限流设施故障而 5xx
+    console.warn('[liuyao] 限流计数落库失败，退化为内存计数:', e && e.message);
+    return memoryHit(name, ip, limit);
+  }
+}
+
 export function rateLimited() {
   return json({ error: 'RATE_LIMITED', message: '请求过于频繁，请稍后重试' }, 429);
 }
 
-// 仅供测试读取限流内部状态（不导出桶本体，避免测试耦合实现细节）
+// 仅供测试读取内存回退桶的内部状态（不导出桶本体，避免测试耦合实现细节）
 export function _rlState(name) {
   const out = [];
   const bucket = RL_BUCKETS.get(name);

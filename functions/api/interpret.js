@@ -114,7 +114,7 @@ export async function readCapped(resp, max) {
 // 而滥用者的成本瓶颈本来也不是「每分钟多少条」，是需要 CF 后台的全局限流规则兜底。
 export const INTERPRET_RATE_LIMIT = 20;
 
-export function isRateLimited(request, env) {
+export async function isRateLimited(request, env) {
   return rateLimit(request, env, 'interpret', INTERPRET_RATE_LIMIT);
 }
 
@@ -350,7 +350,7 @@ export async function onRequestPost(context) {
   // 而 handler 返回后「游离 Promise」上的 fetch 会被运行时取消（见 slowSession 注释）。
   const waitUntil = typeof context.waitUntil === 'function' ? context.waitUntil.bind(context) : null;
 
-  if (isRateLimited(request, env)) return rateLimited();
+  if (await isRateLimited(request, env)) return rateLimited();
 
   // 写路径守卫：Content-Type 必须是 JSON、Origin（若带）必须同源。
   // 缺了这道闸，任意网页都能用 <form> 或 fetch(text/plain) 借访客 IP 打本端点——

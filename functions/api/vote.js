@@ -251,7 +251,7 @@ export async function onRequestPost(context) {
   const { request, env } = context;
   // 先限流再碰 AI 绑定：本端点是三个模型一次打满，是全站最贵的接口。
   // 限流放在最前，连未绑定 AI 的部署也不会被白刷。
-  if (rateLimit(request, env, 'vote', VOTE_RATE_LIMIT)) return rateLimited();
+  if (await rateLimit(request, env, 'vote', VOTE_RATE_LIMIT)) return rateLimited();
   if (!env || !env.AI) {
     return json({ error: 'NO_AI_BINDING', message: '未绑定 Workers AI（wrangler.toml 加 [ai] binding = "AI"，或在 Pages 设置里添加 AI 绑定）' }, 503);
   }
