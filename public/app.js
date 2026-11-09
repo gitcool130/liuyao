@@ -2465,7 +2465,10 @@
     let effTarget = target, customKw = '';
     if (target === '__custom__') {
       const sug = (typeof C.suggestYongshen === 'function') ? C.suggestYongshen(userText()) : null;
-      if (sug) { effTarget = sug.rel; customKw = sug.kw; }
+      // 天时是独立域值（rel='天气'），analyze() 只认六亲：不解映射的话
+      // 存进去的判据 yongshen 恒为 null，「占雨」类卦例就没有回访基准。
+      // renderAnalysis 早已这样映射，此处是同一口径的另一半（保存路径）。
+      if (sug) { effTarget = sug.rel === '天气' ? '父母' : sug.rel; customKw = sug.kw; }
     }
     if (!target || (target === '__custom__' && !customKw)) return null;
     try {
