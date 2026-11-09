@@ -43,14 +43,17 @@ const pan = C.paipan([1, 9, 0, 1, 6, 0], new Date(2026, 9, 29, 15, 0));
 // 把两段源码装进工厂，$ / C / pan / lastAnalysis / userText / questionText 全部注入。
 // analysisForSave 内调用了 userText()/questionText()（app.js L481–501），二者不在切取范围内，
 // 旧版只注入 currentQuestion，导致 ReferenceError 被 try/catch 吞掉 → 恒返回 null（审计 P1-1）。
+// 2026-11-10：analysisForSave 合并了 dsh 的 P2-7（lastManualYong 回落），
+// hasTopic 行无条件引用它，必须注入，否则 ReferenceError 被 try/catch 吞成 null
+// （正是本脚本要防的那种假阴性）。
 function makeScope(opts) {
   const factory = new Function(
-    '$', 'C', 'pan', 'lastAnalysis', 'userText', 'questionText',
+    '$', 'C', 'pan', 'lastAnalysis', 'lastManualYong', 'userText', 'questionText',
     code + '\n  return { analysisForSave: analysisForSave, baselineSnapshot: baselineSnapshot };'
   );
   return factory(
     function (sel) { return { value: opts.select, hidden: true, focus: function () {} }; },
-    C, opts.pan, opts.lastAnalysis,
+    C, opts.pan, opts.lastAnalysis, opts.lastManualYong || null,
     function () { return opts.question || ''; },
     function () { return opts.question || ''; }
   );

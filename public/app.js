@@ -162,6 +162,15 @@
     const w = wallOf(selectedDate);
     $('#dtInput').value = w.y + '-' + p2(w.m) + '-' + p2(w.d) + 'T' + p2(w.h) + ':' + p2(w.min);
     $('#dtInput').disabled = (timeMode === 'live'); // 现场模式不可改时间
+    // P1-7：时间模式文案必须与 timeMode 同源。旧版只在 #btnTimeMode.onclick 里同步，
+    // 分享链接还原（restoreFromShare 设 timeMode='backfill' 后直接 renderTime）会留下
+    // 「现场摇卦·首摇锁定」的静态标签，与可编辑输入框/补录提示互相矛盾。
+    const modeBtn = $('#btnTimeMode');
+    if (modeBtn) modeBtn.textContent = (timeMode === 'live') ? '切换补录模式' : '切回现场摇卦';
+    const modeLbl = $('#dtLabel');
+    if (modeLbl) modeLbl.textContent = (timeMode === 'live')
+      ? '占问时刻（北京时间 · 现场摇卦 · 首摇锁定）：'
+      : '占问时刻（北京时间 · 补录模式 · 可改）：';
   }
 
   // ---------- 起卦 ----------
@@ -343,9 +352,6 @@
         selectedDate = beijingNow();
       }
     }
-    this.textContent = (timeMode === 'live') ? '切换补录模式' : '切回现场摇卦';
-    const lbl = $('#dtLabel');
-    if (lbl) lbl.textContent = timeMode === 'live' ? '占问时刻（北京时间 · 现场摇卦 · 首摇锁定）：' : '占问时刻（北京时间 · 补录模式 · 可改）：';
     renderTime();
     // 六爻已成时：时刻变了必须重排盘，否则 #timeInfo 显示锁定时刻而 pan.pillars 仍是补录时刻
     if (records.length === 6) computePan();
@@ -445,7 +451,13 @@
     if (!bits) { hint.innerHTML = '<span style="color:#a83f39">未收录该卦名，请从下拉清单中选六十四卦之一。</span>'; return; }
     let dong = [];
     if (raw) {
-      dong = raw.replace(/[，、\s]+/g, ',').split(',').filter(Boolean).map(function (s) { return parseInt(s, 10); });
+      const parts = raw.replace(/[，、\s]+/g, ',').split(',').filter(Boolean);
+      // P2-10：parseInt('3abc') === 3 会静默错排；动爻必须是纯数字。
+      if (parts.some(function (s) { return !/^\d+$/.test(s); })) {
+        hint.innerHTML = '<span style="color:#a83f39">动爻须为 1–6 的数字，多个以逗号分隔（如 3,4）。</span>';
+        return;
+      }
+      dong = parts.map(function (s) { return parseInt(s, 10); });
       if (!dong.length || dong.some(function (n) { return !(n >= 1 && n <= 6); })) {
         hint.innerHTML = '<span style="color:#a83f39">动爻须为 1–6 的数字，多个以逗号分隔（如 3,4）。</span>';
         return;
@@ -938,7 +950,7 @@
     const url = C.shareUrl(code);
     const done = function () {
       btn.textContent = '已复制 ✓';
-      if (hint) hint.textContent = '链接只含占时、爻值与所测之事，不含任何断语；打开方看到的盘与本地逐字一致。';
+      if (hint) hint.textContent = '链接只含占时、爻值与所测之事，不含任何断语；打开方看到的盘与本地逐字一致。注意：所测之事的原文会随链接公开（base64 不是加密），涉及隐私请勿分享。';
       setTimeout(function () { btn.textContent = '复制分享链接'; }, 1500);
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1152,6 +1164,10 @@
   // 验证标志随各模型的 cc 存 concl[m].verify——勿退回模块级单变量：
   // 双模型经 Promise.all 并行、完成顺序不定，单变量会让 A 列显示 B 的标志（中-8）。
   let castId = null;
+  // 保存代际（P1-6）：与 aiGen 分开，专门保护在途的 /api/records POST。
+  // 重新起卦/撤销递增后，旧保存响应不得再把旧 castId 写回（否则下一卦会
+  // 带着旧 id 走 ON CONFLICT，把旧记录整行覆盖）。
+  let saveGen = 0;
   // AI 请求代际管理：每次「开始断卦」递增代数并新建 AbortController；
   // resetAIState（重新起卦/撤销）时 abort 在途请求并递增代数，
   // 旧请求的回调凭代数比对后丢弃，避免旧卦断语污染新卦栏目与对话上下文。
@@ -1213,6 +1229,7 @@
     // 无此机制时，断卦在途点[重新起卦]会让旧卦断语写入新卦栏目，
     // 追问在途时更会把两个卦象的盘面文本混进同一趟上下文发给模型。
     aiGen++;
+    saveGen++;
     if (aiAbort) { try { aiAbort.abort(); } catch (e) { /* 已 abort 则忽略 */ } }
     aiAbort = null;
     aiStates = {}; concl = {}; castId = null;
@@ -1845,7 +1862,10 @@
             if (idleTimer) clearTimeout(idleTimer);
             idleTimer = setTimeout(function () { ctrl.abort(); }, lim.idleMs);
           };
-          const hardCap = setTimeout(function () { ctrl.abort(); }, lim.hardCapMs);
+          // P2-11：流式硬顶不得超过本次 callInterpret 的总截止（AI_RETRY_DEADLINE）。
+          // 旧版固定 330s，用户可能等 5.5 分钟而与「180s 截止」的文案/重试策略矛盾。
+          const hardCapMs = Math.max(0, Math.min(lim.hardCapMs, AI_RETRY_DEADLINE - (Date.now() - start)));
+          const hardCap = setTimeout(function () { ctrl.abort(); }, hardCapMs);
           armIdle();
           let stream;
           let thinkLen = 0;   // 本轮收到的思考草稿字数（用于区分「空响应」与「只想不答」）
@@ -2463,17 +2483,23 @@
     if (!pan) return null;
     const target = $('#useSelect').value;
     let effTarget = target, customKw = '';
-    if (target === '__custom__') {
+    // P2-7（2026-11-09）：与 renderAnalysis 同源。天气类在断法层映射到父母；
+    // 自定义既无关键词又手动指定了用神时，用 lastManualYong，不能直接回落
+    // C.analyze(pan,'天气'/'__custom__') → yongshen:null、trend:'待审'。
+    if (target === '天气') {
+      effTarget = '父母';
+    } else if (target === '__custom__') {
       const sug = (typeof C.suggestYongshen === 'function') ? C.suggestYongshen(userText()) : null;
-      // 天时是独立域值（rel='天气'），analyze() 只认六亲：不解映射的话
-      // 存进去的判据 yongshen 恒为 null，「占雨」类卦例就没有回访基准。
-      // renderAnalysis 早已这样映射，此处是同一口径的另一半（保存路径）。
+      // 两处口径合一（2026-11-10 合并）：sug 命中时做「天气→父母」映射
+      // （analyze 只认六亲，不映射则判据 yongshen 恒为 null、占雨卦例无回访基准）；
+      // 未命中但用户手动指定过用神时回落 lastManualYong（dsh P2-7）。
       if (sug) { effTarget = sug.rel === '天气' ? '父母' : sug.rel; customKw = sug.kw; }
+      else if (lastManualYong) effTarget = lastManualYong;
     }
-    if (!target || (target === '__custom__' && !customKw)) return null;
+    if (!target || (target === '__custom__' && !customKw && !lastManualYong)) return null;
     try {
       // 与 renderAnalysis 同口径：写了原文就带 topic，否则保存的判据与页面所见会不同源
-      const hasTopic = !!(customKw || userText());
+      const hasTopic = !!(customKw || lastManualYong || userText());
       return C.analyze(pan, effTarget, hasTopic ? { topic: questionText() } : undefined);
     } catch (e) { return null; }
   }
@@ -2539,6 +2565,10 @@
 
   async function autoSaveCast() {
     if (!pan) return;
+    // P1-6：保存代际。请求在途时用户点「重新起卦」→ resetAIState 递增 saveGen，
+    // 旧响应返回后不得再把旧 id 写回 castId；否则下一卦会带着旧 id 走
+    // ON CONFLICT，把旧记录整行覆盖（records.js 更新全部盘面字段）。
+    const myGen = saveGen;
     // 串行化：旧版 autoSaveCast 与 [存入卦例库] 都不 await，用户在其在途时点手动保存，
     // 两个 POST 都带 id:null → 服务端各生成一个 UUID → 卦例库出现两条重复记录，
     // 且后返回的把 castId 改成另一条的 id，后续自动保存更新的是另一条。
@@ -2547,6 +2577,7 @@
         // silent：未登录时不弹口令框，静默跳过（但结果要回显，见 showSaveTip）
         const res = await apiFetch('/api/records', { method: 'POST', body: JSON.stringify(recordPayload()) }, true);
         const data = await res.json().catch(function () { return {}; });
+        if (myGen !== saveGen) return;   // 已重新起卦/撤销：旧结果不得污染新盘
         if (res.ok && data.id) {
           castId = data.id;
           $('#btnSave').textContent = '已入卦例库 ✓';
@@ -2557,6 +2588,7 @@
           showSaveTip(false, null, '服务端返回 ' + res.status + (data && data.message ? ' · ' + data.message : ''));
         }
       } catch (e) {
+        if (myGen !== saveGen) return;
         showSaveTip(false, null, '网络异常或数据库未绑定');
       }
     });
@@ -2567,18 +2599,23 @@
   $('#btnSave').onclick = async function () {
     if (!pan) return;
     const btn = $('#btnSave'); btn.disabled = true;
+    const myGen = saveGen;
     try {
       // 先等挂起的自动保存落定，避免与手动保存并发写出两条记录（见 autoSaveCast 注释）
       if (autoSavePromise) { try { await autoSavePromise; } catch (e) { /* 自动保存失败不阻断手动保存 */ } }
+      if (myGen !== saveGen) return;
       const res = await apiFetch('/api/records', { method: 'POST', body: JSON.stringify(recordPayload()) });
       const data = await res.json();
+      if (myGen !== saveGen) return;   // 在途时已重新起卦：不要写回旧 id
       if (!res.ok) throw new Error(data.message || '保存失败');
       castId = data.id;
       btn.textContent = '已入卦例库 ✓';
       showSaveTip(true, data.hasBaseline !== false, '');
     } catch (e) {
-      showSaveTip(false, null, e.message);
-      alert('保存失败：' + e.message);
+      if (myGen === saveGen) {
+        showSaveTip(false, null, e.message);
+        alert('保存失败：' + e.message);
+      }
     } finally { btn.disabled = false; }
   };
 
@@ -2627,7 +2664,7 @@
       ]
     };
     try { localStorage.setItem('ly.vote.cast', JSON.stringify(spec)); } catch (e) { /* 隐私模式可能禁用，页面会退化为样例 */ }
-    window.open('/vote.html', '_blank');
+    window.open('/vote.html?v=20261109a', '_blank');
   };
 
   // ---------- 卦例库口令登录 ----------
@@ -2806,9 +2843,21 @@
 
   async function loadDueTasks() {
     try {
-      const res = await apiFetch('/api/readings', {});
-      if (!res.ok) { renderDueTasks({ tasks: [] }); return; }
-      renderDueTasks(await res.json());
+      // P2-8：服务端单页 50、补 offset 后，这里逐页取回再一次性渲染。
+      // 上限 10 页（500 条）防异常数据把辅助功能拖死；正常个人库远达不到。
+      const tasks = [];
+      let offset = 0, total = 0;
+      for (let page = 0; page < 10; page++) {
+        const res = await apiFetch('/api/readings?limit=50&offset=' + offset, {});
+        if (!res.ok) { renderDueTasks({ tasks: [] }); return; }
+        const data = await res.json();
+        const rows = Array.isArray(data.tasks) ? data.tasks : [];
+        total = Number(data.total) || rows.length;
+        tasks.push.apply(tasks, rows);
+        offset += rows.length;
+        if (!rows.length || offset >= total) break;
+      }
+      renderDueTasks({ tasks: tasks, total: total });
     } catch (e) { /* 回访提醒是辅助功能，失败静默不打断卦例库主流程 */ }
   }
 
@@ -3074,11 +3123,13 @@
     if (d.use) {
       const sel = $('#useSelect');
       sel.value = (d.use === '__custom__' && !d.question) ? '' : d.use;
-      // 补充事由不限自定义（2026-10-31）：固定事类带回来的原文也要回填，
-      // 否则「求财·买卖｜这笔货款本月能到吗」在收链一方只剩前半截。
-      const uc = $('#useCustom');
-      if (d.question && uc) { uc.value = d.question; uc.hidden = false; }
     }
+    // 补充事由不限自定义（2026-10-31）：固定事类带回来的原文也要回填，
+    // 否则「求财·买卖｜这笔货款本月能到吗」在收链一方只剩前半截。
+    // P2-5（2026-11-09）：这段原先嵌在 if (d.use) 里，用神代码为 '-' 的合法
+    // 分享码（1.<time>.<6爻>.-.<question>）会把题面整段丢掉。
+    const uc = $('#useCustom');
+    if (d.question && uc) { uc.value = d.question; uc.hidden = false; }
     renderTime(); renderCoins(); renderTossHint(); renderStack();
     computePan();
     if (hint) {
