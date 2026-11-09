@@ -43,15 +43,22 @@ binding = "AI"
 # 删完必须重新部署一次（Functions 持旧环境快照）。
 # DEEPSEEK_BASE_URL 只在需要换自建中转/代理时才设（非网关地址照旧生效）。
 
-# ---- 两道费用/访问闸门（2026-09-28 启用）----
-# RATE_LIMIT_PER_MIN：/api/interpret 按访客 IP 的每分钟上限。**当前刻意不设 → 不限流。**
-# 代码侧是软开关：未设置时 `parseInt(env.RATE_LIMIT_PER_MIN || '0', 10)` → 0 → 直接放行。
-# 2026-09-28 曾设为 "20"，同日按用户要求撤销（原话「不限流」）。
-# 如需恢复限流：取消下一行注释并重新 `wrangler pages deploy`。
-# 取 20 的理由（供恢复时参考）：正常用法是「一次起卦 + 若干追问」，约 3~6 次/分；
-# 20 留 3~5 倍余量，连公司/家庭共用出口（同 IP）也不易误伤；对脚本则把天花板压到
-# 20 次/分 ≈ 2.9 万次/日/IP。注意它只在单个 isolate 内计数，属「削减」而非「根治」。
+# ---- 费用/访问闸门（2026-11-09 复核后改为默认开启）----
+# RATE_LIMIT_PER_MIN：按访客 IP 的每分钟请求上限，**覆盖 /api/interpret 与 /api/vote**。
+# 语义（2026-11-09 变更，旧文档的「未设置即不限流」已作废）：
+#   不设该变量 → 用代码内默认值：interpret 20 次/分、vote 6 次/分；
+#   设为正整数 → 两个端点统一按该值（此时 vote 也放宽到同值，按需自行权衡）；
+#   设为 "0"   → 显式关闭限流（仅本地压测/自建网关前置时使用）。
+# 变更理由：2026-09-28 曾按「不限流」撤销，但 2026-11 复核确认 /api/interpret 无口令、
+# 无来源校验、无体积上限兜底，/api/vote 一次请求即烧 3 次 Workers AI（10k neurons/日
+# ≈ 500 轮）——一条 curl 循环就能把当日额度清空，站点 AI 功能整体不可用。
+# 仍属「削减」而非「根治」：计数在单个 isolate 内存中，跨 isolate 不共享。
+# 真正的全局限流须在 CF 后台配 Rate Limiting 规则（见 docs/DEPLOY-SECURITY.md）。
 # RATE_LIMIT_PER_MIN = "20"
+
+# ALLOWED_ORIGINS：额外放行的跨站来源，逗号分隔（默认只认同源）。
+# 用于「自定义域名 + pages.dev 双入口」等场景；本文件留空即只认同源。
+# ALLOWED_ORIGINS = "https://liuyao.example.com"
 #
 # 访问口令分两级，均为敏感值、**刻意不写在本文件**（仓库公开），改用 Pages secret 设置：
 #   LIB_CODE      卦例库口令（**读 + 写**：浏览/装入/删除）。生产已设；只管卦例库，断卦不受限。
@@ -79,10 +86,11 @@ binding = "AI"
 # 若用 wrangler CLI 部署，需把 CUSTOM_PROVIDERS 同步写到这里（JSON 写成单行字符串）：
 # CUSTOM_PROVIDERS = '[{"id":"kimi","label":"Moonshot","base":"https://api.moonshot.cn/v1","models":["kimi-k2"]}]'
 
-# 费用/访问闸门现状（2026-09-28 用户要求「不限流」后）：
-#   LIB_CODE            → secret，生产已设（卦例库**读 + 写**：浏览/装入/删除，见 records.js 的 checkAccess/writeGuard）
-#   ACCESS_CODE         → secret，生产未设（曾启用、同日撤销，断卦恢复免口令）
-#   RATE_LIMIT_PER_MIN  → 本文件 [vars]，**当前不设 = 不限流**
-# → 即 /api/interpret 目前**无口令、无限流**，费用敞口仅由「入模上限 ≈ 20,000 字符」约束。
-# 用户明确要求不限流，故**也不在 CF 后台另加 Rate limiting rules**（该操作 CLI 不支持，
-# 且与用户意图相悖）。如需恢复，见上方 RATE_LIMIT_PER_MIN 段落。
+# 费用/访问闸门现状（2026-11-09 复核）：
+#   LIB_CODE            → secret，生产已设（卦例库**读 + 写**：浏览/装入/删除）
+#   ACCESS_CODE         → secret，生产未设（断卦免口令）
+#   RATE_LIMIT_PER_MIN  → 本文件 [vars]，未设，走代码默认（interpret 20/min、vote 6/min）
+# → /api/interpret 仍**无口令**，但已有：按 IP 限流（默认开）+ 同源/JSON 写守卫
+#   + 流式 512 KB 体积上限（不再依赖 Content-Length）。
+# 仍建议在 CF 后台加一条 Rate Limiting 规则兜底（CLI 不支持，需控制台操作），
+# 因为 isolate 内计数挡不住「换 isolate」的分布式重放。

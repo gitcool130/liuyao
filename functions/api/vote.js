@@ -14,11 +14,14 @@
  *        basis 是**模型自述的规则名**（已剥书名号），一律未经原典核验 —— 前端据此渲染「依据层」，
  *        不得当作可回溯的古籍引文；可回溯的引文只在 core/analyze.js 的 basis 字段里。
  */
-import { json, requireCode as requireCodeGate } from './_lib.js';
+import { json, requireCode as requireCodeGate, writeGuard, readJsonLimited, rateLimit, rateLimited } from './_lib.js';
 
 const MAX_STATE = 1500;
 const MAX_ASK = 200;
 const PER_MODEL_TIMEOUT = 28000;
+// 一次请求烧三票 ≈ 17 neurons，10k/天 只够 500 轮。默认 6 次/分/IP：
+// 正常用户对一张盘按不出 6 次对账，而脚本无法再以「一条循环」清空当日额度。
+const VOTE_RATE_LIMIT = 6;
 
 const YONG_LABEL = { cai: '妻财', guan: '官鬼', fu: '父母', xiong: '兄弟', zi: '子孙' };
 const WANG_LABEL = { ji_ruo: '极弱', ruo: '弱', ping: '平', wang: '旺', ji_wang: '极旺' };
@@ -246,21 +249,24 @@ function runOne(env, m, state, ask) {
 
 export async function onRequestPost(context) {
   const { request, env } = context;
+  // 先限流再碰 AI 绑定：本端点是三个模型一次打满，是全站最贵的接口。
+  // 限流放在最前，连未绑定 AI 的部署也不会被白刷。
+  if (rateLimit(request, env, 'vote', VOTE_RATE_LIMIT)) return rateLimited();
   if (!env || !env.AI) {
     return json({ error: 'NO_AI_BINDING', message: '未绑定 Workers AI（wrangler.toml 加 [ai] binding = "AI"，或在 Pages 设置里添加 AI 绑定）' }, 503);
   }
+  // 跨站/非 JSON 写入直接拒：没有这道闸，任意网页可用简单请求借访客 IP 烧额度。
+  const badWrite = writeGuard(request, env);
+  if (badWrite) return badWrite;
   // 口令闸：与 interpret/records 同源（_lib.js requireCode）。vote 虽走 Workers AI 免费额度，
   // 但 README 承诺「所有接口都需口令」，故设 ACCESS_CODE 后此处同样拦截（审计 P1-2）。
   const denied = await requireCodeGate(request, env.ACCESS_CODE, '需要访问口令');
   if (denied) return denied;
-  // P2-API-11（2026-11-03）：畸形 content-length 头（如 'abc' → Number NaN）
-  // 旧版 NaN > 32768 为 false 直接放行——闸门可被一个畸形头绕过，恶意大 body
-  // 会先全量读进 isolate 内存。非有限数一律按超限处理（拒绝）；缺头/正常值不变。
-  const len = Number(request.headers.get('content-length') || 0);
-  if (!isFinite(len) || len > 32 * 1024) return json({ error: 'TOO_LARGE' }, 413);
-
-  let b;
-  try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+  // 请求体：Content-Length 只作早退，实际上限由流式累计兜底（32 KB 足够盘面 + 追问）
+  const read = await readJsonLimited(request, 32 * 1024);
+  if (read.error === 'TOO_LARGE') return json({ error: 'TOO_LARGE' }, 413);
+  if (read.error) return json({ error: 'BAD_JSON' }, 400);
+  const b = read.value;
   if (!b || typeof b !== 'object' || Array.isArray(b)) return json({ error: 'BAD_JSON' }, 400);
 
   const state = typeof b.state === 'string' ? b.state.slice(0, MAX_STATE) : '';

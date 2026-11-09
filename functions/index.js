@@ -80,9 +80,17 @@ function ogRewrite(html, title, desc) {
     .replace(RE_TITLE, () => '<title>' + title + '</title>');
 }
 
+// Pages 的 _headers 只作用于静态资产；本函数重写过的 HTML 是 Functions 响应，
+// 不经过那一层，故 HSTS/nosniff 在此显式补上（两处出口都要补，漏一处就等于没设）。
+function harden(headers) {
+  headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  return headers;
+}
+
 // 已消费 body 后按原样重建响应（fallback 路径用，保留原始头）
 function rebuild(asset, body) {
-  return new Response(body, { status: asset.status, headers: asset.headers });
+  return new Response(body, { status: asset.status, headers: harden(new Headers(asset.headers)) });
 }
 
 export async function onRequestGet(context) {
@@ -123,7 +131,7 @@ export async function onRequestGet(context) {
     headers.delete('etag');
     headers.delete('last-modified');
     headers.set('cache-control', 'public, max-age=300');
-    return new Response(out, { status: asset.status, headers: headers });
+    return new Response(out, { status: asset.status, headers: harden(headers) });
   } catch (e) {
     // 理论不可达（封闭枚举输入），仍兜底：宁可没有按盘预览，不可 500
     console.warn('[liuyao/og] 改写抛错，回落默认 meta:', e && e.message);

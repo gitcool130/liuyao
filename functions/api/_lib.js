@@ -26,11 +26,150 @@ export function isBannedModelId(id) {
   return BANNED_MODEL_SET.has(t) || BANNED_MODEL_RE.test(t);
 }
 
+// 所有端点共用的 JSON 响应出口。安全头在此**单点**加，不要在各端点各写一份
+// （旧版 records.js / readings.js / _lib.js 三份物理拷贝，加头只改一处 → 另两处静默缺失）。
+//   no-store：卦例正文/断语是逐用户内容，任何中间缓存都不该留存；
+//   nosniff ：阻止浏览器把 JSON 当 HTML/脚本嗅探（配合 nosniff 才能让 415/403 的
+//             回显文本不被当作可执行文档）。
 export function json(data, status) {
   return new Response(JSON.stringify(data), {
     status: status || 200,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' }
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff'
+    }
   });
+}
+
+// 客户端 IP。CF-Connecting-IP 由边缘写入、客户端同名的头会被剥离，可信；
+// X-Forwarded-For 仅在非 CF 部署（wrangler dev）下回退，该环境可伪造，只作降级。
+// 两者都取不到时返回 ''——调用方据此跳过计数（fail-open），不要退化成共用 'unknown'
+// 桶：那会把「所有无 IP 来源」绑成一个计数器，一次爆破就锁死全部。
+export function clientIp(request) {
+  return request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+}
+
+// 写路径守卫（CSRF + 内容协商）：所有 POST/PUT/PATCH/DELETE 先过这一关。
+// 为什么需要：浏览器对 application/json 的跨站 POST 会先发预检，而 text/plain /
+// form-urlencoded 属于「简单请求」不预检、且会把响应交给调用方——任意网页都能
+// 借访客浏览器、以访客 IP 打本站付费接口（烧模型额度），甚至借口令 Cookie 写库。
+// 两道闸互补：
+//   ① Content-Type 必须是 JSON —— 把跨站「简单请求」直接挡在 415；
+//   ② Origin 若存在则必须同源 —— 挡住同源外的表单/脚本发起，并容忍自定义域名。
+// 缺 Origin 的请求放行（curl / 服务端调用不带该头，浏览器跨站一定带）。
+const JSON_CT_RE = /^application\/(?:[a-z0-9.+-]+\+)?json\b/i;
+const WRITE_METHODS = { POST: 1, PUT: 1, PATCH: 1 };
+
+export function writeGuard(request, env) {
+  const origin = request.headers.get('origin');
+  if (origin) {
+    let host = '';
+    try { host = new URL(origin).host; } catch (e) { host = ''; }   // 'null'（沙箱 iframe）也会落到这里
+    const selfHost = new URL(request.url).host;
+    const allowed = String((env && env.ALLOWED_ORIGINS) || '').split(',')
+      .map(function (s) { return s.trim(); }).filter(Boolean);
+    const ok = !!host && (host === selfHost || allowed.some(function (a) {
+      try { return new URL(a).host === host; } catch (e) { return a === origin; }
+    }));
+    if (!ok) {
+      return json({ error: 'CROSS_ORIGIN_DENIED', message: '跨站请求已被拒绝' }, 403);
+    }
+  }
+  if (WRITE_METHODS[request.method]) {
+    const ct = request.headers.get('content-type') || '';
+    if (!JSON_CT_RE.test(ct)) {
+      return json({ error: 'UNSUPPORTED_MEDIA_TYPE', message: '请求体须为 application/json' }, 415);
+    }
+  }
+  return null;
+}
+
+// 请求体读取：Content-Length 只是「早退」提示，真正的边界在流式累计。
+// 旧实现只看头：不带 Content-Length 的分块请求（或伪造一个小的）会整段读进
+// isolate 内存后才轮到字段限长——600 KB 的无头请求实测直接 200 进业务逻辑。
+// 这里按实际字节数累计，超限立即 cancel 上游流，内存占用被硬封顶在 max + 一块。
+// 返回 { value } / { error: 'TOO_LARGE' | 'BAD_JSON' }。
+export async function readJsonLimited(request, max) {
+  const cl = parseInt(request.headers.get('content-length') || '0', 10);
+  if (!isFinite(cl) || cl > max) return { error: 'TOO_LARGE' };
+  if (!request.body) return { error: 'BAD_JSON' };
+  const reader = request.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const r = await reader.read();
+      if (r.done) break;
+      size += r.value.byteLength;
+      if (size > max) {
+        try { await reader.cancel(); } catch (e) { /* 已释放 */ }
+        return { error: 'TOO_LARGE' };
+      }
+      chunks.push(r.value);
+    }
+  } catch (e) {
+    return { error: 'BAD_JSON' };
+  } finally {
+    try { reader.releaseLock(); } catch (e) { /* 已释放 */ }
+  }
+  const buf = new Uint8Array(size);
+  let off = 0;
+  for (let i = 0; i < chunks.length; i++) { buf.set(chunks[i], off); off += chunks[i].byteLength; }
+  try {
+    return { value: JSON.parse(new TextDecoder().decode(buf)) };
+  } catch (e) {
+    return { error: 'BAD_JSON' };
+  }
+}
+
+// 按 IP 的滑动窗口限流（共享实现）。默认**开启**——「未配置即不限流」在
+// 2026-11 复核时被判定为高危：/api/interpret 与 /api/vote 不设口令时是
+// 零成本额度消耗口，一条 curl 循环就能打光当日 Workers AI 免费额度。
+// 现行语义：
+//   RATE_LIMIT_PER_MIN 未设 → 用调用方给的默认值（interpret 10、vote 6）；
+//   显式设 0 或负数        → 关闭（本地压测/自建网关时用）；
+//   取不到 IP              → 不计数（非 CF 环境下别假装有边界）。
+// 局限仍是「每 isolate 一份内存」，跨 isolate 不共享；真正的全局限流要在
+// Cloudflare 后台配 Rate Limiting 规则（见 docs/DEPLOY-SECURITY.md）。
+const RL_BUCKETS = new Map();   // name → Map(ip → number[])
+const RL_MAX_IPS = 5000;
+const RL_WINDOW_MS = 60000;
+
+export function rateLimit(request, env, name, defLimit) {
+  const raw = env && env.RATE_LIMIT_PER_MIN;
+  const limit = (raw === undefined || raw === null || raw === '') ? (defLimit || 10) : parseInt(raw, 10);
+  if (!isFinite(limit) || limit <= 0) return false;
+  const ip = clientIp(request);
+  if (!ip) return false;
+  let bucket = RL_BUCKETS.get(name);
+  if (!bucket) { bucket = new Map(); RL_BUCKETS.set(name, bucket); }
+  const now = Date.now();
+  if (bucket.size > RL_MAX_IPS) {
+    bucket.forEach(function (arr, k) {
+      if (!arr.length || now - arr[arr.length - 1] >= RL_WINDOW_MS) bucket.delete(k);
+    });
+  }
+  let hits = bucket.get(ip);
+  if (!hits) { hits = []; bucket.set(ip, hits); }
+  let keep = 0;
+  for (let i = 0; i < hits.length; i++) { if (now - hits[i] < RL_WINDOW_MS) hits[keep++] = hits[i]; }
+  hits.length = keep;
+  if (hits.length >= limit) return true;   // 达限即拒且不入队，数组长度硬封顶
+  hits.push(now);
+  return false;
+}
+
+export function rateLimited() {
+  return json({ error: 'RATE_LIMITED', message: '请求过于频繁，请稍后重试' }, 429);
+}
+
+// 仅供测试读取限流内部状态（不导出桶本体，避免测试耦合实现细节）
+export function _rlState(name) {
+  const out = [];
+  const bucket = RL_BUCKETS.get(name);
+  if (bucket) bucket.forEach(function (arr, ip) { out.push({ ip: ip, len: arr.length }); });
+  return out;
 }
 
 // 请求体总大小闸门（L1）：await request.json() 会对任意大的 body 先全量读入内存，
@@ -169,6 +308,29 @@ export function gptModelList(env) {
 // 模型清单与上游配置错配，请求必然 404/401，且后台无任何提示。
 const RESERVED_PROVIDER_IDS = { gemini: 1, deepseek: 1, gpt: 1 };
 
+// 自定义供应商 base 白名单（配置层 SSRF，2026-11 复核）：base 会拼成
+// `<base>/chat/completions` 由 Worker 侧发起 fetch。能改这个变量的人本就有
+// 后台权限，但「后台变量」与「可发起任意内网请求」不该是同一件事——
+// 一旦 CUSTOM_PROVIDERS 被误配/被第三方模板带入，就成了打内网和云元数据
+// （169.254.169.254）的跳板，且请求源是 Cloudflare 边缘、不落你的日志。
+// 只收 https + 公网主机名：拒绝 IP 字面量（无法可靠判断私网/重绑定）、
+// localhost/.local/.internal、以及云元数据主机名。
+const BLOCKED_HOST_RE = /^(?:localhost|.*\.localhost|.*\.local|.*\.internal|metadata(?:\.google\.internal)?|instance-data)$/i;
+
+export function isSafeProviderBase(base) {
+  if (typeof base !== 'string' || !base) return false;
+  let u;
+  try { u = new URL(base); } catch (e) { return false; }
+  if (u.protocol !== 'https:') return false;
+  if (u.username || u.password) return false;
+  const h = u.hostname.toLowerCase();
+  if (BLOCKED_HOST_RE.test(h)) return false;
+  // 纯 IP（含 IPv6 字面量，URL 解析后带方括号）一律拒绝：私网段、CGNAT、
+  // 链路本地与元数据地址都在其中，逐段判断不如整类拒绝来得可靠。
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(h) || h.charAt(0) === '[') return false;
+  return true;
+}
+
 // 自定义供应商：CUSTOM_PROVIDERS（JSON 数组）
 //   { "id": "kimi", "label": "Moonshot", "base": "https://api.moonshot.cn/v1", "models": ["kimi-k2"] }
 // id 需为小写字母数字且非内置 id；对应密钥环境变量为 <ID大写>_API_KEY
@@ -199,6 +361,12 @@ export function customProvidersWithWarnings(env) {
     }
     if (!Array.isArray(p.models) || !p.models.length) {
       warns.push(p.id + ' 未配置 models');
+      return;
+    }
+    // base 缺失时保留旧行为（providerConfig 会回落到默认网关），但一旦填了就必须合规：
+    // 宁可该供应商不上架，也不让一个 http/内网地址进到 fetch。
+    if (p.base !== undefined && !isSafeProviderBase(p.base)) {
+      warns.push(p.id + ' 的 base 非法（须为 https 公网地址，且不含账号密码），已忽略该条');
       return;
     }
     const safeModels = p.models.filter(isSafeModelId);

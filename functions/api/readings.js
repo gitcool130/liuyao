@@ -8,14 +8,8 @@
  * 只取 question 与 hex 供辨认），与「readings 不存正文」红线同向。
  */
 
-import { bodyTooLarge, payloadTooLarge, requireCode as requireCodeGate, ID_RE } from './_lib.js';
-
-function json(data, status) {
-  return new Response(JSON.stringify(data), {
-    status: status || 200,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' }
-  });
-}
+import { requireCode as requireCodeGate, ID_RE,
+  json, MAX_JSON_BODY, readJsonLimited, writeGuard } from './_lib.js';
 
 // cast_id 白名单与 records.js 共用 _lib.js 导出的同一份 ID_RE（P2-API-7，2026-11-03）：
 // 旧版两文件各存一份物理拷贝，违背「单一事实源」纪律，任一侧漏改即漂移。
@@ -55,11 +49,15 @@ export async function onRequestGet(context) {
 
 export async function onRequestPost(context) {
   const { request, env } = context;
+  // 跨站守卫先于口令：Content-Type 必须 JSON、Origin（若带）必须同源
+  const badWrite = writeGuard(request, env); if (badWrite) return badWrite;
   const denied = await requireCode(request, env, '需要访问口令'); if (denied) return denied;
   if (!env.LIUYAO_DB) return json({ error: 'NO_DB', message: '服务端未绑定 D1 数据库（变量名应为 LIUYAO_DB）' }, 503);
-  if (bodyTooLarge(request)) return payloadTooLarge();
-  let b;
-  try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+  // 流式累计兜底：Content-Length 缺失/偏小时也读不到上限之外
+  const read = await readJsonLimited(request, MAX_JSON_BODY);
+  if (read.error === 'TOO_LARGE') return json({ error: 'BODY_TOO_LARGE', message: '请求体过大（上限 512 KB）' }, 413);
+  if (read.error) return json({ error: 'BAD_JSON' }, 400);
+  const b = read.value;
   const castId = (b && typeof b.cast_id === 'string') ? b.cast_id : '';
   if (!ID_RE.test(castId)) return json({ error: 'BAD_ID', message: '非法 cast_id' }, 400);
   if (!b || b.action !== 'dismissed') {

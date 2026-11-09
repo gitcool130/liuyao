@@ -9,18 +9,12 @@
  * 绑定：Pages 项目 → Settings → Functions → D1 database bindings → 变量名 LIUYAO_DB
  */
 
-import { safeEqual, bodyTooLarge, payloadTooLarge, requireCode as requireCodeGate, ID_RE } from './_lib.js';
+import { safeEqual, bodyTooLarge, payloadTooLarge, requireCode as requireCodeGate, ID_RE,
+  json, MAX_JSON_BODY, readJsonLimited, writeGuard } from './_lib.js';
 
 // 保持既有 import 路径可用（test-functions.mjs 直接从此文件 import safeEqual）；
 // 实现已上移到 _lib.js，与 interpret.js 共用同一份常量时间比较
 export { safeEqual };
-
-function json(data, status) {
-  return new Response(JSON.stringify(data), {
-    status: status || 200,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' }
-  });
-}
 
 // 卦例 id 白名单 ID_RE 已上移到 _lib.js 统一导出（P2-API-7，2026-11-03）：
 // 旧版本文件与 readings.js 各存一份物理拷贝，违背 _lib.js「单一事实源」纪律，
@@ -50,7 +44,7 @@ async function requireCode(request, env, message) {
 async function checkAccess(request, env) { return requireCode(request, env, '需要访问口令'); }
 
 // 写入鉴权文案与读略有区别，便于前端区分「浏览」与「装入」两种场景
-async function writeGuard(request, env) { return requireCode(request, env, '装入卦例库需要口令'); }
+async function requireWriteCode(request, env) { return requireCode(request, env, '装入卦例库需要口令'); }
 
 // 展示类字符串字段守卫（P2-API-5，2026-11-03）：datetime/pillars/question/hex
 // 旧版一律 .toString() 强转——客户端误传对象即变 "[object Object]" 入库展示
@@ -201,8 +195,9 @@ export function sanitizeOutcome(o) {
 // 与主 POST 的 ON CONFLICT 更新清单互不包含——自动保存不会冲掉已回填的回执，
 // 回填回执也不会改写卦例内容。
 async function handleOutcome(request, env) {
-  let b;
-  try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+  const read = await readJsonLimited(request, MAX_JSON_BODY);
+  if (read.error) return json({ error: 'BAD_JSON' }, 400);
+  const b = read.value;
   const id = (b && typeof b.id === 'string') ? b.id : '';
   if (!ID_RE.test(id)) return json({ error: 'BAD_ID', message: '非法 id' }, 400);
   const oc = sanitizeOutcome(b ? b.outcome : undefined);
@@ -268,7 +263,9 @@ export async function onRequestGet(context) {
 
 export async function onRequestDelete(context) {
   const { request, env } = context;
-  const denied = await writeGuard(request, env); if (denied) return denied;
+  // 跨站守卫先于口令：带 Origin 的跨站写请求直接 403，不必消耗一次口令比较
+  const badWrite = writeGuard(request, env); if (badWrite) return badWrite;
+  const denied = await requireWriteCode(request, env); if (denied) return denied;
   if (!env.LIUYAO_DB) return noDb();
   const id = new URL(request.url).searchParams.get('id');
   if (!id) return json({ error: 'NO_ID', message: '缺少 id' }, 400);
@@ -318,7 +315,9 @@ function flagOn(url, name) {
 
 export async function onRequestPost(context) {
   const { request, env } = context;
-  const denied = await writeGuard(request, env); if (denied) return denied;
+  // 跨站守卫：Content-Type 必须 JSON、Origin（若带）必须同源——挡掉「借访客浏览器写库」
+  const badWrite = writeGuard(request, env); if (badWrite) return badWrite;
+  const denied = await requireWriteCode(request, env); if (denied) return denied;
   const url = new URL(request.url);
   // 口令验证探针：POST /api/records?verify=1 只校验口令不落库
   if (flagOn(url, 'verify')) return json({ ok: true });
@@ -329,7 +328,10 @@ export async function onRequestPost(context) {
   if (flagOn(url, 'outcome')) return handleOutcome(request, env);
 
   let b;
-  try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+  const read = await readJsonLimited(request, MAX_JSON_BODY);
+  if (read.error === 'TOO_LARGE') return payloadTooLarge();
+  if (read.error) return json({ error: 'BAD_JSON' }, 400);
+  b = read.value;
   // JSON 文本 null 是合法 JSON，await request.json() 返回 null 而不抛错，
   // 下一行 b.panText 会解引用 null 抛未捕获 TypeError → 通用 500。
   // 同文件 handleOutcome 已有 `b && typeof b.id` 守卫，此处补齐主路径。

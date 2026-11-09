@@ -49,7 +49,8 @@
  */
 
 // 供应商解析共享层（白名单 / 自定义供应商 / json 响应 / 常量时间口令比较），与 models.js 同一口径
-import { customProviders, customKeyEnv, modelWhitelist, json, bodyTooLarge, payloadTooLarge, requireCode as requireCodeGate } from './_lib.js';
+import { customProviders, customKeyEnv, modelWhitelist, json, MAX_JSON_BODY, payloadTooLarge, requireCode as requireCodeGate,
+  writeGuard, readJsonLimited, rateLimit, rateLimited, _rlState } from './_lib.js';
 
 // 入模规模上限：单请求最多 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符。
 // 旧值 8,000 + 20×4,000 ≈ 88,000，在未设 ACCESS_CODE 时是可直接放大的费用敞口。
@@ -105,39 +106,16 @@ export async function readCapped(resp, max) {
   return out.slice(0, max);
 }
 
-// 按 IP 的滑动窗口限流（默认关闭，仅在配置了 RATE_LIMIT_PER_MIN 时生效）。
-// 生产当前未设该变量 → 恒不触发；本函数保留为可随时启用的软开关。
-// 模块级 Map 在 CF Workers 中随 isolate 存活，跨 isolate 不共享，故只是成本抑制的兜底。
-const RL_HITS = new Map();
-const RL_MAX_IPS = 5000;      // 单 isolate 内最多跟踪的 IP 数
-const RL_WINDOW_MS = 60000;   // 窗口长度：1 分钟
-// 导出供 test-functions.mjs 直接驱动（与 records.js 导出 jsonWithin/safeEqual 同一先例：
-// Pages Functions 只把 onRequest* 视作路由处理函数，其余导出不影响路由）。
+// 按 IP 的滑动窗口限流。实现收敛到 _lib.js 的 rateLimit（与 vote/records 共用一套）：
+// 旧版三处各写一份，加严时漏改一处就出现「一个端点设了、另一个没设」的漂移。
+// 语义变化（2026-11-09 复核）：不再「未配置即不限流」——那等于默认无边界。
+// 现在未设 RATE_LIMIT_PER_MIN 时按 20 次/分/ IP 生效；显式设 0 才关闭。
+// 定 20 而非更严：首轮断卦 + 连续追问是真会一分钟内打满十几次的交互形态，
+// 而滥用者的成本瓶颈本来也不是「每分钟多少条」，是需要 CF 后台的全局限流规则兜底。
+export const INTERPRET_RATE_LIMIT = 20;
+
 export function isRateLimited(request, env) {
-  const limit = parseInt(env.RATE_LIMIT_PER_MIN || '0', 10);
-  if (!limit || limit <= 0) return false;
-  const now = Date.now();
-  // IP 取用顺序：CF-Connecting-IP 由 Cloudflare 边缘写入，客户端伪造值会被边缘剥离，可信；
-  // X-Forwarded-For 仅作非 CF 部署（本地 wrangler dev 等）的回退——该环境下它可被客户端伪造，
-  // 故此时的限流只能算「降级可用」，不可作为安全边界。
-  const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
-  if (RL_HITS.size > RL_MAX_IPS) {
-    // 只淘汰「窗口内已无有效计数」的 IP。旧版直接 clear() 会把正在被限流的访客一并放行。
-    RL_HITS.forEach(function (arr, k) {
-      if (!arr.length || now - arr[arr.length - 1] >= RL_WINDOW_MS) RL_HITS.delete(k);
-    });
-  }
-  let hits = RL_HITS.get(ip);
-  if (!hits) { hits = []; RL_HITS.set(ip, hits); }
-  // 原地滑窗：把过期时间戳去掉（不新建数组，避免每次请求都分配）
-  let keep = 0;
-  for (let i = 0; i < hits.length; i++) { if (now - hits[i] < RL_WINDOW_MS) hits[keep++] = hits[i]; }
-  hits.length = keep;
-  // 达限即拒、且不再入队，使单个 IP 的数组长度被硬封顶在 limit。
-  // 旧版无脑 push 后判 `length > limit`——判定结果与本写法等价，但数组会随请求数无界增长。
-  if (hits.length >= limit) return true;
-  hits.push(now);
-  return false;
+  return rateLimit(request, env, 'interpret', INTERPRET_RATE_LIMIT);
 }
 
 // ⚠ 与 public/app.js 的 SYSTEM_PROMPT 为同一份契约的两处副本：
@@ -372,9 +350,13 @@ export async function onRequestPost(context) {
   // 而 handler 返回后「游离 Promise」上的 fetch 会被运行时取消（见 slowSession 注释）。
   const waitUntil = typeof context.waitUntil === 'function' ? context.waitUntil.bind(context) : null;
 
-  if (isRateLimited(request, env)) {
-    return json({ error: 'RATE_LIMITED', message: '请求过于频繁，请稍后重试' }, 429);
-  }
+  if (isRateLimited(request, env)) return rateLimited();
+
+  // 写路径守卫：Content-Type 必须是 JSON、Origin（若带）必须同源。
+  // 缺了这道闸，任意网页都能用 <form> 或 fetch(text/plain) 借访客 IP 打本端点——
+  // 无口令时这是纯粹的额度消耗，有口令时还能顺走浏览器里的 X-Access-Code。
+  const badWrite = writeGuard(request, env);
+  if (badWrite) return badWrite;
 
   // 口令闸走 _lib.js 的共享实现：常量时间比较 + 同 IP 失败计数（20 次/10 分钟 → 429）。
   // 旧版此处只有 safeEqual，没有计数——一旦单独启用 ACCESS_CODE（且未设限流），
@@ -382,11 +364,12 @@ export async function onRequestPost(context) {
   const denied = await requireCodeGate(request, env.ACCESS_CODE, '需要访问口令');
   if (denied) return denied;
 
-  // 请求体总大小闸门（L1）：早于 request.json()，避免超大 body 先全量入内存
-  if (bodyTooLarge(request)) return payloadTooLarge();
-
-  let body;
-  try { body = await request.json(); } catch (e) { return json({ error: 'BAD_JSON', message: '请求体解析失败' }, 400); }
+  // 请求体读取：Content-Length 只作早退提示，真正的上限由流式累计兜底
+  // （旧版仅看头，600 KB 无 Content-Length 的请求实测可绕过闸门直接进业务逻辑）。
+  const read = await readJsonLimited(request, MAX_JSON_BODY);
+  if (read.error === 'TOO_LARGE') return payloadTooLarge();
+  if (read.error) return json({ error: 'BAD_JSON', message: '请求体解析失败' }, 400);
+  const body = read.value;
   // JSON 文本 null 是合法 JSON，await request.json() 返回 null 而不抛错，
   // 下一行 body.panText 会解引用 null 抛未捕获 TypeError → 无 error code 的通用 500，
   // 前端 isRetriableError 也无法归类。
@@ -1273,10 +1256,8 @@ export async function onRequestPost(context) {
   }
 }
 
-// 仅供测试的只读探针：暴露限流内部计数长度（不导出 RL_HITS 本体，避免测试耦合实现细节）。
+// 仅供测试的只读探针：暴露限流内部计数长度（不导出桶本体，避免测试耦合实现细节）。
 // 用于断言「单 IP 的 hits 数组被封顶在 limit」——旧版无脑 push 时会随请求数无界增长。
 export function __rlState() {
-  const out = [];
-  RL_HITS.forEach(function (arr, ip) { out.push({ ip: ip, len: arr.length }); });
-  return out;
+  return _rlState('interpret');
 }

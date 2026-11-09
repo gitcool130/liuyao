@@ -230,7 +230,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
   Custom   → CUSTOM_PROVIDERS 声明任意多家（Kimi/Qwen/GLM/硅基流动等）
 ```
 
-安全设计：API Key 仅存服务端 secret，模型名服务端白名单校验防注入；**卦例库（读 + 写）由 `LIB_CODE` 口令闸保护**，`ACCESS_CODE` 与 `RATE_LIMIT_PER_MIN` **当前均未启用**，断卦费用敞口靠入模上限 20,000 字符约束。静态资源另有 `_headers` 下发 CSP（`connect-src 'self'` 阻断外域回传、`script-src 'self'` 阻断外部脚本），上游调用的**超时**与**流式缓冲上限**见「多模型 AI 断卦」。
+安全设计：API Key 仅存服务端 secret，模型名服务端白名单校验防注入；**卦例库（读 + 写）由 `LIB_CODE` 口令闸保护**，`ACCESS_CODE` 未启用（断卦免口令），断卦与对账两端点**默认按 IP 限流**（20 / 6 次每分）、写请求强制同源 + JSON、请求体按实际字节流式限量；入模上限 20,000 字符。静态资源另有 `_headers` 下发 CSP（`connect-src 'self'` 阻断外域回传、`script-src 'self'` 阻断外部脚本），上游调用的**超时**与**流式缓冲上限**见「多模型 AI 断卦」。
 
 ## 文件说明
 
@@ -333,9 +333,10 @@ CF AI Gateway 的缓存键 = provider + endpoint + model + 鉴权头 + **整个�
   - 如需重新启用：`wrangler pages secret put ACCESS_CODE --project-name=liuyao`（值走 stdin）。
   - ⚠️ **实测订正**：secret 变更（尤其**删除**）后，**线上 Functions 仍持有旧环境快照**，必须重新部署一次才生效——只删 secret 不部署，`401` 会持续 3 分钟以上。此前文档写「secret 即时生效、无需重新部署」**不准确**，已按实测更正。
   > 与 `LIB_CODE` 的关系：两者现在是**同一口令闸的两个来源**（`records.js` 的 `requireCode` 取 `LIB_CODE || ACCESS_CODE`，**读、写路径共用同一实现**），差异只在未配置时的回退与失败文案。撤销 `ACCESS_CODE` 后，卦例库闸由 `LIB_CODE` 单独承担；`/api/interpret` 不受任一约束。
-- `RATE_LIMIT_PER_MIN`：`/api/interpret` 按访客 IP 的每分钟请求上限，**可选软开关**。写在 `wrangler.toml [vars]`（非敏感、随仓库版本管理）。
-  **当前刻意不设 → 不限流**：2026-09-28 曾设 `20`，同日按用户要求「不限流」撤销（该行已在 `wrangler.toml` 中注释保留，取消注释并重新部署即可恢复）。
-  恢复时取 20 的理由：正常用法是「一次起卦 + 若干追问」，约 3~6 次/分；20 留 3~5 倍余量，共用出口（同 IP）也不易误伤；对脚本则把天花板压到 ≈2.9 万次/日/IP。仅当前 isolate 内计数，属成本抑制兜底。
+- `RATE_LIMIT_PER_MIN`：按访客 IP 的每分钟请求上限，**覆盖 `/api/interpret` 与 `/api/vote`**，写在 `wrangler.toml [vars]`。
+  **2026-11-09 起默认开启**（旧文档的「未设置即不限流」已作废）：不设该变量时用代码默认值 —— 断卦 20 次/分、对账 6 次/分；设正整数则两点统一按该值；显式设 `0` 才关闭。
+  变更理由：复核确认断卦端点无口令、无来源校验、体积上限可绕过，对账端点一次请求即烧 3 次 Workers AI（10k neurons/日 ≈ 500 轮），一条 curl 循环就能清空当日额度。仍属成本抑制：计数在单个 isolate 内存中，跨 isolate 不共享；全局限流需在 CF 后台配规则（见 `docs/DEPLOY-SECURITY.md`）。
+- `ALLOWED_ORIGINS`：额外放行的跨站来源（逗号分隔）。默认只认同源；写请求还会强制 `Content-Type: application/json`。
 - 文件清单新增 `bgm.js`（琴音引擎）。
 
 > ⚠️ 注意：wrangler CLI 部署时 `wrangler.toml [vars]` 会覆盖后台同名**文本**变量（secret 不受影响）。后台改完变量后用 wrangler 重新部署一次生效。

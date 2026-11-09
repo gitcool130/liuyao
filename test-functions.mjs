@@ -19,7 +19,7 @@
  * 运行：npm run test:fn
  * ============================================================ */
 import { jsonWithin, safeEqual, onRequestGet, onRequestDelete, onRequestPost, sanitizeOutcome } from './functions/api/records.js';
-import { customProviders, gptModelList, isSafeModelId } from './functions/api/_lib.js';
+import { customProviders, gptModelList, isSafeModelId, isSafeProviderBase, json as libJson } from './functions/api/_lib.js';
 import { onRequestGet as modelsGet } from './functions/api/models.js';
 import { onRequestPost as interpretPost, isRateLimited, __rlState, SYSTEM_PROMPT, deltaText, deltaReasoning } from './functions/api/interpret.js';
 import { onRequestGet as ogGet } from './functions/index.js';
@@ -462,9 +462,8 @@ eq('单 IP 计数数组封顶在 limit（旧版会涨到 20）',
   __rlState().filter(function (x) { return x.ip === '203.0.113.7'; })[0].len, 3);
 eq('不同 IP 独立计数（不受上者限流影响）',
   (await post(envRL, { 'CF-Connecting-IP': '203.0.113.8' })).status, 502);
-// 未配置 RATE_LIMIT_PER_MIN 时恒不限流（＝当前生产状态，第十七轮撤销后）
-eq('未设 RATE_LIMIT_PER_MIN → 不限流',
-  isRateLimited(new Request('https://x/', { headers: RL_IP }), {}), false);
+// 2026-11-09 复核：默认不再「未配置即不限流」——那等于全站无边界。
+// 未设 RATE_LIMIT_PER_MIN 时按 20 次/分生效（详见 #26 组），显式设 0 才关闭。
 
 // ---------- #20 gemini 跨模型降级（2026-10-12） ----------
 // gemini-3.8-flash 常因 Google 侧 high demand 整段 503（AI Gateway 日志自 2026-10-01 反复出现），
@@ -1777,6 +1776,76 @@ eq('vote 设 ACCESS_CODE 后无口令 → 401',
   (await voteCall({ state: '盘面' }, { AI: mkAI().ai, ACCESS_CODE: 'a' }, { 'CF-Connecting-IP': '198.51.100.20' })).status, 401);
 eq('vote 带正确口令 → 200',
   (await voteCall({ state: '盘面' }, { AI: mkAI().ai, ACCESS_CODE: 'a' }, { 'CF-Connecting-IP': '198.51.100.20', 'X-Access-Code': 'a' })).status, 200);
+
+// ---------- #26 写路径守卫 / 流式体积闸 / 默认限流（2026-11-09 复核） ----------
+// 复核时的线上实测：text/plain 的跨站「简单请求」可直通业务逻辑（无预检）、
+// 600 KB 且不带 Content-Length 的 body 绕过了 413、/api/interpret 与 /api/vote
+// 默认不限流（一条 curl 循环即可清空当日 Workers AI 额度）。以下把三类口子钉住。
+
+// ① 非 JSON 写请求 → 415（浏览器跨站表单/文本提交不会触发预检，只能靠这层拦）
+const plainReq = new Request('https://x/api/interpret', {
+  method: 'POST',
+  headers: { 'content-type': 'text/plain' },
+  body: JSON.stringify({ panText: '占测试', provider: 'gemini', model: 'gemini-3.6-flash' })
+});
+eq('text/plain 写请求 → 415', (await interpretPost({ request: plainReq, env: ENV_GPT })).status, 415);
+
+// ② Origin 校验：跨站 403；同源与 ALLOWED_ORIGINS 放行（放行后落到 400 NO_PAN 证明已过闸）
+const mkOrigin = function (origin) {
+  return new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: origin },
+    body: '{}'
+  });
+};
+eq('跨站 Origin → 403', (await interpretPost({ request: mkOrigin('https://evil.example'), env: ENV_GPT })).status, 403);
+eq('同源 Origin 放行（→400 NO_PAN）', (await interpretPost({ request: mkOrigin('https://x'), env: ENV_GPT })).status, 400);
+eq('ALLOWED_ORIGINS 白名单放行',
+  (await interpretPost({
+    request: mkOrigin('https://app.example'),
+    env: Object.assign({ ALLOWED_ORIGINS: 'https://app.example' }, ENV_GPT)
+  })).status, 400);
+eq('Origin 为 null（沙箱 iframe）→ 403', (await interpretPost({ request: mkOrigin('null'), env: ENV_GPT })).status, 403);
+
+// ③ 无 Content-Length 的超大流式 body → 413（旧的 Content-Length 闸门在这里完全失效）
+const bigStream = new ReadableStream({
+  start: function (c) {
+    c.enqueue(new TextEncoder().encode('{"panText":"' + 'A'.repeat(600 * 1024) + '"}'));
+    c.close();
+  }
+});
+const noClReq = new Request('https://x/api/interpret', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: bigStream,
+  duplex: 'half'
+});
+eq('600 KB 且无 Content-Length → 413', (await interpretPost({ request: noClReq, env: ENV_GPT })).status, 413);
+
+// ④ 默认限流：未设 RATE_LIMIT_PER_MIN 时 20 次/分；显式 0 才关闭
+const rlDefault = [];
+for (let i = 0; i < 22; i++) {
+  rlDefault.push(isRateLimited(new Request('https://x/', { headers: { 'CF-Connecting-IP': '203.0.113.77' } }), {}));
+}
+eq('默认 20 次/分：前 20 放行、后 2 拒绝', rlDefault.filter(Boolean).length, 2);
+eq('显式 RATE_LIMIT_PER_MIN=0 关闭限流',
+  isRateLimited(new Request('https://x/', { headers: { 'CF-Connecting-IP': '203.0.113.78' } }), { RATE_LIMIT_PER_MIN: '0' }), false);
+
+// ⑤ 统一 json() 出口带 no-store / nosniff（旧版三份拷贝，加头只改一处）
+const hRes = libJson({ ok: true });
+eq('API 响应 Cache-Control: no-store', hRes.headers.get('cache-control'), 'no-store');
+eq('API 响应 X-Content-Type-Options: nosniff', hRes.headers.get('x-content-type-options'), 'nosniff');
+
+// ⑥ 自定义供应商 base 只收 https 公网地址（配置层 SSRF）
+eq('base 白名单判定', [
+  isSafeProviderBase('https://api.moonshot.cn/v1'),
+  isSafeProviderBase('http://api.moonshot.cn/v1'),
+  isSafeProviderBase('https://169.254.169.254/latest'),
+  isSafeProviderBase('https://127.0.0.1:8080/v1'),
+  isSafeProviderBase('https://localhost/v1'),
+  isSafeProviderBase('https://user:pw@api.example.com/v1')
+], [true, false, false, false, false, false]);
+
 
 globalThis.fetch = origFetch;
 if (fail > 0) process.exit(1);
