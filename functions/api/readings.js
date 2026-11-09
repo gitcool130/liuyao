@@ -8,12 +8,15 @@
  * 只取 question 与 hex 供辨认），与「readings 不存正文」红线同向。
  */
 
-import { bodyTooLarge, payloadTooLarge, requireCode as requireCodeGate, ID_RE } from './_lib.js';
+import { bodyTooLarge, payloadTooLarge, readJsonCapped, requireJsonContentType, requireCode as requireCodeGate, ID_RE } from './_lib.js';
 
 function json(data, status) {
   return new Response(JSON.stringify(data), {
     status: status || 200,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' }
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store'   // P2-2：回访题面不得被缓存
+    }
   });
 }
 
@@ -35,31 +38,40 @@ export async function onRequestGet(context) {
   const denied = await requireCode(request, env, '需要访问口令'); if (denied) return denied;
   if (!env.LIUYAO_DB) return json({ error: 'NO_DB', message: '服务端未绑定 D1 数据库（变量名应为 LIUYAO_DB）' }, 503);
   const today = beijingToday();
+  // P2-8（2026-11-09）：补 offset 分页。旧版固定 LIMIT 50：排尾部任务在头部
+  // 被逐个处理前永远不会出现，前端只能看到 total 而取不回。limit 上限仍 50。
+  const url = new URL(request.url);
+  const qLimit = parseInt(url.searchParams.get('limit') || '', 10);
+  const qOffset = parseInt(url.searchParams.get('offset') || '', 10);
+  const limit = (qLimit > 0) ? Math.min(qLimit, TASK_LIMIT) : TASK_LIMIT;
+  const offset = (qOffset > 0) ? qOffset : 0;
   const { results } = await env.LIUYAO_DB.prepare(
     'SELECT r.id, r.cast_id, r.due_at, r.note, c.question, c.hex ' +
     'FROM readings r LEFT JOIN casts c ON c.id = r.cast_id ' +
     "WHERE r.status = 'pending' AND r.due_at <= ? " +
-    'ORDER BY r.due_at LIMIT ?'
-  ).bind(today, TASK_LIMIT).all();
+    'ORDER BY r.due_at, r.id LIMIT ? OFFSET ?'
+  ).bind(today, limit, offset).all();
   // P2-API-8（2026-11-03）：旧版只有 LIMIT 50、无 offset 无总数——排尾部的任务在
   // 头部被逐个处理（回填/dismissed）前永不出现，前端也无法提示「还有 N 条」。
-  // 补一条同 WHERE 的 COUNT(*)（参数化，与主查询同一 today 绑定），响应体加 total
-  // 字段；既有 today/tasks 字段不动，旧客户端不受影响。
+  // 2026-11-09（P2-8）补 offset：响应带 limit/offset，前端逐页取回；既有
+  // today/tasks 字段不动，旧客户端不受影响。COUNT(*) 与主查询同一 today 绑定。
   const totalRow = await env.LIUYAO_DB.prepare(
     "SELECT COUNT(*) AS n FROM readings WHERE status = 'pending' AND due_at <= ?"
   ).bind(today).first();
   const total = totalRow && typeof totalRow.n === 'number' ? totalRow.n : (results || []).length;
   // JOIN 不中（casts 已删）的孤儿任务照发但 question/hex 为空，前端按「原卦已删」降级展示
-  return json({ today: today, tasks: results || [], total: total });
+  return json({ today: today, tasks: results || [], total: total, limit: limit, offset: offset });
 }
 
 export async function onRequestPost(context) {
   const { request, env } = context;
   const denied = await requireCode(request, env, '需要访问口令'); if (denied) return denied;
   if (!env.LIUYAO_DB) return json({ error: 'NO_DB', message: '服务端未绑定 D1 数据库（变量名应为 LIUYAO_DB）' }, 503);
+  const badCt = requireJsonContentType(request); if (badCt) return badCt;
   if (bodyTooLarge(request)) return payloadTooLarge();
   let b;
-  try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+  try { b = await readJsonCapped(request, 512 * 1024); }
+  catch (e) { if (e && e.tooLarge) return payloadTooLarge(); return json({ error: 'BAD_JSON' }, 400); }
   const castId = (b && typeof b.cast_id === 'string') ? b.cast_id : '';
   if (!ID_RE.test(castId)) return json({ error: 'BAD_ID', message: '非法 cast_id' }, 400);
   if (!b || b.action !== 'dismissed') {

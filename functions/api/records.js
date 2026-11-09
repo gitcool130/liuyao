@@ -9,7 +9,7 @@
  * 绑定：Pages 项目 → Settings → Functions → D1 database bindings → 变量名 LIUYAO_DB
  */
 
-import { safeEqual, bodyTooLarge, payloadTooLarge, requireCode as requireCodeGate, ID_RE } from './_lib.js';
+import { safeEqual, bodyTooLarge, payloadTooLarge, readJsonCapped, requireJsonContentType, requireCode as requireCodeGate, ID_RE } from './_lib.js';
 
 // 保持既有 import 路径可用（test-functions.mjs 直接从此文件 import safeEqual）；
 // 实现已上移到 _lib.js，与 interpret.js 共用同一份常量时间比较
@@ -18,7 +18,10 @@ export { safeEqual };
 function json(data, status) {
   return new Response(JSON.stringify(data), {
     status: status || 200,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' }
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store'   // P2-2：卦例题面/排盘/对话不得被缓存
+    }
   });
 }
 
@@ -202,7 +205,8 @@ export function sanitizeOutcome(o) {
 // 回填回执也不会改写卦例内容。
 async function handleOutcome(request, env) {
   let b;
-  try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+  try { b = await readJsonCapped(request, 512 * 1024); }
+  catch (e) { if (e && e.tooLarge) return payloadTooLarge(); return json({ error: 'BAD_JSON' }, 400); }
   const id = (b && typeof b.id === 'string') ? b.id : '';
   if (!ID_RE.test(id)) return json({ error: 'BAD_ID', message: '非法 id' }, 400);
   const oc = sanitizeOutcome(b ? b.outcome : undefined);
@@ -280,6 +284,12 @@ export async function onRequestDelete(context) {
   const r = await env.LIUYAO_DB.prepare('DELETE FROM casts WHERE id = ?').bind(id).run();
   const changes = r && r.meta && typeof r.meta.changes === 'number' ? r.meta.changes : 0;
   if (!changes) return json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
+  // P2-9（2026-11-09）：同批清理回访任务。readings 不设外键，旧版删 cast 后
+  // pending 任务会以 LEFT JOIN 孤儿形式继续出现在回访列表（前端显示「原卦例已删除」）。
+  // 删除失败不阻断卦例删除（任务可人工清理），但正常路径必须一起删。
+  try {
+    await env.LIUYAO_DB.prepare('DELETE FROM readings WHERE cast_id = ?').bind(id).run();
+  } catch (e) { /* 不阻断主删除 */ }
   return json({ ok: true });
 }
 
@@ -319,6 +329,7 @@ function flagOn(url, name) {
 export async function onRequestPost(context) {
   const { request, env } = context;
   const denied = await writeGuard(request, env); if (denied) return denied;
+  const badCt = requireJsonContentType(request); if (badCt) return badCt;
   const url = new URL(request.url);
   // 口令验证探针：POST /api/records?verify=1 只校验口令不落库
   if (flagOn(url, 'verify')) return json({ ok: true });
@@ -329,7 +340,8 @@ export async function onRequestPost(context) {
   if (flagOn(url, 'outcome')) return handleOutcome(request, env);
 
   let b;
-  try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+  try { b = await readJsonCapped(request, 512 * 1024); }
+  catch (e) { if (e && e.tooLarge) return payloadTooLarge(); return json({ error: 'BAD_JSON' }, 400); }
   // JSON 文本 null 是合法 JSON，await request.json() 返回 null 而不抛错，
   // 下一行 b.panText 会解引用 null 抛未捕获 TypeError → 通用 500。
   // 同文件 handleOutcome 已有 `b && typeof b.id` 守卫，此处补齐主路径。
@@ -382,9 +394,16 @@ export async function onRequestPost(context) {
   try {
     const rd = deriveReading(id, fDatetime, baseline ? jsonWithin(baseline, 1000) : null);
     if (rd) {
+      // 终态（acted / dismissed）不再二次排队：唯一索引只约束 pending，
+      // 单靠 INSERT OR IGNORE 在 dismissed/acted 之后会重新插一条 pending
+      // （P1-3，2026-11-09）。WHERE NOT EXISTS 按 cast_id 判任意状态，
+      // 与 schema.sql「acted/dismissed 是终态」的契约一致；inserted 的幂等仍由
+      // 部分唯一索引兜并发。绑定顺序：cast_id, due_at, note, created_at, cast_id。
       const ins = await env.LIUYAO_DB.prepare(
-        "INSERT OR IGNORE INTO readings (cast_id, due_at, status, source, note, created_at) VALUES (?, ?, 'pending', 'baseline_window', ?, ?)"
-      ).bind(id, rd.due_at, rd.note, new Date().toISOString()).run();
+        "INSERT OR IGNORE INTO readings (cast_id, due_at, status, source, note, created_at) " +
+        "SELECT ?, ?, 'pending', 'baseline_window', ?, ? " +
+        "WHERE NOT EXISTS (SELECT 1 FROM readings WHERE cast_id = ?)"
+      ).bind(id, rd.due_at, rd.note, new Date().toISOString(), id).run();
       // P2-API-10（2026-11-03）：INSERT OR IGNORE 会吞掉一切约束违反，旧版不看
       // changes——任务行被静默丢弃（未来给 readings 加 NOT NULL 无默认列时必现）
       // 而 readingDue 照常返回，回访闭环无声缺员。插入后检查 changes：

@@ -82,7 +82,12 @@ function ogRewrite(html, title, desc) {
 
 // 已消费 body 后按原样重建响应（fallback 路径用，保留原始头）
 function rebuild(asset, body) {
-  return new Response(body, { status: asset.status, headers: asset.headers });
+  // 体被重新编码/改写后，资产的 Content-Length / Content-Encoding 已不代表新体；
+  // 复制旧头会让运行时按旧长度截断或按 gzip 解压未压缩 body（P2-1）。
+  const headers = new Headers(asset.headers);
+  headers.delete('content-length');
+  headers.delete('content-encoding');
+  return new Response(body, { status: asset.status, headers: headers });
 }
 
 export async function onRequestGet(context) {
@@ -122,6 +127,9 @@ export async function onRequestGet(context) {
     const headers = new Headers(asset.headers);
     headers.delete('etag');
     headers.delete('last-modified');
+    // 体已改写：旧长度/编码必失配，必须一并删除（P2-1，2026-11-09）。
+    headers.delete('content-length');
+    headers.delete('content-encoding');
     headers.set('cache-control', 'public, max-age=300');
     return new Response(out, { status: asset.status, headers: headers });
   } catch (e) {

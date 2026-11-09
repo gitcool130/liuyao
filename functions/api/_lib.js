@@ -29,7 +29,13 @@ export function isBannedModelId(id) {
 export function json(data, status) {
   return new Response(JSON.stringify(data), {
     status: status || 200,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' }
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      // P2-2（2026-11-09）：API 响应含卦例题面/排盘/对话，口令头不是 Authorization，
+      // 不能让浏览器或中间缓存按 URL 缓存后串给别的请求。所有 API 统一 no-store；
+      // 需要缓存的静态资源不经过本函数。
+      'Cache-Control': 'no-store'
+    }
   });
 }
 
@@ -47,6 +53,58 @@ export function bodyTooLarge(request) {
 }
 export function payloadTooLarge() {
   return json({ error: 'BODY_TOO_LARGE', message: '请求体过大（上限 512 KB）' }, 413);
+}
+
+// 只接受 application/json（P2/R1，2026-11-09）。浏览器的跨站「简单请求」
+// （text/plain / application/x-www-form-urlencoded / multipart）不会触发 CORS
+// 预检；本服务没有 CORS 头，若接受这些类型，恶意页面就能借访客浏览器
+// POST /api/interpret 或 /api/vote 真实消耗上游额度（响应读不到也算成功调用）。
+// 要求 JSON 后，跨站 fetch 必须先发预检，预检被无 CORS 拦下；正常前端
+// apiFetch 一直发送 application/json。
+export function requireJsonContentType(request) {
+  const ct = (request.headers.get('content-type') || '').toLowerCase();
+  if (ct.indexOf('application/json') !== 0) {
+    return json({ error: 'UNSUPPORTED_MEDIA_TYPE', message: 'Content-Type 须为 application/json' }, 415);
+  }
+  return null;
+}
+
+// 流式读取 JSON 并硬限字节数（P2-3，2026-11-09）。
+// bodyTooLarge 只读 Content-Length，chunked 请求没有该头，旧版会直接放行；
+// 这里在 request.body 上逐块计数，超限即 cancel，杜绝「先全量读进 isolate 再校验」。
+// 返回解析后的 JSON；超限抛 { tooLarge: true }，JSON 非法抛 SyntaxError。
+export async function readJsonCapped(request, maxBytes) {
+  const max = maxBytes || MAX_JSON_BODY;
+  const cl = parseInt(request.headers.get('content-length') || '', 10);
+  if (isFinite(cl) && cl > max) { const e = new Error('body too large'); e.tooLarge = true; throw e; }
+  if (!request.body || typeof request.body.getReader !== 'function') {
+    const text = await request.text();
+    if (text.length > max) { const e = new Error('body too large'); e.tooLarge = true; throw e; }
+    return JSON.parse(text);
+  }
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const r = await reader.read();
+      if (r.done) break;
+      total += r.value.byteLength;
+      if (total > max) {
+        try { await reader.cancel(); } catch (e2) { /* 已断开 */ }
+        const e = new Error('body too large');
+        e.tooLarge = true;
+        throw e;
+      }
+      chunks.push(r.value);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch (e2) { /* 已释放 */ }
+  }
+  const buf = new Uint8Array(total);
+  let off = 0;
+  for (let i = 0; i < chunks.length; i++) { buf.set(chunks[i], off); off += chunks[i].byteLength; }
+  return JSON.parse(new TextDecoder().decode(buf));
 }
 
 // 口令比较：先 SHA-256 再逐字节异或，长度不参与比较、耗时与口令内容无关
@@ -106,7 +164,10 @@ export async function requireCode(request, expected, message) {
     if (rec) AUTH_FAILS.delete(key);
     return null;
   }
-  if (key) {
+  // P2-4（2026-11-09）：只有「带了口令但错了」才计数。缺口令的 401 是未登录，
+  // 不是爆破尝试；旧版把它也计入，未登录用户每次自动保存/开卦例库都失败一次，
+  // 20 次后同 NAT 出口全员 429（自锁，连正确口令也进不来）。
+  if (key && given) {
     if (!rec) rec = { n: 0, until: now + AUTH_WINDOW_MS };
     rec.n++;
     AUTH_FAILS.set(key, rec);

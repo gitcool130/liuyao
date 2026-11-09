@@ -56,6 +56,13 @@ eq('闭环：旬空翻转冲散为冲实', cs.kind !== csKong.kind, true);
 const nc = C.ruleDayChong(L1, mkPil({ monthZhi: 5, dayZhi: 0 }), '旺', '官鬼');
 eq('不被日冲无判定', nc.kind, null);
 
+// P1-1：lineStates 必须与 ruleDayChong 同口径（2026-11-09）。
+// 三爻申金动而值旬空（申酉空）、日辰寅冲申：ruleDayChong 判「冲实」；
+// lineStates 旧版只按 moving 判「冲散」，同一张盘的两节提示词互相矛盾。
+const panChongKong = C.paipan([0, 0, 9, 0, 0, 0], new Date(2026, 0, 4, 12, 0));
+eq('lineStates 动空逢日冲=冲实', C.lineStates(panChongKong)[2].text.indexOf('日冲·冲实') >= 0, true);
+eq('lineStates 动空逢日冲不再写冲散', C.lineStates(panChongKong)[2].text.indexOf('冲散') < 0, true);
+
 // ---------- 3. 月破真假 ----------
 // 午火爻，子月冲午；火死于冬 → 真破（无日生扶）
 const zp = C.ruleYuePo(mkLine({ zhi: '午', zhiIdx: 6, wx: '火' }), mkPil({ monthZhi: 0, dayZhi: 0 }), '死', false, '官鬼');
@@ -474,6 +481,17 @@ eq('克月建不入 harms（非四大凶）', aggKeYue.harms.length, 0);
     ]
   };
   eq('单爻本变两支不成局', C.ruleSanHe(panSH2, '官鬼').length, 0);
+  // P1-2（2026-11-09）：上面的 panSH2 没有 pillars，会在 src.length<3 处早退；
+  // 真实排盘永远带月建/日辰。坤为地之晋（上爻酉动化巳、四爻丑动化酉）旧版
+  // 把上爻的酉与巳同时入局，输出「巳酉丑三合金局」。owner 改按爻位后，
+  // 同一动爻的本/变不能再同局。
+  const panSH3 = C.paipan([0, 0, 0, 6, 0, 6], new Date(2026, 0, 1, 12, 0));
+  const sameLine = C.ruleSanHe(panSH3, '妻财').filter(function (j) {
+    const parts = j.text.split('、');
+    return parts.some(function (x) { return x.indexOf('本卦上爻') >= 0; }) &&
+      parts.some(function (x) { return x.indexOf('（变爻') >= 0; });
+  });
+  eq('真实盘：同一动爻本变不得同局', sameLine.length, 0);
 })();
 
 // ---------- 16. #11/#12 伏神取法与飞伏同气 ----------

@@ -49,7 +49,7 @@
  */
 
 // 供应商解析共享层（白名单 / 自定义供应商 / json 响应 / 常量时间口令比较），与 models.js 同一口径
-import { customProviders, customKeyEnv, modelWhitelist, json, bodyTooLarge, payloadTooLarge, requireCode as requireCodeGate } from './_lib.js';
+import { customProviders, customKeyEnv, modelWhitelist, json, bodyTooLarge, payloadTooLarge, readJsonCapped, requireJsonContentType, requireCode as requireCodeGate } from './_lib.js';
 
 // 入模规模上限：单请求最多 4,000（排盘）+ 8×2,000（历史）≈ 20,000 字符。
 // 旧值 8,000 + 20×4,000 ≈ 88,000，在未设 ACCESS_CODE 时是可直接放大的费用敞口。
@@ -382,11 +382,19 @@ export async function onRequestPost(context) {
   const denied = await requireCodeGate(request, env.ACCESS_CODE, '需要访问口令');
   if (denied) return denied;
 
-  // 请求体总大小闸门（L1）：早于 request.json()，避免超大 body 先全量入内存
+  // 请求体总大小闸门（L1）：早于 readJsonCapped()，避免超大 body 先全量入内存
   if (bodyTooLarge(request)) return payloadTooLarge();
+  // 跨站简单请求防护：见 _lib.requireJsonContentType（不改变「不限流」的产品决定）
+  const badCt = requireJsonContentType(request);
+  if (badCt) return badCt;
 
   let body;
-  try { body = await request.json(); } catch (e) { return json({ error: 'BAD_JSON', message: '请求体解析失败' }, 400); }
+  try {
+    body = await readJsonCapped(request, 512 * 1024);
+  } catch (e) {
+    if (e && e.tooLarge) return payloadTooLarge();
+    return json({ error: 'BAD_JSON', message: '请求体解析失败' }, 400);
+  }
   // JSON 文本 null 是合法 JSON，await request.json() 返回 null 而不抛错，
   // 下一行 body.panText 会解引用 null 抛未捕获 TypeError → 无 error code 的通用 500，
   // 前端 isRetriableError 也无法归类。

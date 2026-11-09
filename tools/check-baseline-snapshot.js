@@ -45,12 +45,12 @@ const pan = C.paipan([1, 9, 0, 1, 6, 0], new Date(2026, 9, 29, 15, 0));
 // 旧版只注入 currentQuestion，导致 ReferenceError 被 try/catch 吞掉 → 恒返回 null（审计 P1-1）。
 function makeScope(opts) {
   const factory = new Function(
-    '$', 'C', 'pan', 'lastAnalysis', 'userText', 'questionText',
+    '$', 'C', 'pan', 'lastAnalysis', 'lastManualYong', 'userText', 'questionText',
     code + '\n  return { analysisForSave: analysisForSave, baselineSnapshot: baselineSnapshot };'
   );
   return factory(
     function (sel) { return { value: opts.select, hidden: true, focus: function () {} }; },
-    C, opts.pan, opts.lastAnalysis,
+    C, opts.pan, opts.lastAnalysis, opts.manual || '',
     function () { return opts.question || ''; },
     function () { return opts.question || ''; }
   );
@@ -104,6 +104,25 @@ console.log('\n⑤ 未排盘时不得凭空空算');
 {
   const s = makeScope({ select: '妻财', pan: null, lastAnalysis: null, question: '' });
   eq('无盘 → null', s.baselineSnapshot(), null);
+}
+
+// P2-7（2026-11-09）：analysisForSave 必须复用 renderAnalysis 的天气/手动用神映射，
+// 不能把 '天气' / '__custom__' 原样交给 analyze（那会得到 yongshen:null、trend:'待审'）。
+console.log('\n⑥ 天气类兜底重算：映射父母，不得落「待审」');
+{
+  const s = makeScope({ select: '天气', pan: pan, lastAnalysis: null, question: '明天会下雨吗' });
+  const snap = s.baselineSnapshot();
+  eq('天气快照非空', !!snap, true);
+  eq('天气用神映射为父母', !!(snap && snap.yongshen && snap.yongshen.indexOf('父母') === 0), true);
+  eq('天气趋势不是待审', !!(snap && snap.trend && snap.trend !== '待审'), true);
+}
+
+console.log('\n⑦ 自定义无关键词 + 手动用神：沿用 lastManualYong');
+{
+  const s = makeScope({ select: '__custom__', pan: pan, lastAnalysis: null, question: '', manual: '官鬼' });
+  const snap = s.baselineSnapshot();
+  eq('手动用神快照非空', !!snap, true);
+  eq('手动用神写入官鬼', !!(snap && snap.yongshen && snap.yongshen.indexOf('官鬼') === 0), true);
 }
 
 console.log('\n结果：PASS ' + pass + '　FAIL ' + fail + '\n');

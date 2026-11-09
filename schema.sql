@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS casts (
   tosses     TEXT,   -- JSON：摇卦记录
   pan_text   TEXT,   -- 排盘文本
   messages   TEXT,   -- JSON：AI 断卦与进阶探讨对话历史
+  baseline   TEXT,   -- JSON：断卦时刻判据快照（M17-A），见下方口径；未快照为 NULL
   outcome    TEXT    -- JSON：结果回执（M16/M17）{result, yingqi, window, note, updated_at}，未回填为 NULL
 );
 
@@ -31,12 +32,13 @@ CREATE TABLE IF NOT EXISTS casts (
 --   window 只用于**分桶统计**：3 日与 90 日不是同一套应期机制（短线靠日辰冲动/值日/出空，
 --   长线靠月建旺衰/旬空填实/伏神出现），跨桶相加得到的「准确率」没有意义。
 
--- 既有库补加 baseline 列（M17-A：判据快照结构化，docs/proposal-baseline-column.md）：
+-- 既有库补加 baseline 列（M17-A：判据快照结构化，docs/proposal-baseline-column.md）。
+-- 全新空库由上方 CREATE TABLE 直接建出 baseline，**无需**再手工 ALTER；
+-- 只有 2026-10-24 之前建的旧库需要迁移（CREATE TABLE IF NOT EXISTS 不会给既有表加列）：
 --   npx wrangler d1 execute liuyao-db --local  --command="ALTER TABLE casts ADD COLUMN baseline TEXT;"
 --   npx wrangler d1 execute liuyao-db --remote --command="ALTER TABLE casts ADD COLUMN baseline TEXT;"
 -- 幂等：SQLite 不支持 ADD COLUMN IF NOT EXISTS，重复执行报 duplicate column name（无害但脏）。
---   执行前先查列，已含 baseline 即跳过；全新空库建表后同样补这条 ALTER
---   （CREATE TABLE IF NOT EXISTS 不会给既有表加列）：
+--   执行前先查列，已含 baseline 即跳过：
 --   npx wrangler d1 execute liuyao-db --local --command="PRAGMA table_info(casts);"
 -- baseline 口径：JSON {yongshen, trend, window, confidence, spread}，断卦时刻判据的结构化
 --   快照，随 recordPayload 与 pan_text 同批写入（单一事实源仍是 yingqi-window.js 的
@@ -77,6 +79,8 @@ CREATE TABLE IF NOT EXISTS readings (
 CREATE INDEX IF NOT EXISTS idx_readings_due ON readings(status, due_at);
 -- 部分唯一索引：一条卦例同一时刻最多一个未完结任务。
 -- 派生写入用 INSERT OR IGNORE——重复执行不报错、不产重复行（幂等的库侧保证）。
--- acted/dismissed 是终态，同 cast 不再二次排队（重新占问同一事是新的 cast_id）。
+-- acted/dismissed 是终态，同 cast 不再二次排队（重新占问同一事是新的 cast_id）；
+-- 由于唯一索引只覆盖 pending，records.js 的派生 SQL 另用 WHERE NOT EXISTS
+-- 按任意状态兜底，防止 dismissed/acted 之后又被自动保存重新排一条 pending。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_open ON readings(cast_id)
   WHERE status = 'pending';

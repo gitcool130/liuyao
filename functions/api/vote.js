@@ -14,7 +14,7 @@
  *        basis 是**模型自述的规则名**（已剥书名号），一律未经原典核验 —— 前端据此渲染「依据层」，
  *        不得当作可回溯的古籍引文；可回溯的引文只在 core/analyze.js 的 basis 字段里。
  */
-import { json, requireCode as requireCodeGate } from './_lib.js';
+import { json, readJsonCapped, requireJsonContentType, requireCode as requireCodeGate } from './_lib.js';
 
 const MAX_STATE = 1500;
 const MAX_ASK = 200;
@@ -258,9 +258,11 @@ export async function onRequestPost(context) {
   // 会先全量读进 isolate 内存。非有限数一律按超限处理（拒绝）；缺头/正常值不变。
   const len = Number(request.headers.get('content-length') || 0);
   if (!isFinite(len) || len > 32 * 1024) return json({ error: 'TOO_LARGE' }, 413);
+  const badCt = requireJsonContentType(request); if (badCt) return badCt;
 
   let b;
-  try { b = await request.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+  try { b = await readJsonCapped(request, 32 * 1024); }
+  catch (e) { if (e && e.tooLarge) return json({ error: 'TOO_LARGE' }, 413); return json({ error: 'BAD_JSON' }, 400); }
   if (!b || typeof b !== 'object' || Array.isArray(b)) return json({ error: 'BAD_JSON' }, 400);
 
   const state = typeof b.state === 'string' ? b.state.slice(0, MAX_STATE) : '';

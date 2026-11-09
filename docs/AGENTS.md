@@ -11,7 +11,7 @@
 
 - **线上**：https://liuyao.dhxlsfn.dpdns.org （Cloudflare Pages，项目名 `liuyao`）
 - **架构**：CF Pages Functions（后端 API）+ D1（卦例与投票）+ AI Gateway（多模型流式解读）
-- **前端**：纯 es5 零依赖，`LY` 全局命名空间，`public/core/*.js` 按脚本顺序加载，**不用打包器**
+- **前端**：现代浏览器（ES2017+）零依赖、无打包器，`LY` 全局命名空间，`public/core/*.js` 按脚本顺序加载，**不用打包器**
 - **排盘/断卦是确定性的**：`public/core/` 里全是纯函数，AI 只负责把盘面事实讲成人话，**不得由 AI 决定盘面**
 
 ### 目录骨架
@@ -33,14 +33,14 @@
 npm install                 # 首次
 
 # 测试
-npm test                    # core 链（749 断言）
-npm run test:fn             # functions 链（382 断言）
-npm run test:guji           # 古籍 golden（12144 断言，语料改动后必跑）
+npm test                    # core 链（1050 断言）
+npm run test:fn             # functions 链（391 断言 + test-db 11 真实 SQLite）
+npm run test:guji           # 古籍 golden（12148 断言，语料改动后必跑）
 npm run test:all            # 八套全跑：test/fn/diff/guji/guji-self/paipan/verify/drift
 
 # UI 冒烟（需要一个静态服务）
 python -m http.server 8931 --directory public --bind 127.0.0.1 &
-node test-shake.js          # 75 断言
+node test-shake.js          # 82 断言
 ```
 
 **改完必须 `test:all` 全绿才提交。** 改 `public/core/` 下任何东西还要额外跑 `test:guji`。
@@ -90,10 +90,10 @@ blob（逐文件）→ tree → commit（parent = 远端 main 的 sha）→ PATC
 
 ---
 
-## 5. 当前状态（2026-11-03）
+## 5. 当前状态（2026-11-09）
 
 - 全项目审计完成：见 `docs/audit-2026-11-03.md`（P0 × 0 / P1 × 17 / P2 若干，每条带 `文件:行号` 与实证）
-- P1 全部修复 + P2 主体修复，`test:all` 全绿，已部署
+- P1 全部修复（含 2026-11-09 收口的中-10/P1-1/P1-2 等）+ P2 主体修复，`test:all` 全绿
 - 未完成项登记在 `docs/TODO.md` 末尾「2026-11-03 审计遗留区」
 - `docs/CHANGELOG.md` 是长文式变更史，改功能时补一条
 

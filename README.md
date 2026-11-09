@@ -33,7 +33,7 @@
 - **暗动闭环**：静爻被日冲，先查月令旺衰（旺相=暗动，休囚=日破）——修复旧版「文字说了一套、代码没做」
 - **规则覆盖**：月建档（旺相休囚死）、真假月破、日辰生克拱扶、冲散/暗动/日破、合起合绊、静空/动空/真空（**真空以「安静」为前提，动爻永不真空**）、回头生克冲合、进神退神、三合局、相刑相害、飞伏生克、用神两现取舍、伏神引拔、伏神伏世下（不误报用神持世）；**M16 新增三族**：卦型（六冲/六合/游魂/归魂及相变五型，只陈述不入 trend）、生旺墓绝（长生十二宫四正位 + 觉子曰三宽：烈火煎金/论生不论墓/论生不论绝）、元神/忌神/仇神（三神识别、有力无力、贪生忘克）
 - **上层契约层（M15，M21 增 premise 一层）**：`sensitive.js` / `domain-methods.js` / `fact-audit.js` / `coverage-audit.js` / `premise.js` 五个**不参与排盘**的模块——分别负责「敏感问题确定性分流」「所测之事的分析方法与误判清单注入」「断语与卦盘的事实一致性审计」「断语推理一致性审查」。详见下节；自检见 `test-absorb.js`（213 项）
-- **质量保障**：`test-core.js` 93 项基础自检（含入参校验、非法日期文案、`bian` 语义契约锁定、`__wall` 墙上时间锚点） + `test-rules.js` 291 项规则链单测（含直测 `ruleXingHai` 的三刑全覆盖、M16 三族卦型/生旺墓绝/三神的正反用例） + `test-premise.js` 152 项前提层自检（五类槽位分级、应期同域双向、包合并、撤回/追问） + `test-gua-types.js` 卦型判定回归（64 卦全枚举 + 京房八宫卦次整表 + 10 类变异自检） + `test-functions.mjs` 372 项 Functions 层（含上游超时、流式缓冲守卫、限流窗口有界、结果回执白名单与回填端点、分页/请求体闸门/口令爆破限速、两份提示词全文一致） + `test-shake.js` 75 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（10 万+字段）+ `tests/guji` 古籍卦例回归（《增删卜易》《卜筮正宗》404 条卦例 + 68 条断语用例 / 12148 断言，断卦规则覆盖 65/79，另附 43 类变异自检）+ `tests/verify` 外部验证集三方对账与零依赖金标准回归；CI 另有「部署隔离断言」守住 `public/` 边界
+- **质量保障**：`test-core.js` 93 项基础自检（含入参校验、非法日期文案、`bian` 语义契约锁定、`__wall` 墙上时间锚点） + `test-rules.js` 297 项规则链单测（含直测 `ruleXingHai` 的三刑全覆盖、M16 三族卦型/生旺墓绝/三神的正反用例） + `test-premise.js` 156 项前提层自检（五类槽位分级、应期同域双向、包合并、撤回/追问） + `test-gua-types.js` 卦型判定回归（64 卦全枚举 + 京房八宫卦次整表 + 10 类变异自检） + `test-functions.mjs` 391 项 Functions 层（含上游超时、流式缓冲守卫、限流窗口有界、结果回执白名单与回填端点、分页/请求体闸门/口令爆破限速、两份提示词全文一致） + `test-shake.js` 82 断言 UI 冒烟 + `test-diff.mjs` 三库交叉差分（10 万+字段）+ `tests/guji` 古籍卦例回归（《增删卜易》《卜筮正宗》404 条卦例 + 68 条断语用例 / 12148 断言，断卦规则覆盖 65/79，另附 43 类变异自检）+ `tests/verify` 外部验证集三方对账与零依赖金标准回归；CI 另有「部署隔离断言」守住 `public/` 边界
 
 ### 三库交叉差分（test-diff.mjs，devDependencies 不进生产）
 
@@ -223,6 +223,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
   /api/interpret  断卦（多供应商路由，模型白名单校验）
   /api/models     动态模型清单下发
   /api/records    卦例库 CRUD（D1；列表支持 ?limit=&offset=，默认 100/上限 200，返回 hasMore）
+  /api/readings   回访任务（到期列表支持 limit/offset；dismiss 只处理 pending）
 供应商通道：
   Gemini   → CF AI Gateway（绕开 Google 对数据中心 IP 的拒绝）→ Google 原生 generateContent
   DeepSeek → api.deepseek.com（OpenAI 兼容）
@@ -230,7 +231,7 @@ git status -sb                    # 若显示 ahead，先推送再审计
   Custom   → CUSTOM_PROVIDERS 声明任意多家（Kimi/Qwen/GLM/硅基流动等）
 ```
 
-安全设计：API Key 仅存服务端 secret，模型名服务端白名单校验防注入；**卦例库（读 + 写）由 `LIB_CODE` 口令闸保护**，`ACCESS_CODE` 与 `RATE_LIMIT_PER_MIN` **当前均未启用**，断卦费用敞口靠入模上限 20,000 字符约束。静态资源另有 `_headers` 下发 CSP（`connect-src 'self'` 阻断外域回传、`script-src 'self'` 阻断外部脚本），上游调用的**超时**与**流式缓冲上限**见「多模型 AI 断卦」。
+安全设计：API Key 仅存服务端 secret，模型名服务端白名单校验防注入；**卦例库（读 + 写）由 `LIB_CODE` 口令闸保护**，`ACCESS_CODE` 与 `RATE_LIMIT_PER_MIN` **当前均未启用**，断卦费用敞口靠入模上限 20,000 字符约束。所有 POST 要求 `Content-Type: application/json`（阻断跨站简单请求）、API 响应统一 `Cache-Control: no-store`、请求体按字节流式限长；**新环境/灾备重建必须配置 `LIB_CODE`（或 `ACCESS_CODE`）**——两者都未设置时口令闸按本地/测试兼容策略开放，生产漏配等于公开全库；静态资源另有 `_headers` 下发 CSP（`connect-src 'self'` 阻断外域回传、`script-src 'self'` 阻断外部脚本），上游调用的**超时**与**流式缓冲上限**见「多模型 AI 断卦」。
 
 ## 文件说明
 
@@ -255,9 +256,9 @@ git status -sb                    # 若显示 ahead，先推送再审计
 | 文件 | 说明 |
 |------|------|
 | `core.js` | Node 聚合入口（浏览器请按序加载 `public/core/` 十个文件，见 `public/index.html`；后五个为不参与排盘的上层契约层，须排在 `analyze.js` 之后） |
-| `test-absorb.js` | 上层契约层 194 项自检（敏感分流三档 + 误伤白名单、领域方法的非古籍声明、断后审计四类断言双向用例、推理审查五组成对概念双向用例、应期三层 36 案并集不变量、问法形态三型正反用例） |
+| `test-absorb.js` | 上层契约层 213 项自检（敏感分流三档 + 误伤白名单、领域方法的非古籍声明、断后审计四类断言双向用例、推理审查五组成对概念双向用例、应期三层 36 案并集不变量、问法形态三型正反用例） |
 | `test-core.js` | 排盘引擎 93 项基础自检（历法锚点、节气边界、表外降级不中断、夜子时、纳甲六亲、卦序、六神起法；另含 `paipan` 入参校验、非法日期文案、`bian` 语义契约锁定） |
-| `test-rules.js` | 断卦规则链 291 项单测（暗动闭环、进退神、三合、夜子时正法、伏神伏世下、两现取舍、交节边界；§21-23 为 M16 三族卦型/生旺墓绝/三神的正反用例共 80 项） |
+| `test-rules.js` | 断卦规则链 297 项单测（暗动闭环、进退神、三合、夜子时正法、伏神伏世下、两现取舍、交节边界；§21-23 为 M16 三族卦型/生旺墓绝/三神的正反用例共 80 项） |
 | `test-diff.mjs` | 三库交叉差分（4096 组合 + 历法时点 + 夜子时双流派 + 节气全量，10 万+字段） |
 | `tests/drift/` | **断语质量基线**（四指标：引擎一致率 / 同盘冲突率 / 要素错误率 / 边界遵守率）。`lib.mjs` 指标定义、`run.mjs` 报告、`selftest.mjs` 反向对照 47 项、`corpus/*.json` 真实断语语料。默认不阻断，基线改善后改 `--strict` 进门禁 |
 | `tools/gen-jieqi.js` | 节气表离线生成器（lunar-javascript → 差分压缩表） |
@@ -345,10 +346,10 @@ CF AI Gateway 的缓存键 = provider + endpoint + model + 鉴权头 + **整个�
 ```bash
 npm install                       # 安装测试裁判库（devDependencies）
 npx wrangler pages dev public     # 本地起 Pages（部署根为 public/，需先在 wrangler.toml 绑定 D1）
-npm test                          # 快速环：基础自检 93 + 规则链 291 + 卦型判定 91 + 上层契约（test-absorb）209 + 前提层（test-premise）152 + 应期窗口 55 + 分享链接 46 + 对账页 18 + 古卦清单 12（均无需裁判库）
-npm run test:fn                   # Functions 层单测 372 项（jsonWithin 合法性/常量时间口令/模型名白名单/去重与读鉴权/结果回执与分桶/gemini 跨模型降级/三模型对账依据层）
+npm test                          # 快速环：基础自检 93 + 规则链 297 + 卦型判定 91 + 上层契约（test-absorb）213 + 前提层（test-premise）156 + 应期窗口 78 + 分享链接 72 + 对账页 18 + 古卦清单 12（均无需裁判库）
+npm run test:fn                   # Functions 层单测 391 项（另有 test-db 11 项真实 SQLite 集成）（jsonWithin 合法性/常量时间口令/模型名白名单/去重与读鉴权/结果回执与分桶/gemini 跨模型降级/三模型对账依据层）
 npm run test:paipan               # 排盘金标准回归 173 项（零依赖，只加载 core.js）
-npm run test:ui                   # UI 冒烟 75 断言（Playwright + Edge 通道，需先起本地静态服务）
+npm run test:ui                   # UI 冒烟 82 断言（Playwright + Edge 通道，需先起本地静态服务）
 npm run test:prod -- <站点URL>     # 线上冒烟 25 断言（真实浏览器打通「起卦→应期→分享还原→重新起卦」，真域名下并检接口鉴权）
 npm run test:guji                 # 古籍卦例回归 12148 项断言（《增删卜易》207 +《卜筮正宗》197 + 断语用例 68）
 npm run test:guji:self            # 古籍回归变异自检 43 类（证明「全绿」不是空转）

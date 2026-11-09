@@ -609,7 +609,7 @@ function renderMatrix(){
 
 function renderRules(){
   $('rules').innerHTML = cur.rules.map(([who,q]) => `
-    <div class="rule-row"><div class="who">${who}</div><div class="quote">${esc(q).replace(/「(.+?)」/,'「<em>$1</em>」')}</div></div>
+    <div class="rule-row"><div class="who">${esc(who)}</div><div class="quote">${esc(q).replace(/「(.+?)」/,'「<em>$1</em>」')}</div></div>
   `).join('');
 }
 

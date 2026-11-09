@@ -139,6 +139,11 @@ const monthSpan = P.spanOf('下个月能签合同吗');
 const xunSpan = P.spanOf('这周会不会来电');
 eq('同域·年+干支日=硬违反', P.checkYingqi('甲子日', yearSpan).code, 'YINGQI_TOO_FINE');
 eq('同域·年+干支日为violation级', P.checkYingqi('甲子日', yearSpan).level, 'violation');
+// P2-6（2026-11-09）：相对日不得漏拦——「一周内」「两天内」都是日/旬级，
+// 年刻度事项下必须判 violation；旧版「一周内」返回 OK，「两天内」连 span 都 unknown。
+eq('同域·年+一周内=硬违反', P.checkYingqi('一周内', yearSpan).code, 'YINGQI_TOO_FINE');
+eq('同域·年+两天内=硬违反', P.checkYingqi('两天内', yearSpan).code, 'YINGQI_TOO_FINE');
+eq('跨度·两天内→日', P.spanOf('两天内能到吗').unit, 'day');
 eq('同域·年+月份=通过', P.checkYingqi('11月中旬（约 11月10日—11月20日）', yearSpan).ok, true);
 eq('同域·年+流程节点=通过', P.checkYingqi('录取批次公布时（约 7月上旬）', yearSpan).ok, true);
 eq('同域·月+裸干支日=警告', P.checkYingqi('甲子日', monthSpan).level, 'warn');

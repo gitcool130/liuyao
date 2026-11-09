@@ -169,7 +169,8 @@ eq('DELETE 无口令 → 401', (await del('?id=ok-1')).status, 401);
 eq('DELETE 非法 id → 400', (await del('?id=bad%20id', { 'X-Access-Code': 'k' })).status, 400);
 eq('DELETE 非法 id 不下探数据库', db.state.sqls.length, 0);
 eq('DELETE 合法 id → 200', (await del('?id=ok-1', { 'X-Access-Code': 'k' })).status, 200);
-eq('DELETE 合法 id 恰好下发一条 SQL', db.state.sqls.length, 1);
+eq('DELETE 合法 id 下发 cast + readings 两条 SQL', db.state.sqls.length, 2);
+eq('DELETE 合法 id 同步清理 readings（P2-9）', db.state.sqls.some(function (s) { return s.indexOf('DELETE FROM readings') >= 0; }), true);
 
 // A1 收口：读路径（列表 + 详情）与写路径同源，未带口令不得下发任何卦例内容
 eq('未带口令读列表 → 401', (await get()).status, 401);
@@ -218,6 +219,21 @@ const bigRec = await onRequestPost({
   env: envLib
 });
 eq('records 同样 413', bigRec.status, 413);
+// P2-3（2026-11-09）：chunked 无 Content-Length 也要被流式计数拦住
+const chunk = new TextEncoder().encode('x'.repeat(600 * 1024));
+const chunkStream = new ReadableStream({
+  start: function (c) { c.enqueue(chunk); c.close(); }
+});
+const bigChunked = await interpretPost({
+  request: new Request('https://x/api/interpret', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'X-Access-Code': 'a' },
+    body: chunkStream,
+    duplex: 'half'
+  }),
+  env: { ACCESS_CODE: 'a' }
+});
+eq('chunked 600KB（无 Content-Length）→ 413', bigChunked.status, 413);
 
 // ---------- 口令爆破限速：同 IP 错 20 次后 429 ----------
 const bruteCode = { LIUYAO_DB: mkDb(), LIB_CODE: 'k' };
@@ -231,6 +247,15 @@ eq('换 IP 不受影响（仍是 401）',
   (await get('', { 'X-Access-Code': 'wrong', 'CF-Connecting-IP': '203.0.113.8' }, bruteCode)).status, 401);
 eq('正确口令不受计数影响',
   (await get('', { 'X-Access-Code': 'k', 'CF-Connecting-IP': '203.0.113.9' }, bruteCode)).status, 200);
+// P2-4（2026-11-09）：没带口令的 401 不得计入爆破桶，否则未登录用户
+// 仅靠自动保存/开库 20 次就能把同 NAT 出口锁死（连正确口令也进不来）。
+const noCodeEnv = { LIUYAO_DB: mkDb(), LIB_CODE: 'k' };
+const noCodeIp = '203.0.113.10';
+for (let i = 0; i < 25; i++) {
+  await get('', { 'CF-Connecting-IP': noCodeIp }, noCodeEnv);
+}
+eq('缺口令连续 25 次仍不计数（错口令仍 401）',
+  (await get('', { 'X-Access-Code': 'wrong', 'CF-Connecting-IP': noCodeIp }, noCodeEnv)).status, 401);
 
 // interpret 的 ACCESS_CODE 分支与 records 共用同一份计数（_lib.js requireCode）：
 // 旧版这里只有 safeEqual，没有失败计数——单独启用 ACCESS_CODE 时是无限速爆破口。
@@ -292,6 +317,19 @@ const postRaw = function (q, body, headers, env) {
     env: env || envLib
   });
 };
+// R1/P2-2（2026-11-09）：跨站简单请求防护 + 私人响应禁缓存
+const rNoCt = await onRequestPost({
+  request: new Request('https://x/api/records', {
+    method: 'POST',
+    headers: { 'X-Access-Code': 'k' },
+    body: JSON.stringify({ panText: '排盘' })
+  }),
+  env: envLib
+});
+eq('非 application/json → 415（阻断跨站简单请求）', rNoCt.status, 415);
+const rListCache = await get('', { 'X-Access-Code': 'k' }, { LIUYAO_DB: mkDb(), LIB_CODE: 'k' });
+eq('API 响应 Cache-Control: no-store', rListCache.headers.get('cache-control'), 'no-store');
+
 const dbOc = mkDb();
 const envOc = { LIUYAO_DB: dbOc, LIB_CODE: 'k' };
 eq('回填无口令 → 401', (await postRaw('?outcome=1', { id: 'ok-1', outcome: { result: 'success' } }, {}, envOc)).status, 401);
@@ -1110,8 +1148,11 @@ function ogCtx(path, assetHtml) {
   return {
     request: new Request('https://x.test' + path),
     env: { ASSETS: { fetch: function () {
-      return Promise.resolve(new Response(assetHtml || ogHtml, { status: 200, headers: {
+      const body = assetHtml || ogHtml;
+      return Promise.resolve(new Response(body, { status: 200, headers: {
         'content-type': 'text/html; charset=utf-8',
+        'content-length': String(Buffer.byteLength(body)),
+        'content-encoding': 'gzip',
         'etag': OG_ETAG,
         'last-modified': 'Sat, 24 Oct 2026 00:00:00 GMT'
       } }));
@@ -1152,6 +1193,9 @@ eq('改写后 etag 已删', r1.headers.get('etag'), null);
 eq('改写后 last-modified 已删', r1.headers.get('last-modified'), null);
 eq('改写后 cache-control 为 300s', r1.headers.get('cache-control'), 'public, max-age=300');
 eq('改写后 Content-Type 保留', (r1.headers.get('content-type') || '').indexOf('text/html') >= 0, true);
+// P2-1（2026-11-09）：体已改写，资产旧 length/encoding 必须删掉
+eq('改写后旧 Content-Length 已删', r1.headers.get('content-length'), null);
+eq('改写后旧 Content-Encoding 已删', r1.headers.get('content-encoding'), null);
 
 // 静卦标题口径：与 app.js 同构（benName + '（静卦）'），四柱尾巴照带
 const ogStaticCode = LYcore.encodeCast({ time: OG_DT, vals: [1, 0, 1, 1, 0, 1], use: '', question: '' });
@@ -1307,6 +1351,12 @@ eq('readings GET 带口令 → 200', rRg.status, 200);
 eq('readings SQL 禁 SELECT *（正文不下发）', dbRg.state.sqls[0].indexOf('SELECT *') < 0 && dbRg.state.sqls[0].indexOf('pan_text') < 0, true);
 eq('readings SQL 按到期日过滤（due_at <= 北京今天）', /r\.due_at <= \?/.test(dbRg.state.sqls[0]) && dbRg.state.bound[0][0] === beijingToday(), true);
 const rRgBody = await rRg.json();
+const dbRgPage = mkDb();
+dbRgPage.state.rows = [];
+const rRgPage = await rdGet({ 'X-Access-Code': 'k' }, { LIUYAO_DB: dbRgPage, LIB_CODE: 'k' });
+eq('readings 分页参数透传 limit/offset', dbRgPage.state.bound[0].slice(1), [50, 0]);
+const jRgPage = await rRgPage.json();
+eq('readings 响应回显 limit/offset', [jRgPage.limit, jRgPage.offset], [50, 0]);
 eq('到期任务下发 question/hex 供辨认', rRgBody.tasks[0].question === '测事' && rRgBody.tasks[0].hex === '乾为天', true);
 
 // ⑤ /api/readings POST dismissed：口令、白名单、pending 限定

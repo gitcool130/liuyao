@@ -554,14 +554,17 @@
     const src = [];
     pan.lines.forEach(function (l) {
       if (!l.moving) return;
-      src.push({ zhiIdx: l.zhiIdx, from: '本卦' + LINE_NAMES[l.pos] + l.lq + l.zhi, owner: 'p' + l.pos });
+      // owner 用「爻位」而不是「本/变来源」：同一动爻的本爻与变爻只能占一个局位。
+      // 旧版 p<pos>/b<pos> 两个 owner 会让同一爻的酉、巳同时入局（如坤之晋上爻
+      // 酉动化巳 + 四爻丑），与 :541 注释和 test-rules「同爻本变不得双算」矛盾。
+      src.push({ zhiIdx: l.zhiIdx, from: '本卦' + LINE_NAMES[l.pos] + l.lq + l.zhi, owner: 'l' + l.pos });
     });
     pan.lines.forEach(function (l) {
       if (!l.moving || !l.bian) return;
       // bian 对象（paipan.js）只有 { gan, zhi, wx, lq }，没有 zhiIdx——
       // 旧版直接读 l.bian.zhiIdx 得 undefined，而下方按 x.zhiIdx === z（0–11 整数）
       // 匹配，变爻地支永远命中不了，三合局退化成「只可能由本卦动爻凑成」。
-      src.push({ zhiIdx: ZHI.indexOf(l.bian.zhi), from: '变爻' + l.bian.lq + l.bian.zhi, owner: 'b' + l.pos });
+      src.push({ zhiIdx: ZHI.indexOf(l.bian.zhi), from: '变爻' + l.bian.lq + l.bian.zhi, owner: 'l' + l.pos });
     });
     // 中-3（2026-11-03）：候选池纳入月建与日辰。《增删卜易》三处明文日月成局：
     //   zsby-01525「虚一待用，果升于卯月」；zsby-03620「日月世爻其成三合」；
@@ -1382,8 +1385,12 @@
           : '（旺相或得日辰扶·假破，出月或逢合逢值可解）'));
       }
       if (riChong) {
+        // 与 ruleDayChong 同一口径：动爻值旬空时「冲空则实」，不得再写「冲散」。
+        // 旧版此分支只按 moving 判，与 ruleDayChong（2026-11-03 已改判冲实）互斥，
+        // 同一张盘的【旺衰粗判】与【爻位状态】会给出两句相反结论（P1-1）。
         marks.push(L.moving
-          ? '日冲·冲散（动逢冲则散，事多反复）'
+          ? (kong ? '日冲·冲实（动而值空，冲空则实，出空有用）'
+                  : '日冲·冲散（动逢冲则散，事多反复）')
           : (strong ? '日冲·暗动（旺相逢冲为冲起，非日破）' : '日冲·日破（休囚逢冲，败象）'));
       } else if (riHe) {
         marks.push(L.moving ? '日合·合绊' : (strong ? '日合·合起' : '日合·合绊'));
