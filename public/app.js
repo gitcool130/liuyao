@@ -683,8 +683,20 @@
     }
     if (customKw) {
       const yname = isWeather ? '父母（雨）' : (res.yongshen ? res.yongshen.type : effTarget);
-      res.bullets.unshift('自定义事由按关键词「' + customKw + '」推定为「' + yname +
-        '」用神（规则链已按此取用；若卦理显见他亲更切，可在追问中说明理由）');
+      // 推断必须能自证：把取用的理由（为什么是这个六亲）写在页面上，
+      // 用户才判断得出「它是不是把我的问题听错了」。旧版只说「按关键词推定」，
+      // 推错时（如「我妈的身体」判成世爻）用户看不出错在哪。
+      const why = (sug && sug.why) ? '（' + sug.why + '）' : '';
+      let line = '自定义事由按「' + customKw + '」推定为「' + yname + '」用神' + why +
+        '；规则链已按此取用，若卦理显见他亲更切，可在追问中说明理由改取';
+      // 占类本身有两解时把次选一并摆出（如占婚：男占妻财、女占官鬼），
+      // 不让页面假装唯一——武断地藏起另一解，比让用户自己选更容易断错。
+      if (sug && sug.alts && sug.alts.length) {
+        line += '。另有一解：' + sug.alts.map(function (a) {
+          return '「' + (a.rel === 'shi' ? '世爻' : a.rel) + '」' + (a.why ? '（' + a.why + '）' : '');
+        }).join('、') + '，可在上方「用神」下拉改选';
+      }
+      res.bullets.unshift(line);
     }
     if (isWeather) {
       // 占天时不论吉凶，只论现象成否：把口径写在页面首条，与 domainBlock 的【结论语义】呼应。
