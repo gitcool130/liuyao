@@ -4,6 +4,11 @@
 
 # ── 静态资源 ──
 /*
+  # 2026-11-10：摘除 Pages 平台默认挂在静态资产上的 ACAO:*（实测连
+  #  developers.cloudflare.com 都带）。它不是本项目/dsh 加的，但本站零跨域需求，
+  # 留着只会让任意站点能 fetch 全部公开资产，摘掉更干净。语法见 Pages 文档
+  #  「Detach a header」。注意：这只影响静态资产；/api/* 本就不带此头。
+  ! Access-Control-Allow-Origin
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://cloudflareinsights.com; media-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
   Strict-Transport-Security: max-age=31536000; includeSubDomains
   X-Content-Type-Options: nosniff
