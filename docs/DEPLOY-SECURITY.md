@@ -27,6 +27,10 @@
 git status --short
 npm test && npm run test:fn
 
+# 0b) 建限流表（只需一次；不建则限流退化为内存计数 = 线上无效）
+#     用 D1 控制台执行 schema.sql 中 rate_hits 段，或：
+#     npx wrangler d1 execute liuyao-db --remote --command "CREATE TABLE IF NOT EXISTS rate_hits (bucket TEXT NOT NULL, ip TEXT NOT NULL, w INTEGER NOT NULL, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (bucket, ip, w)); CREATE INDEX IF NOT EXISTS idx_rate_w ON rate_hits(w);"
+
 # 1) 轮换口令（值走 stdin，不要写进任何文件/命令历史）
 npx wrangler pages secret put LIB_CODE --project-name=liuyao
 # 如启用全站口令：npx wrangler pages secret put ACCESS_CODE --project-name=liuyao
@@ -98,3 +102,25 @@ HSTS 一旦被浏览器记住就不可撤回，确认后再开）。
 
 > Account ID / D1 UUID 不是凭据，但已存在于公开仓库的历史提交中（`3e473e2`、`0e49ec6`），
 > 无需改写历史；只要 token 轮换过，它们的暴露不构成直接风险。
+
+## 六、限流为什么必须落库（2026-11-09 实测）
+
+部署后先按 §三 ④ 打 25 次，若**一次 429 都没有**，先别怀疑代码——很可能是这两条之一：
+
+1. **表没建**。`rateLimit` 在 D1 报错时静默退化为内存计数（为了不因限流设施故障而 5xx），
+   而内存计数在本 zone 上等于没有（见下）。查 `rate_hits` 是否有行即可确认。
+2. **你的出口 IP 在轮换**。限流按 `CF-Connecting-IP` 分桶，代理池/多出口的机器每请求换个 IP，
+   每个桶都只 +1，永远到不了阈值。用固定出口重试，或直接查表看 `n` 是否在涨。
+
+本次部署时实测到的关键事实：**Pages Functions 几乎不复用 isolate**。在 `/api/selftest`
+里放一个模块级自增计数，连续 5 次请求分别得到 `1,1,1,2,1`——每次基本都是全新实例。
+所以：
+
+> 任何基于「模块级 Map」的计数（限流、口令失败次数）在线上都不会生效，
+> 无论阈值写多少。这类状态必须落到 D1 / KV / Durable Object 才能跨请求存活。
+
+`requireCode` 的口令失败计数目前仍是内存实现，结论同上——它只在设了 `ACCESS_CODE` 时才相关，
+且 `LIB_CODE` 为长随机串时爆破本身不可行；若将来要它真正生效，按 `rate_hits` 同样办法落库。
+
+线上验证记录（2026-11-09）：临时把阈值调成 1 的预览部署上，20 次请求出现 8 次 `429`，
+确认「计数 → 判定 → 拦截」链路通；生产保持 20/6。
