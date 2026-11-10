@@ -129,23 +129,43 @@ async function launchBrowser() {
   eq('本卦默认乾为天', await page.$eval('#gzBen', e => e.value), '乾为天');
   eq('变卦默认为空（静卦）', await page.$eval('#gzBian', e => e.value), '');
   ok('有占问输入框', await page.$('#gzQuestion') !== null);
-  eq('干支输入区不再有逐爻网格', await page.$$('#gzYao'), []);
+  ok('有按爻区', await page.$('#gzYao') !== null);
+  ok('有右侧古籍版式预览', await page.$('#gzPreview') !== null);
 
   let tip = await page.$eval('#timeInfo', e => e.innerText);
   ok('摘要标出本卦与静卦', tip.indexOf('乾为天') >= 0 && tip.indexOf('静卦') >= 0, tip.replace(/\n/g, ' | '));
   ok('摘要给出旬空', tip.indexOf('旬空') >= 0);
 
-  /* ---------- C. 选变卦 → 由两卦位差自动定动爻 ---------- */
-  say('C. 本卦/变卦选卦');
-  await page.selectOption('#gzBian', '天风姤');
+  /* ---------- C. 按爻 / 卦名双向联动 ---------- */
+  say('C. 按爻与卦名联动');
+  eq('按爻六行', (await page.$$('#gzYao .gz-yrow')).length, 6);
+  eq('每行一个「动」复选框', (await page.$$('#gzYao .gz-move')).length, 6);
+  eq('默认全阳（每行一段爻画）',
+    await page.$$eval('#gzYao .gz-ybar', e => e.map(x => x.querySelectorAll('i').length)),
+    [1, 1, 1, 1, 1, 1]);
+
+  // 点初爻爻画（DOM 顺序是上→初，最后一行才是初爻）→ 变阴 → 本卦应为天风姤
+  const yrows = await page.$$('#gzYao .gz-yrow');
+  await yrows[yrows.length - 1].$eval('.gz-ybar', el => el.click());
   await page.waitForTimeout(300);
-  tip = await page.$eval('#timeInfo', e => e.innerText);
-  ok('摘要变成「乾为天 之 天风姤」', tip.indexOf('乾为天 之 天风姤') >= 0, tip.replace(/\n/g, ' | '));
-  // 选回（无）应回到静卦
+  eq('点爻画后本卦跟变', await page.$eval('#gzBen', e => e.value), '天风姤');
+  eq('未勾动时无变卦', await page.$eval('#gzBian', e => e.value), '');
+
+  // 勾初爻「动」→ 变卦应为乾为天（初爻阴动化阳）
+  await yrows[yrows.length - 1].$eval('.gz-move', el => el.click());
+  await page.waitForTimeout(300);
+  eq('勾动后变卦跟变', await page.$eval('#gzBian', e => e.value), '乾为天');
+
+  // 反向：从下拉改回静卦，按爻应回到全阳
+  await page.selectOption('#gzBen', '乾为天');
   await page.selectOption('#gzBian', '');
-  await page.waitForTimeout(250);
-  tip = await page.$eval('#timeInfo', e => e.innerText);
-  ok('清空变卦 → 回到静卦', tip.indexOf('静卦') >= 0, tip.replace(/\n/g, ' | '));
+  await page.waitForTimeout(300);
+  eq('下拉改回后按爻回到全阳',
+    await page.$$eval('#gzYao .gz-ybar', e => e.map(x => x.querySelectorAll('i').length)),
+    [1, 1, 1, 1, 1, 1]);
+
+  let tip2 = await page.$eval('#gzPreview', e => e.innerText);
+  ok('右侧预览是古籍版式', tip2.indexOf('干支：') >= 0 && tip2.indexOf('六神') >= 0, tip2.split('\n')[0]);
 
   /* ---------- D. 开始排盘 → 结果页 ---------- */
   say('D. 开始排盘');

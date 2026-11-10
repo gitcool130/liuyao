@@ -191,9 +191,12 @@
     monthZhi: 2,                         // 0..11（默认寅月）
     dayIdx: 0,                           // 0..59（默认甲子）
     hourZhi: GZ_NONE,                    // 0..11
-    benName: '乾为天',                    // 本卦（必填）
-    bianName: ''                         // 变卦（空 = 静卦）
+    // 六爻是唯一真源：阴阳 + 动静。卦名（本卦/变卦）由它推出来，
+    // 上方下拉只是它的另一种输入方式——两边改了都立刻同步。
+    yang: [true, true, true, true, true, true],
+    moving: [false, false, false, false, false, false]
   };
+  const GZ_POS = ['初', '二', '三', '四', '五', '上'];
 
   // 卦名 → 6 位阴阳（初→上）。异体「干」按「乾」处理（古籍里两者混用）
   function gzBitsFromName(name) {
@@ -258,13 +261,76 @@
     gzState.hourZhi = GZ_NONE;
   }
 
+  function gzBenName() {
+    return C.hexName(gzState.yang.map(function (y) { return y ? 1 : 0; }));
+  }
+  function gzBianName() {
+    if (!gzState.moving.some(Boolean)) return '';
+    return C.hexName(gzState.yang.map(function (y, i) {
+      const b = y ? 1 : 0;
+      return gzState.moving[i] ? 1 - b : b;
+    }));
+  }
   function gzSyncSelects() {
     $('#gzYear').value = String(gzState.yearIdx);
     $('#gzMonth').value = String(gzState.monthZhi);
     $('#gzDay').value = String(gzState.dayIdx);
     $('#gzHour').value = String(gzState.hourZhi);
-    $('#gzBen').value = gzState.benName || '乾为天';
-    $('#gzBian').value = gzState.bianName || '';
+    const bn = gzBenName(), xb = gzBianName();
+    $('#gzBen').value = bn;
+    // 变卦等于本卦时下拉没有对应项（重复 value），按静卦处理成「无」
+    $('#gzBian').value = (xb && xb !== bn) ? xb : '';
+  }
+
+  // 由卦名反推爻象（下拉改动的入口）
+  function gzApplyNames(benName, bianName) {
+    const b = gzBitsFromName(benName);
+    if (!b) return false;
+    const x = gzBitsFromName(bianName);
+    gzState.yang = b.map(function (v) { return v === 1; });
+    gzState.moving = b.map(function (v, i) { return x ? x[i] !== v : false; });
+    return true;
+  }
+
+  // 按爻网格（上爻在上）
+  function renderGzYao() {
+    const box = $('#gzYao');
+    if (!box) return;
+    let html = '';
+    for (let i = 5; i >= 0; i--) {
+      const yang = gzState.yang[i], dong = gzState.moving[i];
+      const bar = yang
+        ? '<i style="width:60px"></i>'
+        : '<i style="width:26px"></i><i style="width:26px"></i>';
+      html += '<div class="gz-yrow" data-i="' + i + '">' +
+        '<span class="gz-ypos">' + GZ_POS[i] + '</span>' +
+        '<div class="gz-ybar' + (dong ? ' dong' : '') + '" data-act="yang" title="点一下换阴阳">' + bar + '</div>' +
+        '<label><input type="checkbox" class="gz-move" data-act="dong"' + (dong ? ' checked' : '') + '>动</label>' +
+        '</div>';
+    }
+    box.innerHTML = html;
+  }
+
+  // 右侧实时预览：直接算一张盘，按古籍版式渲染（与结果页同一套文本）
+  function renderGzPreview() {
+    const box = $('#gzPreview');
+    if (!box) return;
+    let txt = '';
+    try {
+      const p = C.paipan(gzVals(), null, { pillars: gzPillars() });
+      txt = panClassicText(p);
+    } catch (e) {
+      txt = '（' + (e.message || e) + '）';
+    }
+    box.innerHTML = '<pre class="pan-text" style="margin:0">' + esc(txt) + '</pre>';
+  }
+
+  // 任何一处改动后的统一刷新
+  function gzRefresh() {
+    gzSyncSelects();
+    renderGzYao();
+    renderGzPreview();
+    renderGzTime();
   }
 
   // 当前选择 → 四柱（年/时为空则不传，由 pillarsFromGanzhi 决定月干五虎遁、时干五鼠遁）
@@ -279,12 +345,9 @@
 
   // 本卦/变卦 → 爻值（1 少阳 / 0 少阴 / 9 老阳动 / 6 老阴动）
   function gzVals() {
-    const b = gzBitsFromName(gzState.benName);
-    if (!b) throw new Error('本卦名无法识别：' + gzState.benName);
-    const x = gzBitsFromName(gzState.bianName);
-    return b.map(function (y, i) {
-      const moving = x ? x[i] !== y : false;
-      return y ? (moving ? 9 : 1) : (moving ? 6 : 0);
+    return gzState.yang.map(function (y, i) {
+      if (!gzState.moving[i]) return y ? 1 : 0;
+      return y ? 9 : 6;
     });
   }
 
@@ -301,8 +364,9 @@
   function renderGzTime() {
     let pil;
     try { pil = gzPillars(); } catch (e) { $('#timeInfo').textContent = e.message; return; }
-    const ben = gzState.benName || '';
-    const bian = gzState.bianName || '';
+    const ben = gzBenName();
+    let bian = gzBianName();
+    if (bian === ben) bian = '';
     $('#timeInfo').innerHTML =
       '<div class="muted">干支排盘（不经公历换算）· 本卦' + (ben ? ' ' + ben : '未选') +
       (bian ? ' 之 ' + bian : '（静卦）') + '</div>' +
@@ -329,7 +393,7 @@
     const bs = $('#btnSave'); if (bs) { bs.textContent = '存入卦例库'; bs.disabled = false; }
     const st = $('#saveTip'); if (st) { st.hidden = true; st.textContent = ''; }
     const shh = $('#shareHint'); if (shh) shh.innerHTML = '';
-    if (isGz) { gzSyncSelects(); renderGzTime(); }
+    if (isGz) { gzRefresh(); }
     renderTime(); renderCoins(); renderTossHint(); renderStack();
   }
 
@@ -586,18 +650,38 @@
       else if (id === 'gzMonth') gzState.monthZhi = v;
       else if (id === 'gzDay') gzState.dayIdx = v;
       else gzState.hourZhi = v;
+      renderGzPreview();
       renderGzTime();
     };
   });
-  // 本卦/变卦：变了就更新摘要（「之」与静卦标注）
+  // 本卦/变卦：改了 → 反推爻象 → 刷新按爻与预览
   $('#gzBen').onchange = function () {
-    gzState.benName = this.value;
-    renderGzTime();
+    gzApplyNames(this.value, $('#gzBian').value);
+    gzRefresh();
   };
   $('#gzBian').onchange = function () {
-    gzState.bianName = this.value;
-    renderGzTime();
+    gzApplyNames($('#gzBen').value, this.value);
+    gzRefresh();
   };
+  // 按爻：点爻画换阴阳、勾「动」加动爻（改完卦名自动跟变）
+  $('#gzYao').addEventListener('click', function (e) {
+    const row = e.target.closest ? e.target.closest('.gz-yrow') : null;
+    if (!row) return;
+    const i = parseInt(row.getAttribute('data-i'), 10);
+    if (e.target.classList && e.target.classList.contains('gz-move')) return;  // 交给 change
+    if (e.target.closest('.gz-ybar')) {
+      gzState.yang[i] = !gzState.yang[i];
+      gzRefresh();
+    }
+  });
+  $('#gzYao').addEventListener('change', function (e) {
+    const cb = e.target;
+    if (!cb.classList || !cb.classList.contains('gz-move')) return;
+    const row = cb.closest('.gz-yrow');
+    if (!row) return;
+    gzState.moving[parseInt(row.getAttribute('data-i'), 10)] = !!cb.checked;
+    gzRefresh();
+  });
   $('#btnGzPaipan').onclick = function () {
     // 占问写进统一的事由字段：分析层与断卦都从 currentQuestion() 取
     const q = ($('#gzQuestion').value || '').trim();
@@ -616,23 +700,17 @@
     setCastMode('ganzhi');
     if (typeof c.monthZhi === 'number') gzState.monthZhi = c.monthZhi;
     if (typeof c.dayIdx === 'number') gzState.dayIdx = c.dayIdx;
-    if (c.benGua) gzState.benName = gzBitsFromName(c.benGua) ? c.benGua : gzState.benName;
-    gzState.bianName = (c.bianGua && gzBitsFromName(c.bianGua)) ? c.bianGua : '';
-    // 只有爻值、没有卦名时（自建卦例），由爻值反推两张卦名
-    if (Array.isArray(c.toss) && c.toss.length === 6) {
-      const bits = c.toss.map(function (v) { return (v === 1 || v === 9) ? 1 : 0; });
-      const ben = C.hexName(bits);
-      const moving = c.toss.some(function (v) { return v === 9 || v === 6; });
-      if (ben) gzState.benName = ben;
-      if (moving) {
-        const bb = c.toss.map(function (v, i) { return (v === 9 || v === 6) ? 1 - bits[i] : bits[i]; });
-        gzState.bianName = C.hexName(bb);
-      } else {
-        gzState.bianName = '';
-      }
+    let ok = false;
+    if (c.benGua && gzBitsFromName(c.benGua)) {
+      ok = gzApplyNames(c.benGua, c.bianGua);
+    } else if (Array.isArray(c.toss) && c.toss.length === 6) {
+      // 只有爻值没有卦名（自建卦例）：直接按爻值设爻象
+      gzState.yang = c.toss.map(function (v) { return (v === 1 || v === 9); });
+      gzState.moving = c.toss.map(function (v) { return (v === 9 || v === 6); });
+      ok = true;
     }
-    gzSyncSelects();
-    renderGzTime();
+    if (!ok) return;
+    gzRefresh();
     computePan();
     const card = $('#gzCard');
     if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -3547,9 +3625,7 @@
   // 干支排盘：先铺选项，再把默认值设成「今天的月建与日辰」（打开即可用）
   fillGzSelects();
   gzAdoptToday();
-  gzState.benName = '乾为天';
-  gzState.bianName = '';
-  gzSyncSelects();
+  gzRefresh();
   renderTime();
   renderCoins();
   renderTossHint();
