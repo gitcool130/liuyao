@@ -565,6 +565,29 @@
   };
   $('#btnGzPaipan').onclick = function () { computePan(); };
 
+  // 供「古籍卦例库」把一条卦例原样送进来：六爻由卦名反推，月建/日辰照搬，
+  // 缺月建时保留当前所选（古籍多数只记月日，不强求）
+  window.__lyLoadGujiCase = function (c) {
+    if (!c) return;
+    setCastMode('ganzhi');
+    if (typeof c.monthZhi === 'number') gzState.monthZhi = c.monthZhi;
+    if (typeof c.dayIdx === 'number') gzState.dayIdx = c.dayIdx;
+    if (Array.isArray(c.toss) && c.toss.length === 6) {
+      gzState.yang = c.toss.map(function (v) { return v === 1 || v === 9; });
+      gzState.moving = c.toss.map(function (v) { return v === 9 || v === 6; });
+    }
+    gzSyncSelects();
+    renderGzTime();
+    renderGz();
+    computePan();
+    const card = $('#gzCard');
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  // 当前干支选择（新增卦例时作为默认值）
+  window.__lyGzState = function () {
+    return { yearIdx: gzState.yearIdx, monthZhi: gzState.monthZhi, dayIdx: gzState.dayIdx, hourZhi: gzState.hourZhi };
+  };
+
   function yaoSymHTML(yang, moving, old) {
     const base = yang ? '━━━━━━━' : '━━━　━━━';
     const mark = old === 9 ? ' ○' : old === 6 ? ' ✕' : '';
