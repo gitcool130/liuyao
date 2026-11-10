@@ -64,7 +64,7 @@
       '<button class="bd-mini bd-green" id="bdShot" title="Win+Shift+S 截图后点这里（或直接 Ctrl+V）">截屏批注</button>' +
       '<button class="bd-mini bd-green" id="bdPan">载入卦象</button>' +
       '<button class="bd-mini" id="bdImage">插入图片</button>' +
-      '<button class="bd-mini" id="bdSave">存 PNG</button>' +
+      '<button class="bd-mini" id="bdSave" title="把画布（含底图与批注）存成 PNG">截图</button>' +
       '<button class="bd-mini" id="bdCollapse">收起</button>' +
       '<span class="muted" id="bdTip" style="margin-left:6px;font-size:12px"></span>' +
       '</div>' +
@@ -161,7 +161,7 @@
     cv.addEventListener('pointerdown', function (e) {
       const p = pos(e);
       if (st.tool === 'pointer') return;
-      cv.setPointerCapture(e.pointerId);
+      try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 合成事件没有真实指针，忽略 */ }
       if (st.tool === 'text') {
         const txt = W.prompt ? W.prompt('输入要写的字：', '') : '';
         if (txt) {
@@ -343,10 +343,16 @@
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         const d = new Date(), p2 = function (n) { return (n < 10 ? '0' : '') + n; };
-        a.download = '画板-' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes()) + '.png';
+        let gua = '';
+        try {
+          const el = document.getElementById('gzBen');
+          if (el && el.value) gua = '-' + el.value;   // 文件名带本卦名，事后好找
+        } catch (err) { }
+        a.download = '画板' + gua + '-' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) +
+          '-' + p2(d.getHours()) + p2(d.getMinutes()) + '.png';
         document.body.appendChild(a); a.click();
         setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 800);
-        tip('已存 PNG');
+        tip('已截图保存（浏览器下载目录）');
       }, 'image/png');
     };
 

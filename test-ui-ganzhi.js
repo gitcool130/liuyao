@@ -86,6 +86,9 @@ async function launchBrowser() {
   ok('有截屏批注按钮', await page.$('#bdShot') !== null);
   await page.click('#boardCard .bd-tool[data-tool="rect"]');
   await page.waitForTimeout(150);
+  eq('切到矩形后按钮高亮', await page.$eval('#boardCard .bd-tool[data-tool="rect"]', e => e.classList.contains('on')), true);
+  await page.click('#boardCard .bd-tool[data-tool="pen"]');
+  await page.waitForTimeout(150);
   await page.evaluate(function () {
     const cv = document.getElementById('bdCanvas');
     const r = cv.getBoundingClientRect();
