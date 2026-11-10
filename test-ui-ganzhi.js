@@ -214,14 +214,20 @@ async function launchBrowser() {
   eq('开关文案为「卦象表格」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '卦象表格');
 
   // 起卦区右侧的爻位堆叠：不能被字距/折行拆坏（原 letter-spacing:4px 会把 ━━━━━ 变虚线）
-  const slot = await page.$eval('#yaoStack .yao-slot', e => ({
-    ls: getComputedStyle(e).letterSpacing,
-    h: Math.round(e.getBoundingClientRect().height),
-    n: e.children.length
-  }));
-  eq('爻位行高 40（不折行）', slot.h, 40);
+  // 用 computedStyle 而不是 getBoundingClientRect：后者在元素刚好被滚出视口/未布局时
+  // 会给 0，量的是布局状态而不是样式本身，容易假失败。
+  const slot = await page.$eval('#yaoStack .yao-slot', e => {
+    const cs = getComputedStyle(e);
+    return {
+      ls: cs.letterSpacing, h: parseFloat(cs.height), ws: cs.whiteSpace,
+      n: e.children.length, txt: (e.lastElementChild || {}).textContent || ''
+    };
+  });
+  ok('爻位行高为 40（不折行）', slot.h === 40, JSON.stringify(slot).slice(0, 120));
   ok('爻画无字距（不被拆成虚线）', slot.ls === 'normal' || parseFloat(slot.ls) === 0, slot.ls);
+  eq('爻位行不换行', slot.ws, 'nowrap');
   eq('爻位行两个片段（名称＋爻画）', slot.n, 2);
+  ok('爻画是整段实线字符', /[━─]/.test(slot.txt), slot.txt);
   ok('古籍版式排在卦象表之前', await page.evaluate(function () {
     const a = document.getElementById('classicBox');
     const b = document.getElementById('panBody');
