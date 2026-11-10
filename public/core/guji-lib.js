@@ -27,6 +27,91 @@
   const LINE_NAMES = ['初爻', '二爻', '三爻', '四爻', '五爻', '上爻'];
 
   const state = { books: [], cur: null, keyword: '', shown: 0, loading: {}, user: { books: [] } };
+  const FONT_KEY = 'ly_reader_font';
+  const FONT_MIN = 13, FONT_MAX = 30;
+  function fontOf() {
+    try {
+      const v = parseInt(localStorage.getItem(FONT_KEY) || '', 10);
+      if (v >= FONT_MIN && v <= FONT_MAX) return v;
+    } catch (e) { }
+    return 16;
+  }
+  function setFont(v) {
+    v = Math.max(FONT_MIN, Math.min(FONT_MAX, v));
+    try { localStorage.setItem(FONT_KEY, String(v)); } catch (e) { }
+    document.querySelectorAll('.guji-text, .rd-text').forEach(function (el) {
+      el.style.fontSize = v + 'px';
+    });
+    const lbl = document.querySelectorAll('.rd-fs-val, .guji-fs-val');
+    Array.prototype.forEach.call(lbl, function (x) { x.textContent = v + 'px'; });
+    return v;
+  }
+  function fontBarHTML() {
+    return '<span class="guji-fontbar">字号 ' +
+      '<button class="guji-fs" data-fs="-1">A−</button>' +
+      '<b class="guji-fs-val">' + fontOf() + 'px</b>' +
+      '<button class="guji-fs" data-fs="1">A＋</button>' +
+      '<button class="guji-fs" data-fs="0">默认</button>' +
+      '</span>';
+  }
+  // 绑定字号按钮（容器内 .guji-fs）
+  function bindFontBar(scope) {
+    scope.querySelectorAll('.guji-fs').forEach(function (b) {
+      b.onclick = function (e) {
+        e.stopPropagation();
+        const d = parseInt(b.getAttribute('data-fs'), 10);
+        setFont(d === 0 ? 16 : fontOf() + d);
+        if (window.__rdApply) window.__rdApply();
+      };
+    });
+  }
+
+  /* 全页面阅读：铺满整屏的浮层，Esc 或「关闭」退出。
+     与行内阅读共用同一个字号设置。 */
+  function openReader(bookName, title, text) {
+    const old = document.getElementById('readerOverlay');
+    if (old) old.remove();
+    const ov = document.createElement('div');
+    ov.id = 'readerOverlay';
+    ov.innerHTML =
+      '<div class="rd-top">' +
+      '<span class="rd-title">' + esc(title) + '</span>' +
+      '<span class="rd-acts">' +
+      '<span class="rd-fs">字号 <button class="rd-fs-btn" data-fs="-1">A−</button>' +
+      '<b class="rd-fs-val">' + fontOf() + 'px</b>' +
+      '<button class="rd-fs-btn" data-fs="1">A＋</button>' +
+      '<button class="rd-fs-btn" data-fs="0">默认</button></span>' +
+      '<button class="rd-close">关闭（Esc）</button>' +
+      '</span></div>' +
+      '<div class="rd-body"><div class="rd-inner">' +
+      '<div class="muted rd-src">《' + esc(bookName.replace(' · 原文', '')) + '》</div>' +
+      '<div class="rd-text"></div></div></div>';
+    document.body.appendChild(ov);
+    const body = ov.querySelector('.rd-text');
+    body.textContent = text;
+    body.style.fontSize = fontOf() + 'px';
+    // 按空行切成段，读长文更省眼
+    const ps = String(text).split(/\n+/).filter(function (x) { return x.trim(); });
+    body.innerHTML = ps.map(function (x) { return '<p>' + esc(x) + '</p>'; }).join('');
+
+    ov.querySelectorAll('.rd-fs-btn').forEach(function (b) {
+      b.onclick = function () {
+        const d = parseInt(b.getAttribute('data-fs'), 10);
+        const v = setFont(d === 0 ? 16 : fontOf() + d);
+        body.style.fontSize = v + 'px';
+      };
+    });
+    ov.querySelector('.rd-close').onclick = close;
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    document.addEventListener('keydown', onKey);
+    function close() {
+      document.removeEventListener('keydown', onKey);
+      ov.remove();
+    }
+    window.__rdApply = function () { body.style.fontSize = fontOf() + 'px'; };
+    return ov;
+  }
+
 
   /* ---------- 工具 ---------- */
 
@@ -277,15 +362,26 @@
 
   function showChapter(b, ch) {
     const box = document.getElementById('gujiDetail');
+    const bookName = b.name.replace(' · 原文', '');
     box.hidden = false;
     box.innerHTML =
       '<div class="guji-d-title">' + esc(ch.no ? ch.no + '．' : '') + esc(ch.title || '') + '</div>' +
-      '<div class="muted">《' + esc(b.name.replace(' · 原文', '')) + '》</div>' +
+      '<div class="guji-dbar">' +
+      '<span class="muted">《' + esc(bookName) + '》</span>' +
+      fontBarHTML() +
+      '<button class="btn ghost guji-full" id="btnGujiFull" style="padding:2px 10px;font-size:12px">全页面阅读</button>' +
+      '</div>' +
       '<div class="guji-text">' + esc(ch.text).replace(/\n/g, '<br>') + '</div>' +
       '<div class="btn-row" style="margin-top:10px">' +
       '<button class="btn ghost" id="btnGujiCopy">复制本章</button>' +
       '<button class="btn ghost" id="btnGujiClose">收起</button></div>';
+    const txtEl = box.querySelector('.guji-text');
+    txtEl.style.fontSize = fontOf() + 'px';
+    bindFontBar(box);
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    document.getElementById('btnGujiFull').onclick = function () {
+      openReader(b.name, (ch.no ? ch.no + '．' : '') + (ch.title || ''), ch.text);
+    };
     document.getElementById('btnGujiClose').onclick = function () { box.hidden = true; };
     document.getElementById('btnGujiCopy').onclick = function () {
       if (navigator.clipboard) navigator.clipboard.writeText(ch.title + '\n\n' + ch.text).catch(function () { });
@@ -507,7 +603,23 @@
     '.guji-concl,.guji-quote,.guji-text{font-size:13px;line-height:1.9;margin-top:8px;max-height:320px;overflow:auto;white-space:normal}' +
     '.guji-quote,.guji-text{color:var(--ink)}' +
     '.guji-expect{margin-top:8px;padding:8px 10px;border-left:3px solid var(--gold);background:#fdf9ee;font-size:13px;line-height:1.8}' +
-    '.guji-text{background:#fff;border:1px solid var(--line);border-radius:6px;padding:10px}' +
+    '.guji-text{background:#fff;border:1px solid var(--line);border-radius:6px;padding:10px;line-height:1.95}' +
+    '.guji-dbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 8px}' +
+    '.guji-fontbar{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-light)}' +
+    '.guji-fs,.rd-fs-btn{font-family:inherit;font-size:12px;padding:2px 8px;border:1px solid var(--line);border-radius:4px;background:#fff;color:var(--ink);cursor:pointer}' +
+    '.guji-fs:hover,.rd-fs-btn:hover{background:#fbf6ea}' +
+    '.guji-fs-val,.rd-fs-val{color:var(--ink);min-width:34px;text-align:center;display:inline-block}' +
+    '#readerOverlay{position:fixed;inset:0;z-index:9000;background:#f7f3ea;display:flex;flex-direction:column}' +
+    '.rd-top{display:flex;align-items:center;gap:12px;padding:10px 22px;border-bottom:1px solid var(--line);background:#fffdf8}' +
+    '.rd-title{flex:1;font-size:15px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+    '.rd-acts{display:flex;align-items:center;gap:12px}' +
+    '.rd-fs{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-light)}' +
+    '.rd-close{font-family:inherit;font-size:13px;padding:5px 12px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink);cursor:pointer}' +
+    '.rd-body{flex:1;overflow:auto;padding:20px 0 60px}' +
+    '.rd-inner{max-width:820px;margin:0 auto;padding:0 24px}' +
+    '.rd-src{font-size:12px;margin-bottom:8px}' +
+    '.rd-text{font-size:16px;line-height:2.05;color:var(--ink)}' +
+    '.rd-text p{margin:0 0 .9em;text-indent:2em}' +
     '.guji-add-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}' +
     '.guji-add-grid label,.guji-yao{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--ink-light)}' +
     '.guji-add-grid input,.guji-add-grid select,.guji-yao select,.guji-yao textarea{font-family:inherit;font-size:13px;padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}' +

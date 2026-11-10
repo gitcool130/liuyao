@@ -80,6 +80,12 @@ async function launchBrowser() {
   eq('画板面板展开', await page.$eval('.tb-pane[data-k="board"]', e => e.hidden), false);
   const cvBox = await page.$eval('#bdCanvas', e => ({ w: e.width, h: e.height }));
   ok('canvas 已按容器定尺寸', cvBox.w > 300 && cvBox.h > 200, JSON.stringify(cvBox));
+  eq('工具齐全（9 个）', await page.$$eval('#boardCard .bd-tool', e => e.map(x => x.textContent.trim())),
+    ['鼠标', '画笔', '文字', '矩形', '圆形', '画线', '圆弧形', '箭头', '橡皮擦']);
+  ok('有后退/前进', await page.$('#bdUndo') !== null && await page.$('#bdRedo') !== null);
+  ok('有截屏批注按钮', await page.$('#bdShot') !== null);
+  await page.click('#boardCard .bd-tool[data-tool="rect"]');
+  await page.waitForTimeout(150);
   await page.evaluate(function () {
     const cv = document.getElementById('bdCanvas');
     const r = cv.getBoundingClientRect();
@@ -107,6 +113,16 @@ async function launchBrowser() {
     return n;
   });
   ok('撤销清掉笔迹', afterUndo < inked, afterUndo + ' < ' + inked);
+  await page.click('#bdRedo');
+  await page.waitForTimeout(200);
+  const afterRedo = await page.evaluate(function () {
+    const cv = document.getElementById('bdCanvas');
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) { if (d[i] !== 255 || d[i + 1] !== 253 || d[i + 2] !== 248) n++; }
+    return n;
+  });
+  ok('前进把笔迹还原', afterRedo >= inked, afterRedo + ' >= ' + inked);
   await page.click('#toolCard .tb-btn[data-k="board"]');
 
   /* ---------- B. 干支排盘界面（本卦/变卦/占问 + 年月建日辰时辰） ---------- */
@@ -359,6 +375,31 @@ async function launchBrowser() {
       if (t.length > 50) { got = t; break; }
     }
     ok('章节正文非空', got.length > 50, 'len=' + got.length);
+
+    // 字号：可调、持久化到 localStorage
+    const fs0 = await page.$eval('#gujiDetail .guji-text', e => parseFloat(getComputedStyle(e).fontSize));
+    await page.click('#gujiDetail .guji-fs[data-fs="1"]');
+    await page.waitForTimeout(200);
+    await page.click('#gujiDetail .guji-fs[data-fs="1"]');
+    await page.waitForTimeout(200);
+    const fs1 = await page.$eval('#gujiDetail .guji-text', e => parseFloat(getComputedStyle(e).fontSize));
+    ok('A＋ 放大正文', fs1 > fs0, fs0 + ' → ' + fs1);
+    eq('字号写入本机', await page.evaluate(() => localStorage.getItem('ly_reader_font')),
+      String(Math.round(fs1)));
+
+    // 全页面阅读
+    await page.click('#btnGujiFull');
+    await page.waitForSelector('#readerOverlay', { timeout: 5000 });
+    ok('全页面阅读已打开', await page.$('#readerOverlay') !== null);
+    const rdLen = await page.$eval('#readerOverlay .rd-text', e => e.innerText.length);
+    ok('浮层里有正文', rdLen > 50, 'len=' + rdLen);
+    await page.click('#readerOverlay .rd-fs-btn[data-fs="-1"]');
+    await page.waitForTimeout(200);
+    const rdFs = await page.$eval('#readerOverlay .rd-text', e => parseFloat(getComputedStyle(e).fontSize));
+    ok('浮层内也能改字号', rdFs < fs1, fs1 + ' → ' + rdFs);
+    await page.click('#readerOverlay .rd-close');
+    await page.waitForTimeout(300);
+    ok('关闭后浮层消失', await page.$('#readerOverlay') === null);
   }
 
   /* ---------- G. 无脚本错误 ---------- */
