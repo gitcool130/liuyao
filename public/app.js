@@ -601,13 +601,26 @@
     let rows = '';
     for (let i = 5; i >= 0; i--) {
       const L = pan.lines[i];
-      const kongCls = pil.kong.indexOf(L.zhiIdx) >= 0 ? ' class="kong"' : '';
+      // 旬空：值旬空的爻支；月破：爻支冲月建。两者都标红，月破再加虚线以便区分。
+      const isKong = pil.kong.indexOf(L.zhiIdx) >= 0;
+      const isPo = (typeof C.chong === 'function') ? C.chong(L.zhiIdx, pil.monthZhi) : false;
+      const gzCls = isPo ? 'gzp-po' : (isKong ? 'gzp-kong' : '');
+      const gzHtml = gzCls
+        ? '<span class="' + gzCls + '">' + L.gan + L.zhi + '</span>'
+        : L.gan + L.zhi;
+      // 变爻列：只要起出变卦就六爻全给（引擎的 L.bian 本就是「变卦同位爻」，
+      // 静爻也有值），静爻用灰色压下去——原来只显示动爻，等于把变卦藏了一半。
+      let bianHtml = '';
+      if (pan.hasBian && L.bian) {
+        const cls = L.moving ? 'bian-move' : 'bian-static';
+        bianHtml = '<span class="' + cls + '">' + L.bian.lq + ' ' + L.bian.gan + L.bian.zhi + '</span>';
+      }
       rows += '<tr>' +
         '<td>' + L.beast + '</td>' +
         '<td class="fu-cell">' + (L.fu ? L.fu.lq + '<br>' + L.fu.zhi : '') + '</td>' +
-        '<td>' + L.lq + ' ' + L.gan + L.zhi + '<br>' + yaoSymHTML(L.yang, L.moving, L.old) + '</td>' +
+        '<td>' + L.lq + ' ' + gzHtml + '<br>' + yaoSymHTML(L.yang, L.moving, L.old) + '</td>' +
         '<td>' + (L.shi ? '<span class="badge-shi">世</span>' : L.ying ? '<span class="badge-ying">应</span>' : '') + '</td>' +
-        '<td class="bian-cell">' + (L.moving && L.bian ? L.bian.lq + ' ' + L.bian.gan + L.bian.zhi : '') + '</td>' +
+        '<td class="bian-cell">' + bianHtml + '</td>' +
         '</tr>';
     }
     // 干支口径下不写公历：四柱不是由公历推出来的，并排写会让人以为两者对得上

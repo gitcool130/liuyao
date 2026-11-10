@@ -118,6 +118,11 @@ async function launchBrowser() {
 
   /* ---------- D. 开始排盘 → 结果页 ---------- */
   say('D. 开始排盘');
+  // 固定成「丙午年 亥月 戊子日」（旬空午未）以便断言红色标记，不随跑的日期变
+  await page.selectOption('#gzYear', '42');
+  await page.selectOption('#gzMonth', '11');
+  await page.selectOption('#gzDay', '24');
+  await page.waitForTimeout(400);
   await page.click('#btnGzPaipan');
   await page.waitForSelector('#panCard:not([hidden])', { timeout: 8000 });
   eq('结果页可见', await page.$eval('#panCard', e => e.hidden), false);
@@ -131,6 +136,23 @@ async function launchBrowser() {
   ok('结果页含旬空', panHead.indexOf('旬空') >= 0);
   await page.waitForTimeout(400);
   eq('排盘后断卦面板有内容', await page.$eval('.tb-pane[data-k="ai"]', e => e.getAttribute('data-empty')), '0');
+
+  // 变爻列：起出变卦后六爻全给，静爻用灰色（bian-static）与动爻（bian-move）区分
+  const bianCells = await page.$$eval('#panBody table.pan tbody tr', rows => rows.map(function (r) {
+    const c = r.querySelectorAll('td')[4];
+    const sp = c.querySelector('span');
+    return { text: c.innerText.trim(), cls: sp ? sp.className : '' };
+  }));
+  eq('变爻列六行都有内容', bianCells.filter(function (x) { return !!x.text; }).length, 6);
+  ok('存在灰色静爻变爻', bianCells.some(function (x) { return x.cls === 'bian-static'; }),
+    JSON.stringify(bianCells.map(function (x) { return x.cls; })));
+  ok('存在动爻变爻', bianCells.some(function (x) { return x.cls === 'bian-move'; }));
+
+  // 旬空（午未）/ 月破（冲月建）的干支标红
+  const redMarks = await page.$$eval('#panBody .gzp-kong, #panBody .gzp-po', function (e) {
+    return e.map(function (x) { return x.className + ':' + x.textContent; });
+  });
+  ok('旬空/月破干支标红', redMarks.length > 0, JSON.stringify(redMarks));
 
   /* ---------- E. 古籍卦例库 → 装入排盘 ---------- */
   say('E. 古籍卦例库');

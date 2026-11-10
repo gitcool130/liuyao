@@ -152,6 +152,12 @@
   .kong { color: var(--cinnabar); }     /* 旬空标记 */
   .gz-hi { color: var(--cinnabar); }    /* 月建/日辰干支高亮（原名 .kong，与旬空语义冲突，已拆分） */
   .bian-cell { color: #4a6741; }
+  /* 变爻列：动爻照常显示，静爻的「同位变爻」用灰色压下去，一眼能分出动静 */
+  .bian-static { color: #b3ada4; }
+  .bian-move { font-weight: 600; }
+  /* 月破 / 旬空的干支标红：月破再压一条虚线，两者都红但不混 */
+  .gzp-kong { color: var(--cinnabar); }
+  .gzp-po { color: #b3261e; text-decoration: underline dotted; text-underline-offset: 3px; }
   /* 琴音按钮（生成式背景音，见 bgm.js） */
   #bgmBtn {
     position: fixed; right: 20px; bottom: 20px; z-index: 60;
