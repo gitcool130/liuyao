@@ -184,7 +184,11 @@ static class Shell
         var stamp = Stamp();
         if (File.Exists(marker) && File.Exists(Path.Combine(WebDir, "index.html")))
         {
-            try { if (File.ReadAllText(marker).Trim() == stamp) return WebDir; } catch { }
+            try
+            {
+                if (File.ReadAllText(marker).Trim() == stamp) { MergeExternalGuji(); return WebDir; }
+            }
+            catch { }
         }
 
         // 清空旧页面（不动 profile，用户的历史卦例在 localStorage 里）
@@ -207,7 +211,45 @@ static class Shell
             }
         }
         File.WriteAllText(marker, stamp, Encoding.UTF8);
+        MergeExternalGuji();
         return WebDir;
+    }
+
+    /* 古籍书籍与卦例（约 4.6MB）不进仓库，改为外置：
+     *   <exe 所在目录>\guji\        ← 绿色版的自然位置，拷文件夹就带走了
+     *   %LOCALAPPDATA%\LianZhaiLiuYao\guji\   ← 不想在程序目录放东西时用这个
+     * 每次启动都覆盖一次（内容小，代价低），这样换新版 exe 也不会把书弄丢，
+     * 用户自己往里加的书也是同一份。内嵌包若自带 guji/ 则以此处为准。 */
+    static void MergeExternalGuji()
+    {
+        try
+        {
+            string exeDir = null;
+            try { exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location); } catch { }
+            var candidates = new List<string>();
+            if (!string.IsNullOrEmpty(exeDir)) candidates.Add(Path.Combine(exeDir, "guji"));
+            candidates.Add(Path.Combine(Root, "guji"));
+
+            foreach (var src in candidates)
+            {
+                if (!Directory.Exists(src)) continue;
+                if (!File.Exists(Path.Combine(src, "manifest.json"))) continue;   // 不是数据包目录
+                var dst = Path.Combine(WebDir, "guji");
+                CopyDir(src, dst);
+                Log("已载入外置古籍数据: " + src, null);
+                return;
+            }
+        }
+        catch (Exception ex) { Log("MergeExternalGuji 失败", ex); }
+    }
+
+    static void CopyDir(string src, string dst)
+    {
+        Directory.CreateDirectory(dst);
+        foreach (var f in Directory.GetFiles(src))
+            File.Copy(f, Path.Combine(dst, Path.GetFileName(f)), true);
+        foreach (var d in Directory.GetDirectories(src))
+            CopyDir(d, Path.Combine(dst, Path.GetFileName(d)));
     }
 
     static void PrepareNative()

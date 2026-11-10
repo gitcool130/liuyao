@@ -53,6 +53,27 @@ async function launchBrowser() {
   ok('AI 接口设置卡片已挂载', await page.$('#localApiCard') !== null);
   ok('设置卡片有 3 个接口槽', (await page.$$('#localApiCard .local-api-row')).length === 3);
 
+  /* ---------- A2. 工具栏：四块收成一行按钮 ---------- */
+  say('A2. 工具栏');
+  const tbLabels = await page.$$eval('#toolCard .tb-btn', e => e.map(x => x.textContent.trim()));
+  eq('四个按钮', tbLabels, ['古籍卦例库', 'AI 接口设置', '大模型断卦', '卦例库']);
+  eq('默认全收起', await page.$eval('#toolBody', e => e.hidden), true);
+
+  await page.click('#toolCard .tb-btn[data-k="api"]');
+  await page.waitForTimeout(300);
+  eq('点开后展开', await page.$eval('#toolBody', e => e.hidden), false);
+  eq('只显示被点的那块',
+    await page.$$eval('#toolBody .tb-pane', e => e.filter(x => !x.hidden).map(x => x.getAttribute('data-k'))), ['api']);
+  ok('AI 设置卡片已搬进面板', await page.$('#toolBody .tb-pane[data-k="api"] #localApiCard') !== null);
+
+  await page.click('#toolCard .tb-btn[data-k="api"]');
+  await page.waitForTimeout(300);
+  eq('再点收起', await page.$eval('#toolBody', e => e.hidden), true);
+
+  await page.click('#toolCard .tb-btn[data-k="ai"]');
+  await page.waitForTimeout(300);
+  eq('排盘前断卦面板给提示', await page.$eval('.tb-pane[data-k="ai"]', e => e.getAttribute('data-empty')), '1');
+
   /* ---------- B. 干支排盘界面 ---------- */
   say('B. 干支排盘界面');
   await page.click('#btnModeGz');
@@ -108,10 +129,15 @@ async function launchBrowser() {
   const panHead = await page.$eval('#panCard', e => e.innerText);
   ok('结果页含干支行', /干支|月建|日辰/.test(panHead), panHead.slice(0, 80).replace(/\n/g, ' '));
   ok('结果页含旬空', panHead.indexOf('旬空') >= 0);
+  await page.waitForTimeout(400);
+  eq('排盘后断卦面板有内容', await page.$eval('.tb-pane[data-k="ai"]', e => e.getAttribute('data-empty')), '0');
 
   /* ---------- E. 古籍卦例库 → 装入排盘 ---------- */
   say('E. 古籍卦例库');
   ok('古籍卡片已挂载', await page.$('#gujiCard') !== null);
+  await page.click('#toolCard .tb-btn[data-k="guji"]');
+  await page.waitForTimeout(600);
+  eq('古籍面板已展开', await page.$eval('.tb-pane[data-k="guji"]', e => e.hidden), false);
   const bookCount = (await page.$$eval('#gujiBook option', e => e.length));
   if (bookCount < 12) {
     // 仓库不携带古籍数据（不入 GitHub），此时只断言「空库有可读提示」
