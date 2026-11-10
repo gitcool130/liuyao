@@ -93,7 +93,7 @@ jobs:
           Write-Host "ldr=$ldr"
 
           $out = "莲斋六爻排盘.exe"
-          & $csc /nologo /target:winexe /platform:anycpu /optimize+ /langversion:7.3 `
+          & $csc /nologo /target:winexe /platform:anycpu /optimize+ /langversion:default `
                  /win32manifest:windows-shell\app.manifest `
                  /out:$out /utf8output `
                  /resource:payload.zip,payload.zip `

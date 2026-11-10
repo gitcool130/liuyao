@@ -45,7 +45,8 @@ static class Shell
     {
         // 托管依赖必须先挂上解析器，晚一步 Core.dll 就找不到了
         AppDomain.CurrentDomain.AssemblyResolve += ResolveManaged;
-        try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); } catch { }
+        // DPI 由 app.manifest 的 permonitorv2 声明，代码里不再调 SetHighDpiMode
+        // （那是 .NET Core 3+ 的 API，.NET Framework 的 csc 编不过）
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
