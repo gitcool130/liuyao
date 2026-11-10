@@ -213,133 +213,6 @@ async function launchBrowser() {
   eq('卦象表格默认收起', await page.$eval('#panBody', e => e.hidden), true);
   eq('开关文案为「卦象表格」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '卦象表格');
 
-  /* ---------- E3. 卦例库双击 → 还原成卦象（用真实记录的字段形状） ---------- */
-  say('E3. 卦例还原');
-  /* 这条 payload 照抄王哥本机那条真实记录（2026-11-10 23:08 那一卦）：
-     公历 datetime、6 个 tosses 带 coins/backs/mode、question 是事类标签。
-     之前只造了个干支简化版，没覆盖到真实形状。 */
-  const realTosses = [
-    { coins: ['背', '背', '背'], backs: 3, val: 9, mode: 'manual' },
-    { coins: ['背', '背', '背'], backs: 3, val: 9, mode: 'manual' },
-    { coins: ['字', '背', '背'], backs: 2, val: 0, mode: 'manual' },
-    { coins: ['背', '字', '背'], backs: 2, val: 0, mode: 'manual' },
-    { coins: ['字', '字', '背'], backs: 1, val: 1, mode: 'manual' },
-    { coins: ['背', '背', '背'], backs: 3, val: 9, mode: 'manual' }
-  ];
-  const madeId = await page.evaluate(async function (tosses) {
-    const payload = {
-      id: null,
-      datetime: '2026-11-10 23:08',
-      pillars: '丙午年 己亥月 戊子日 甲子时',
-      question: '朋友·同事·竞争·破耗',
-      hex: '雷泽归妹 之 泽地萃',
-      tosses: tosses,
-      panText: '【六爻排盘】…',
-      messages: {}
-    };
-    const r = await fetch('/api/records', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload)
-    });
-    const d = await r.json();
-    return d && d.id;
-  }, realTosses);
-  ok('造了一条真实形状的卦例', !!madeId, String(madeId));
-
-  await page.$eval('#toolCard .tb-btn[data-k="lib"]', el => el.click());
-  await page.waitForTimeout(400);
-  await page.$eval('#btnLib', el => el.click());
-  await page.waitForSelector('#libList .lib-item[data-id]', { timeout: 6000 }).catch(function () { });
-  const libCount = await page.$$eval('#libList .lib-item[data-id]', e => e.length);
-  ok('卦例库列出了记录', libCount > 0, 'count=' + libCount);
-
-  if (libCount > 0) {
-    await page.evaluate(function () {
-      document.getElementById('panCard').hidden = true;
-      document.getElementById('classicText').textContent = '';
-    });
-    await page.dblclick('#libList .lib-item[data-id]');
-    await page.waitForTimeout(1300);
-    eq('双击后结果卡重新出现', await page.$eval('#panCard', e => e.hidden), false);
-    const rsText = await page.$eval('#classicText', e => e.textContent);
-    ok('还原出的盘面有干支', /干支：/.test(rsText), (rsText.split('\n')[0] || '').slice(0, 50));
-    // 占时按记录还原 → 四柱应与记录一致
-    ok('四柱还原正确（丙午年 己亥月 戊子日）',
-      /丙午年/.test(rsText) && /己亥月/.test(rsText) && /戊子日/.test(rsText),
-      (rsText.split('\n')[0] || ''));
-    ok('卦名与记录一致（雷泽归妹 之 泽地萃）',
-      /雷泽归妹/.test(rsText) && /泽地萃/.test(rsText), rsText.split('\n')[1] || '');
-    ok('事由回填', await page.$eval('#useCustom', e => e.value).then(v => v.length > 0).catch(() => false));
-  }
-
-  // 起卦区右侧的爻位堆叠：不能被字距/折行拆坏（原 letter-spacing:4px 会把 ━━━━━ 变虚线）
-  // 用 computedStyle 而不是 getBoundingClientRect：后者在元素刚好被滚出视口/未布局时
-  // 会给 0，量的是布局状态而不是样式本身，容易假失败。
-  const slot = await page.$eval('#yaoStack .yao-slot', e => {
-    const cs = getComputedStyle(e);
-    return {
-      ls: cs.letterSpacing, h: parseFloat(cs.height), ws: cs.whiteSpace,
-      n: e.children.length, txt: (e.lastElementChild || {}).textContent || ''
-    };
-  });
-  ok('爻位行高为 40（不折行）', slot.h === 40, JSON.stringify(slot).slice(0, 120));
-  ok('爻画无字距（不被拆成虚线）', slot.ls === 'normal' || parseFloat(slot.ls) === 0, slot.ls);
-  eq('爻位行不换行', slot.ws, 'nowrap');
-  eq('爻位行两个片段（名称＋爻画）', slot.n, 2);
-
-  ok('古籍版式排在卦象表之前', await page.evaluate(function () {
-    const a = document.getElementById('classicBox');
-    const b = document.getElementById('panBody');
-    return !!(a && b && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
-  }));
-
-  const classic = await page.$eval('#classicText', e => e.textContent);
-  const cLines = classic.split('\n');
-  ok('古籍版式首行为干支', /^干支：/.test(cLines[0] || ''), cLines[0]);
-  ok('古籍版式第二行为宫名卦名', /宫：/.test(cLines[1] || ''), cLines[1]);
-  ok('古籍版式第三行为四列表头', /六神　伏　　神/.test(cLines[2] || ''), cLines[2]);
-  ok('古籍版式六爻齐全', cLines.length >= 9, 'lines=' + cLines.length);
-  ok('古籍版式标出世应', /世|应/.test(classic));
-  ok('古籍版式含旬空', /旬空/.test(classic));
-
-  /* 切到卦象表格 */
-  await page.click('#btnClassic');
-  await page.waitForTimeout(350);
-  eq('表格显示出来', await page.$eval('#panBody', e => e.hidden), false);
-  eq('古籍版式收起', await page.$eval('#classicBox', e => e.hidden), true);
-  eq('开关文案变「古籍版式」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '古籍版式');
-
-  const gzMeta = await page.$eval('#panBody .gz-meta', e => e.innerText).catch(() => '');
-  const gzTitle = await page.$eval('#panBody .gz-title', e => e.innerText).catch(() => '');
-  ok('干支行以「干支：」开头', /^干支：/.test(gzMeta.trim()), gzMeta);
-  ok('干支行含旬空', gzMeta.indexOf('旬空') >= 0);
-  ok('宫名行形如「乾宫：乾为天」', /宫：/.test(gzTitle), gzTitle);
-
-  // 变爻列：起出变卦后六爻全给，静爻用灰色（bian-static）与动爻（bian-move）区分
-  const bianCells = await page.$$eval('#panBody table.pan tbody tr', rows => rows.map(function (r) {
-    const c = r.querySelectorAll('td')[4];
-    const sp = c.querySelector('span');
-    return { text: c.textContent.trim(), cls: sp ? sp.className : '' };
-  }));
-  eq('变爻列六行都有内容', bianCells.filter(function (x) { return !!x.text; }).length, 6);
-  ok('存在灰色静爻变爻', bianCells.some(function (x) { return x.cls === 'bian-static'; }),
-    JSON.stringify(bianCells.map(function (x) { return x.cls; })));
-  ok('存在动爻变爻', bianCells.some(function (x) { return x.cls === 'bian-move'; }));
-
-  // 旬空（午未）/ 月破（冲月建）的干支标红
-  const redMarks = await page.$$eval('#panBody .gzp-kong, #panBody .gzp-po', function (e) {
-    return e.map(function (x) { return x.className + ':' + x.textContent; });
-  });
-  ok('旬空/月破干支标红', redMarks.length > 0, JSON.stringify(redMarks));
-
-  await page.waitForTimeout(300);
-  eq('排盘后断卦面板有内容', await page.$eval('.tb-pane[data-k="ai"]', e => e.getAttribute('data-empty')), '0');
-
-  /* 再切回古籍版式 */
-  await page.click('#btnClassic');
-  await page.waitForTimeout(300);
-  eq('可切回古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
-  eq('切回后表格再收起到', await page.$eval('#panBody', e => e.hidden), true);
-
   /* ---------- D2. 存入卦例库（按钮已挪到结果页） ---------- */
   say('D2. 存入卦例库');
   ok('存入按钮在结果页', await page.$('#panCard #btnSave') !== null);
@@ -482,6 +355,137 @@ async function launchBrowser() {
     await page.waitForTimeout(300);
     ok('关闭后浮层消失', await page.$('#readerOverlay') === null);
   }
+
+  /* ---------- E3. 卦例库双击 → 还原成卦象（用真实记录的字段形状） ---------- */
+  say('E3. 卦例还原');
+  /* 这条 payload 照抄王哥本机那条真实记录（2026-11-10 23:08 那一卦）：
+     公历 datetime、6 个 tosses 带 coins/backs/mode、question 是事类标签。
+     之前只造了个干支简化版，没覆盖到真实形状。 */
+  const realTosses = [
+    { coins: ['背', '背', '背'], backs: 3, val: 9, mode: 'manual' },
+    { coins: ['背', '背', '背'], backs: 3, val: 9, mode: 'manual' },
+    // 爻值必须与「雷泽归妹 之 泽地萃」严格对应：
+    // 本卦 1,1,0,1,0,0；变卦 0,0,0,1,1,0 → 初、二、五 动 → 9,9,0,1,6,0
+    // （上一版随手编了爻值，还原出来是另一张卦，被断言当场抓出来）
+    { coins: ['字', '字', '背'], backs: 1, val: 0, mode: 'manual' },
+    { coins: ['背', '背', '字'], backs: 2, val: 1, mode: 'manual' },
+    { coins: ['字', '背', '字'], backs: 1, val: 6, mode: 'manual' },
+    { coins: ['字', '字', '背'], backs: 1, val: 0, mode: 'manual' }
+  ];
+  const madeId = await page.evaluate(async function (tosses) {
+    const payload = {
+      id: null,
+      datetime: '2026-11-10 23:08',
+      pillars: '丙午年 己亥月 戊子日 甲子时',
+      question: '朋友·同事·竞争·破耗',
+      hex: '雷泽归妹 之 泽地萃',
+      tosses: tosses,
+      panText: '【六爻排盘】…',
+      messages: {}
+    };
+    const r = await fetch('/api/records', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    return d && d.id;
+  }, realTosses);
+  ok('造了一条真实形状的卦例', !!madeId, String(madeId));
+
+  await page.$eval('#toolCard .tb-btn[data-k="lib"]', el => el.click());
+  await page.waitForTimeout(400);
+  await page.$eval('#btnLib', el => el.click());
+  await page.waitForSelector('#libList .lib-item[data-id]', { timeout: 6000 }).catch(function () { });
+  const libCount = await page.$$eval('#libList .lib-item[data-id]', e => e.length);
+  ok('卦例库列出了记录', libCount > 0, 'count=' + libCount);
+
+  if (libCount > 0) {
+    await page.evaluate(function () {
+      document.getElementById('panCard').hidden = true;
+      document.getElementById('classicText').textContent = '';
+    });
+    await page.dblclick('#libList .lib-item[data-id]');
+    await page.waitForTimeout(1300);
+    eq('双击后结果卡重新出现', await page.$eval('#panCard', e => e.hidden), false);
+    const rsText = await page.$eval('#classicText', e => e.textContent);
+    ok('还原出的盘面有干支', /干支：/.test(rsText), (rsText.split('\n')[0] || '').slice(0, 50));
+    // 占时按记录还原 → 四柱应与记录一致
+    ok('四柱还原正确（丙午年 己亥月 戊子日）',
+      /丙午年/.test(rsText) && /己亥月/.test(rsText) && /戊子日/.test(rsText),
+      (rsText.split('\n')[0] || ''));
+    ok('卦名与记录一致（雷泽归妹 之 泽地萃）',
+      /雷泽归妹/.test(rsText) && /泽地萃/.test(rsText), rsText.split('\n')[1] || '');
+    ok('事由回填', await page.$eval('#useCustom', e => e.value).then(v => v.length > 0).catch(() => false));
+  }
+
+  // 起卦区右侧的爻位堆叠：不能被字距/折行拆坏（原 letter-spacing:4px 会把 ━━━━━ 变虚线）
+  // 用 computedStyle 而不是 getBoundingClientRect：后者在元素刚好被滚出视口/未布局时
+  // 会给 0，量的是布局状态而不是样式本身，容易假失败。
+  const slot = await page.$eval('#yaoStack .yao-slot', e => {
+    const cs = getComputedStyle(e);
+    return {
+      ls: cs.letterSpacing, h: parseFloat(cs.height), ws: cs.whiteSpace,
+      n: e.children.length, txt: (e.lastElementChild || {}).textContent || ''
+    };
+  });
+  ok('爻位行高为 40（不折行）', slot.h === 40, JSON.stringify(slot).slice(0, 120));
+  ok('爻画无字距（不被拆成虚线）', slot.ls === 'normal' || parseFloat(slot.ls) === 0, slot.ls);
+  eq('爻位行不换行', slot.ws, 'nowrap');
+  eq('爻位行两个片段（名称＋爻画）', slot.n, 2);
+
+  ok('古籍版式排在卦象表之前', await page.evaluate(function () {
+    const a = document.getElementById('classicBox');
+    const b = document.getElementById('panBody');
+    return !!(a && b && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+  }));
+
+  const classic = await page.$eval('#classicText', e => e.textContent);
+  const cLines = classic.split('\n');
+  ok('古籍版式首行为干支', /^干支：/.test(cLines[0] || ''), cLines[0]);
+  ok('古籍版式第二行为宫名卦名', /宫：/.test(cLines[1] || ''), cLines[1]);
+  ok('古籍版式第三行为四列表头', /六神　伏　　神/.test(cLines[2] || ''), cLines[2]);
+  ok('古籍版式六爻齐全', cLines.length >= 9, 'lines=' + cLines.length);
+  ok('古籍版式标出世应', /世|应/.test(classic));
+  ok('古籍版式含旬空', /旬空/.test(classic));
+
+  /* 切到卦象表格 */
+  await page.click('#btnClassic');
+  await page.waitForTimeout(350);
+  eq('表格显示出来', await page.$eval('#panBody', e => e.hidden), false);
+  eq('古籍版式收起', await page.$eval('#classicBox', e => e.hidden), true);
+  eq('开关文案变「古籍版式」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '古籍版式');
+
+  const gzMeta = await page.$eval('#panBody .gz-meta', e => e.innerText).catch(() => '');
+  const gzTitle = await page.$eval('#panBody .gz-title', e => e.innerText).catch(() => '');
+  ok('干支行以「干支：」开头', /^干支：/.test(gzMeta.trim()), gzMeta);
+  ok('干支行含旬空', gzMeta.indexOf('旬空') >= 0);
+  ok('宫名行形如「乾宫：乾为天」', /宫：/.test(gzTitle), gzTitle);
+
+  // 变爻列：起出变卦后六爻全给，静爻用灰色（bian-static）与动爻（bian-move）区分
+  const bianCells = await page.$$eval('#panBody table.pan tbody tr', rows => rows.map(function (r) {
+    const c = r.querySelectorAll('td')[4];
+    const sp = c.querySelector('span');
+    return { text: c.textContent.trim(), cls: sp ? sp.className : '' };
+  }));
+  eq('变爻列六行都有内容', bianCells.filter(function (x) { return !!x.text; }).length, 6);
+  ok('存在灰色静爻变爻', bianCells.some(function (x) { return x.cls === 'bian-static'; }),
+    JSON.stringify(bianCells.map(function (x) { return x.cls; })));
+  ok('存在动爻变爻', bianCells.some(function (x) { return x.cls === 'bian-move'; }));
+
+  // 旬空（午未）/ 月破（冲月建）的干支标红
+  const redMarks = await page.$$eval('#panBody .gzp-kong, #panBody .gzp-po', function (e) {
+    return e.map(function (x) { return x.className + ':' + x.textContent; });
+  });
+  ok('旬空/月破干支标红', redMarks.length > 0, JSON.stringify(redMarks));
+
+  await page.waitForTimeout(300);
+  eq('排盘后断卦面板有内容', await page.$eval('.tb-pane[data-k="ai"]', e => e.getAttribute('data-empty')), '0');
+
+  /* 再切回古籍版式 */
+  await page.click('#btnClassic');
+  await page.waitForTimeout(300);
+  eq('可切回古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
+  eq('切回后表格再收起到', await page.$eval('#panBody', e => e.hidden), true);
+
 
   /* ---------- G. 无脚本错误 ---------- */
   say('G. 控制台');
