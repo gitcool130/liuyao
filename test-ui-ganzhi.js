@@ -314,8 +314,10 @@ async function launchBrowser() {
   /* ---------- E2. 公历口径也默认「古籍版式」+ 收起卦象表格 ---------- */
   say('E2. 公历口径的默认版式');
   await page.click('#toolCard .tb-btn[data-k="board"]');   // 收起画板
-  await page.click('#btnModeDate');
+  // 用程序化 click：模式按钮在卡片里，可能被滚动位置/浮层挡住导致真实点击落空
+  await page.$eval('#btnModeDate', el => el.click());
   await page.waitForTimeout(400);
+  eq('已切回公历模式（起卦卡可见）', await page.$eval('#castCard', e => e.hidden), false);
   await page.fill('#guaNameInput', '水火既济');
   await page.click('#btnByName');
   await page.waitForTimeout(1000);
