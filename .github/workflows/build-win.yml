@@ -66,7 +66,7 @@ jobs:
         run: |
           Start-Process -FilePath python -ArgumentList "-m","http.server","8931","--directory","public" -NoNewWindow
           Start-Sleep -Seconds 3
-          node test-ui-ganzhi.mjs http://127.0.0.1:8931
+          node test-ui-ganzhi.js http://127.0.0.1:8931
 
       - name: 取 WebView2 SDK
         shell: pwsh
