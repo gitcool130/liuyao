@@ -267,95 +267,6 @@ async function launchBrowser() {
     (dText.split('\n')[0] || '').slice(0, 40));
   eq('开关文案为「卦象表格」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '卦象表格');
 
-  /* ---------- E. 古籍卦例库 → 装入排盘 ---------- */
-  say('E. 古籍卦例库');
-  ok('古籍卡片已挂载', await page.$('#gujiCard') !== null);
-  await page.click('#toolCard .tb-btn[data-k="guji"]');
-  await page.waitForTimeout(600);
-  eq('古籍面板已展开', await page.$eval('.tb-pane[data-k="guji"]', e => e.hidden), false);
-  const bookCount = (await page.$$eval('#gujiBook option', e => e.length));
-  if (bookCount < 12) {
-    // 仓库不携带古籍数据（不入 GitHub），此时只断言「空库有可读提示」
-    say('  · 本仓未携带古籍数据包，跳过书目与装入断言');
-    const emptyTip = await page.$eval('#gujiList', e => e.innerText);
-    ok('空库给可读提示', /没有古籍数据包|暂无书籍/.test(emptyTip), emptyTip.slice(0, 60));
-    await browser.close();
-    console.log('\n干支排盘 UI 冒烟：通过 ' + pass + '　失败 ' + fail);
-    process.exit(fail ? 1 : 0);
-  }
-  ok('书籍数 ≥ 12', bookCount >= 12, 'got=' + bookCount);
-
-  // 选「增删卜易 · 原文卦例」（只有卦名，需要反推动爻）
-  await page.selectOption('#gujiBook', { label: '增删卜易 · 原文卦例（404 例）' }).catch(async () => {
-    const opts = await page.$$eval('#gujiBook option', e => e.map(x => x.textContent));
-    const hit = opts.find(t => t.indexOf('原文卦例') >= 0);
-    if (hit) await page.selectOption('#gujiBook', { label: hit });
-  });
-  await page.waitForTimeout(1200);
-  const items = await page.$$('#gujiList .guji-item');
-  ok('卦例列表已渲染', items.length > 0, 'count=' + items.length);
-  const firstMeta = await items[0].innerText();
-  ok('条目显示干支与卦名', /月|日/.test(firstMeta), firstMeta.split('\n').slice(1).join(' ').slice(0, 80));
-
-  await items[0].click();
-  await page.waitForSelector('#gujiDetail:not([hidden])', { timeout: 5000 });
-  const detail = await page.$eval('#gujiDetail', e => e.innerText);
-  ok('详情有原文', detail.length > 20);
-  const canLoad = await page.$eval('#btnGujiLoad', e => !e.disabled).catch(() => false);
-  ok('装入排盘按钮可用（六爻已由卦名还原）', canLoad);
-
-  await page.click('#btnGujiLoad');
-  await page.waitForTimeout(800);
-  const afterLoad = await page.$eval('#gzPreview', e => e.innerText);
-  ok('装入后干支页刷新出卦名', /本卦/.test(afterLoad), afterLoad.replace(/\n/g, ' | ').slice(0, 100));
-  eq('装入后切到干支模式', await page.$eval('#gzCard', e => e.hidden), false);
-
-  /* ---------- F. 古籍全文阅读 ---------- */
-  say('F. 古籍全文');
-  const textOpts = await page.$$eval('#gujiBook option', e => e.map(x => x.textContent));
-  const textBook = textOpts.find(t => t.indexOf('原文') >= 0 && t.indexOf('章') >= 0);
-  ok('存在全文类书籍', !!textBook, textOpts.join(' / ').slice(0, 160));
-  if (textBook) {
-    await page.selectOption('#gujiBook', { label: textBook });
-    await page.waitForTimeout(1500);
-    const chs = await page.$$('#gujiList .guji-item');
-    ok('章节列表已渲染', chs.length > 0, 'count=' + chs.length);
-    // 有的书首章是「序」或空章，逐章找到第一篇有正文的再断言
-    let got = '';
-    for (let i = 0; i < Math.min(6, chs.length); i++) {
-      await chs[i].click();
-      await page.waitForSelector('#gujiDetail .guji-text', { timeout: 5000 });
-      const t = await page.$eval('#gujiDetail .guji-text', e => e.innerText);
-      if (t.length > 50) { got = t; break; }
-    }
-    ok('章节正文非空', got.length > 50, 'len=' + got.length);
-
-    // 字号：可调、持久化到 localStorage
-    const fs0 = await page.$eval('#gujiDetail .guji-text', e => parseFloat(getComputedStyle(e).fontSize));
-    await page.click('#gujiDetail .guji-fs[data-fs="1"]');
-    await page.waitForTimeout(200);
-    await page.click('#gujiDetail .guji-fs[data-fs="1"]');
-    await page.waitForTimeout(200);
-    const fs1 = await page.$eval('#gujiDetail .guji-text', e => parseFloat(getComputedStyle(e).fontSize));
-    ok('A＋ 放大正文', fs1 > fs0, fs0 + ' → ' + fs1);
-    eq('字号写入本机', await page.evaluate(() => localStorage.getItem('ly_reader_font')),
-      String(Math.round(fs1)));
-
-    // 全页面阅读
-    await page.click('#btnGujiFull');
-    await page.waitForSelector('#readerOverlay', { timeout: 5000 });
-    ok('全页面阅读已打开', await page.$('#readerOverlay') !== null);
-    const rdLen = await page.$eval('#readerOverlay .rd-text', e => e.innerText.length);
-    ok('浮层里有正文', rdLen > 50, 'len=' + rdLen);
-    await page.click('#readerOverlay .rd-fs-btn[data-fs="-1"]');
-    await page.waitForTimeout(200);
-    const rdFs = await page.$eval('#readerOverlay .rd-text', e => parseFloat(getComputedStyle(e).fontSize));
-    ok('浮层内也能改字号', rdFs < fs1, fs1 + ' → ' + rdFs);
-    await page.click('#readerOverlay .rd-close');
-    await page.waitForTimeout(300);
-    ok('关闭后浮层消失', await page.$('#readerOverlay') === null);
-  }
-
   /* ---------- E3. 卦例库双击 → 还原成卦象（用真实记录的字段形状） ---------- */
   say('E3. 卦例还原');
   /* 这条 payload 照抄王哥本机那条真实记录（2026-11-10 23:08 那一卦）：
@@ -486,6 +397,96 @@ async function launchBrowser() {
   eq('可切回古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
   eq('切回后表格再收起到', await page.$eval('#panBody', e => e.hidden), true);
 
+
+
+  /* ---------- E. 古籍卦例库 → 装入排盘 ---------- */
+  say('E. 古籍卦例库');
+  ok('古籍卡片已挂载', await page.$('#gujiCard') !== null);
+  await page.click('#toolCard .tb-btn[data-k="guji"]');
+  await page.waitForTimeout(600);
+  eq('古籍面板已展开', await page.$eval('.tb-pane[data-k="guji"]', e => e.hidden), false);
+  const bookCount = (await page.$$eval('#gujiBook option', e => e.length));
+  if (bookCount < 12) {
+    // 仓库不携带古籍数据（不入 GitHub），此时只断言「空库有可读提示」
+    say('  · 本仓未携带古籍数据包，跳过书目与装入断言');
+    const emptyTip = await page.$eval('#gujiList', e => e.innerText);
+    ok('空库给可读提示', /没有古籍数据包|暂无书籍/.test(emptyTip), emptyTip.slice(0, 60));
+    await browser.close();
+    console.log('\n干支排盘 UI 冒烟：通过 ' + pass + '　失败 ' + fail);
+    process.exit(fail ? 1 : 0);
+  }
+  ok('书籍数 ≥ 12', bookCount >= 12, 'got=' + bookCount);
+
+  // 选「增删卜易 · 原文卦例」（只有卦名，需要反推动爻）
+  await page.selectOption('#gujiBook', { label: '增删卜易 · 原文卦例（404 例）' }).catch(async () => {
+    const opts = await page.$$eval('#gujiBook option', e => e.map(x => x.textContent));
+    const hit = opts.find(t => t.indexOf('原文卦例') >= 0);
+    if (hit) await page.selectOption('#gujiBook', { label: hit });
+  });
+  await page.waitForTimeout(1200);
+  const items = await page.$$('#gujiList .guji-item');
+  ok('卦例列表已渲染', items.length > 0, 'count=' + items.length);
+  const firstMeta = await items[0].innerText();
+  ok('条目显示干支与卦名', /月|日/.test(firstMeta), firstMeta.split('\n').slice(1).join(' ').slice(0, 80));
+
+  await items[0].click();
+  await page.waitForSelector('#gujiDetail:not([hidden])', { timeout: 5000 });
+  const detail = await page.$eval('#gujiDetail', e => e.innerText);
+  ok('详情有原文', detail.length > 20);
+  const canLoad = await page.$eval('#btnGujiLoad', e => !e.disabled).catch(() => false);
+  ok('装入排盘按钮可用（六爻已由卦名还原）', canLoad);
+
+  await page.click('#btnGujiLoad');
+  await page.waitForTimeout(800);
+  const afterLoad = await page.$eval('#gzPreview', e => e.innerText);
+  ok('装入后干支页刷新出卦名', /本卦/.test(afterLoad), afterLoad.replace(/\n/g, ' | ').slice(0, 100));
+  eq('装入后切到干支模式', await page.$eval('#gzCard', e => e.hidden), false);
+
+  /* ---------- F. 古籍全文阅读 ---------- */
+  say('F. 古籍全文');
+  const textOpts = await page.$$eval('#gujiBook option', e => e.map(x => x.textContent));
+  const textBook = textOpts.find(t => t.indexOf('原文') >= 0 && t.indexOf('章') >= 0);
+  ok('存在全文类书籍', !!textBook, textOpts.join(' / ').slice(0, 160));
+  if (textBook) {
+    await page.selectOption('#gujiBook', { label: textBook });
+    await page.waitForTimeout(1500);
+    const chs = await page.$$('#gujiList .guji-item');
+    ok('章节列表已渲染', chs.length > 0, 'count=' + chs.length);
+    // 有的书首章是「序」或空章，逐章找到第一篇有正文的再断言
+    let got = '';
+    for (let i = 0; i < Math.min(6, chs.length); i++) {
+      await chs[i].click();
+      await page.waitForSelector('#gujiDetail .guji-text', { timeout: 5000 });
+      const t = await page.$eval('#gujiDetail .guji-text', e => e.innerText);
+      if (t.length > 50) { got = t; break; }
+    }
+    ok('章节正文非空', got.length > 50, 'len=' + got.length);
+
+    // 字号：可调、持久化到 localStorage
+    const fs0 = await page.$eval('#gujiDetail .guji-text', e => parseFloat(getComputedStyle(e).fontSize));
+    await page.click('#gujiDetail .guji-fs[data-fs="1"]');
+    await page.waitForTimeout(200);
+    await page.click('#gujiDetail .guji-fs[data-fs="1"]');
+    await page.waitForTimeout(200);
+    const fs1 = await page.$eval('#gujiDetail .guji-text', e => parseFloat(getComputedStyle(e).fontSize));
+    ok('A＋ 放大正文', fs1 > fs0, fs0 + ' → ' + fs1);
+    eq('字号写入本机', await page.evaluate(() => localStorage.getItem('ly_reader_font')),
+      String(Math.round(fs1)));
+
+    // 全页面阅读
+    await page.click('#btnGujiFull');
+    await page.waitForSelector('#readerOverlay', { timeout: 5000 });
+    ok('全页面阅读已打开', await page.$('#readerOverlay') !== null);
+    const rdLen = await page.$eval('#readerOverlay .rd-text', e => e.innerText.length);
+    ok('浮层里有正文', rdLen > 50, 'len=' + rdLen);
+    await page.click('#readerOverlay .rd-fs-btn[data-fs="-1"]');
+    await page.waitForTimeout(200);
+    const rdFs = await page.$eval('#readerOverlay .rd-text', e => parseFloat(getComputedStyle(e).fontSize));
+    ok('浮层内也能改字号', rdFs < fs1, fs1 + ' → ' + rdFs);
+    await page.click('#readerOverlay .rd-close');
+    await page.waitForTimeout(300);
+    ok('关闭后浮层消失', await page.$('#readerOverlay') === null);
+  }
 
   /* ---------- G. 无脚本错误 ---------- */
   say('G. 控制台');
