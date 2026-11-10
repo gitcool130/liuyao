@@ -10,3 +10,9 @@ live*.txt
 live*.meta
 body_*.json
 pan_full.txt
+
+# 古籍书籍与卦例数据：只在本地构建时注入，不入库（王哥要求不在 GitHub 保留）
+public/guji/cases/
+public/guji/text/
+public/guji/manifest.json
+public/guji/*.json

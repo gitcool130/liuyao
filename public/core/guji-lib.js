@@ -89,7 +89,8 @@
         return { key: b.key, name: b.name, kind: b.kind, count: b.count, file: b.file, loaded: false };
       });
     } catch (e) {
-      console.warn('[guji] 清单载入失败', e);
+      // 仓库不携带古籍数据（王哥要求不在 GitHub 保留），本地构建时才注入
+      state.noData = true;
     }
     state.user.books.forEach(function (b) {
       list.push({
@@ -210,6 +211,12 @@
     const moreRow = document.getElementById('gujiMoreRow');
     if (!list) return;
     const b = curBook();
+    if (!state.books.length) {
+      list.innerHTML = '<div class="muted">本机没有古籍数据包（guji/manifest.json 缺失）。' +
+        '可用「新建书籍」自建，或把数据包放进运行目录的 guji/ 下。</div>';
+      if (cnt) cnt.textContent = '';
+      return;
+    }
     if (!b) { list.innerHTML = '<div class="muted">暂无书籍</div>'; return; }
     if (!b.loaded) { list.innerHTML = '<div class="muted">载入中…</div>'; return; }
     if (b.error) { list.innerHTML = '<div class="warn">载入失败：' + esc(b.error) + '</div>'; return; }

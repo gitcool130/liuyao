@@ -113,6 +113,15 @@ async function launchBrowser() {
   say('E. 古籍卦例库');
   ok('古籍卡片已挂载', await page.$('#gujiCard') !== null);
   const bookCount = (await page.$$eval('#gujiBook option', e => e.length));
+  if (bookCount < 12) {
+    // 仓库不携带古籍数据（不入 GitHub），此时只断言「空库有可读提示」
+    say('  · 本仓未携带古籍数据包，跳过书目与装入断言');
+    const emptyTip = await page.$eval('#gujiList', e => e.innerText);
+    ok('空库给可读提示', /没有古籍数据包|暂无书籍/.test(emptyTip), emptyTip.slice(0, 60));
+    await browser.close();
+    console.log('\n干支排盘 UI 冒烟：通过 ' + pass + '　失败 ' + fail);
+    process.exit(fail ? 1 : 0);
+  }
   ok('书籍数 ≥ 12', bookCount >= 12, 'got=' + bookCount);
 
   // 选「增删卜易 · 原文卦例」（只有卦名，需要反推动爻）
