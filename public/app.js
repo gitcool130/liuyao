@@ -684,12 +684,7 @@
   });
   $('#btnGzPaipan').onclick = function () {
     // 占问写进统一的事由字段：分析层与断卦都从 currentQuestion() 取
-    const q = ($('#gzQuestion').value || '').trim();
-    if (q) {
-      $('#useSelect').value = '__custom__';
-      const uc = $('#useCustom');
-      if (uc) { uc.value = q; uc.hidden = false; }
-    }
+    applyQuestionText($('#gzQuestion').value);
     computePan();
   };
 
@@ -940,6 +935,7 @@
     // 但 DOM 仍是上一轮状态——爻位堆叠显示旧卦爻值（与排盘表矛盾）、
     // 铜钱残留上一爻的揭晓样式、提示文字陈旧。旧版只调 computePan()，
     // 用户看到的是「排盘表新、爻栈旧」的自相矛盾盘面。
+    applyQuestionText($('#castQuestion') ? $('#castQuestion').value : '');
     computePan();
     renderCoins();
     renderTossHint();
@@ -991,6 +987,17 @@
     return userText() || domainLabel();
   }
   // 盘面文本「所测：」一行：标签说明所选用神，原文是他的实际问题
+  /* 把自由文本占问写进统一事由字段：分析层与断卦都从 currentQuestion() 取。
+     干支排盘与「按卦名起卦」共用这一个入口，避免两套写法。 */
+  function applyQuestionText(q) {
+    q = String(q || '').trim();
+    if (!q) return false;
+    $('#useSelect').value = '__custom__';
+    const uc = $('#useCustom');
+    if (uc) { uc.value = q; uc.hidden = false; }
+    return true;
+  }
+
   function currentQuestion() {
     const t = $('#useSelect').value;
     if (!t) return '';
@@ -3423,6 +3430,90 @@
     const item = t.closest('.lib-item');
     if (item) loadCast(item.dataset.id);
   });
+  // 双击列表项 = 还原成卦象（单击仍是看详情）
+  const libCardEl = document.getElementById('libCard');
+  if (libCardEl) {
+    libCardEl.addEventListener('dblclick', function (e) {
+      const t = e.target;
+      if (!t || !t.closest) return;
+      if (t.closest('.lib-del')) return;
+      const item = t.closest('.lib-item[data-id]');
+      if (item) { e.preventDefault(); restoreCastById(item.dataset.id); }
+    });
+  }
+
+  /* ---------- 卦例还原成卦象 ----------
+   * 双击列表项（或详情里的「装入卦象」）把那条记录重新排成盘：
+   *   · 有公历占时 → 走公历口径，时刻按记录还原（等于「补录」）
+   *   · 干支盘记录（datetime 以「干支」开头）→ 走干支口径，从四柱文本取月建/日辰/年/时
+   * 六爻值一律来自记录的 tosses，不从卦名猜——记录本身就是权威。
+   */
+  function gzIndexOfGZ(str) {
+    if (!str || str.length < 2) return null;
+    const g = '甲乙丙丁戊己庚辛壬癸'.indexOf(str.charAt(0));
+    const z = '子丑寅卯辰巳午未申酉戌亥'.indexOf(str.charAt(1));
+    if (g < 0 || z < 0) return null;
+    for (let i = 0; i < 60; i++) if (i % 10 === g && i % 12 === z) return i;
+    return null;
+  }
+
+  function restoreRecord(r) {
+    if (!r) throw new Error('没有记录');
+    let toss = (r.tosses || []).map(function (t) { return t && t.val; })
+      .filter(function (v) { return v === 1 || v === 0 || v === 9 || v === 6; });
+    if (toss.length !== 6) throw new Error('这条卦例没有完整的六爻数据（旧记录可能只存了卦名）');
+
+    const dtText = String(r.datetime || '');
+    const m = dtText.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+    const pilText = String(r.pillars || '');
+
+    if (m && dtText.indexOf('干支') !== 0) {
+      // 公历口径
+      setCastMode('date');
+      timeMode = 'backfill';
+      timeLocked = false;
+      lockedDate = null;
+      selectedDate = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+      records = toss.map(function (v) {
+        return { coins: coinsFromVal(v), backs: 0, val: v, mode: 'restore' };
+      });
+      renderTime(); renderCoins(); renderTossHint(); renderStack();
+    } else {
+      // 干支口径：从四柱文本还原（缺哪柱就用当前值/留空）
+      setCastMode('ganzhi');
+      const ym = pilText.match(/(\S{2})年/);
+      const mm = pilText.match(/(\S)月/);
+      const dm = pilText.match(/(\S{2})日/);
+      const hm = pilText.match(/(\S{2})时/);
+      const yi = ym ? gzIndexOfGZ(ym[1]) : null;
+      const di = dm ? gzIndexOfGZ(dm[1]) : null;
+      const ZHI = '子丑寅卯辰巳午未申酉戌亥';
+      if (yi != null) gzState.yearIdx = yi;
+      if (mm && ZHI.indexOf(mm[1]) >= 0) gzState.monthZhi = ZHI.indexOf(mm[1]);
+      if (di != null) gzState.dayIdx = di;
+      if (hm && ZHI.indexOf(hm[1]) >= 0) gzState.hourZhi = ZHI.indexOf(hm[1]);
+      gzState.yang = toss.map(function (v) { return v === 1 || v === 9; });
+      gzState.moving = toss.map(function (v) { return v === 9 || v === 6; });
+      gzRefresh();
+    }
+
+    if (r.question) applyQuestionText(r.question);
+    computePan();
+    const pc = $('#panCard');
+    if (pc) pc.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function restoreCastById(id) {
+    try {
+      const res = await apiFetch('/api/records?id=' + encodeURIComponent(id), {});
+      const data = await res.json();
+      if (!res.ok || !data.record) throw new Error(data.message || '读取失败');
+      restoreRecord(data.record);
+    } catch (e) {
+      alert('还原卦象失败：' + e.message);
+    }
+  }
+  window.__lyRestoreCast = restoreCastById;   // 供详情按钮/测试调用
 
   $('#btnLib').onclick = async function () {
     try {

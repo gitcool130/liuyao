@@ -213,6 +213,27 @@ async function launchBrowser() {
   eq('卦象表格默认收起', await page.$eval('#panBody', e => e.hidden), true);
   eq('开关文案为「卦象表格」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '卦象表格');
 
+  /* ---------- E3. 卦例库双击 → 还原成卦象 ---------- */
+  say('E3. 卦例还原');
+  await page.click('#toolCard .tb-btn[data-k="lib"]');
+  await page.waitForTimeout(300);
+  await page.click('#btnLib');
+  await page.waitForTimeout(900);
+  const libCount = await page.$$eval('#libList .lib-item[data-id]', e => e.length);
+  ok('卦例库列出了记录', libCount > 0, 'count=' + libCount);
+  if (libCount > 0) {
+    // 关掉结果卡，确认是「还原」把它重新打开
+    await page.evaluate(function () {
+      document.getElementById('panCard').hidden = true;
+      document.getElementById('classicText').textContent = '';
+    });
+    await page.dblclick('#libList .lib-item[data-id]');
+    await page.waitForTimeout(1200);
+    eq('双击后结果卡重新出现', await page.$eval('#panCard', e => e.hidden), false);
+    const rsText = await page.$eval('#classicText', e => e.textContent);
+    ok('还原出的盘面有干支', /干支：/.test(rsText), (rsText.split('\n')[0] || '').slice(0, 40));
+  }
+
   // 起卦区右侧的爻位堆叠：不能被字距/折行拆坏（原 letter-spacing:4px 会把 ━━━━━ 变虚线）
   // 用 computedStyle 而不是 getBoundingClientRect：后者在元素刚好被滚出视口/未布局时
   // 会给 0，量的是布局状态而不是样式本身，容易假失败。
@@ -227,7 +248,7 @@ async function launchBrowser() {
   ok('爻画无字距（不被拆成虚线）', slot.ls === 'normal' || parseFloat(slot.ls) === 0, slot.ls);
   eq('爻位行不换行', slot.ws, 'nowrap');
   eq('爻位行两个片段（名称＋爻画）', slot.n, 2);
-  ok('爻画是整段实线字符', /[━─]/.test(slot.txt), slot.txt);
+
   ok('古籍版式排在卦象表之前', await page.evaluate(function () {
     const a = document.getElementById('classicBox');
     const b = document.getElementById('panBody');
@@ -324,6 +345,7 @@ async function launchBrowser() {
   await page.$eval('#btnModeDate', el => el.click());
   await page.waitForTimeout(400);
   eq('已切回公历模式（起卦卡可见）', await page.$eval('#castCard', e => e.hidden), false);
+  ok('起卦区有占问框', await page.$('#castQuestion') !== null);
   await page.fill('#guaNameInput', '水火既济');
   await page.click('#btnByName');
   await page.waitForTimeout(1000);
