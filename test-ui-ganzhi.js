@@ -222,7 +222,14 @@ async function launchBrowser() {
   await page.waitForSelector('#libList .lib-item[data-id]', { timeout: 6000 }).catch(function () { });
   await page.waitForTimeout(300);
   const libCount = await page.$$eval('#libList .lib-item[data-id]', e => e.length);
-  ok('卦例库列出了记录', libCount > 0, 'count=' + libCount);
+  const libDiag = await page.evaluate(function () {
+    let raw = '';
+    try { raw = localStorage.getItem('ly_records_v1') || ''; } catch (e) { }
+    const list = document.getElementById('libList');
+    return { store: raw.length, n: raw ? (JSON.parse(raw) || []).length : 0,
+              text: list ? list.innerText.slice(0, 80) : '(no list)' };
+  });
+  ok('卦例库列出了记录', libCount > 0, 'count=' + libCount + ' ' + JSON.stringify(libDiag));
   if (libCount > 0) {
     // 关掉结果卡，确认是「还原」把它重新打开
     await page.evaluate(function () {
