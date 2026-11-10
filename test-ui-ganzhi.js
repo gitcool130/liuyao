@@ -154,8 +154,18 @@ async function launchBrowser() {
   });
   ok('旬空/月破干支标红', redMarks.length > 0, JSON.stringify(redMarks));
 
-  // 古籍版式：干支口径默认展开，四列纯文本，可切回表格
-  eq('干支口径默认展示古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
+  // 结果页主体：咱们那套——干支一行 + 宫名卦名(卦型) 一行 + 六爻表
+  const gzMeta = await page.$eval('#panBody .gz-meta', e => e.innerText).catch(() => '');
+  const gzTitle = await page.$eval('#panBody .gz-title', e => e.innerText).catch(() => '');
+  ok('干支行以「干支：」开头', /^干支：/.test(gzMeta.trim()), gzMeta);
+  ok('干支行含旬空', gzMeta.indexOf('旬空') >= 0);
+  ok('宫名行形如「乾宫：乾为天」', /宫：/.test(gzTitle), gzTitle);
+
+  // 古籍版式是开关项，默认收起
+  eq('古籍版式默认收起', await page.$eval('#classicBox', e => e.hidden), true);
+  await page.click('#btnClassic');
+  await page.waitForTimeout(300);
+  eq('点开可见', await page.$eval('#classicBox', e => e.hidden), false);
   const classic = await page.$eval('#classicText', e => e.textContent);
   const cLines = classic.split('\n');
   ok('古籍版式首行为干支', /^干支：/.test(cLines[0] || ''), cLines[0]);
@@ -163,13 +173,9 @@ async function launchBrowser() {
   ok('古籍版式第三行为四列表头', /六神　伏　　神/.test(cLines[2] || ''), cLines[2]);
   ok('古籍版式六爻齐全', cLines.length >= 9, 'lines=' + cLines.length);
   ok('古籍版式标出世应', /世|应/.test(classic));
-
   await page.click('#btnClassic');
   await page.waitForTimeout(250);
-  eq('可切回表格', await page.$eval('#classicBox', e => e.hidden), true);
-  await page.click('#btnClassic');
-  await page.waitForTimeout(250);
-  eq('可再切回古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
+  eq('可再收起', await page.$eval('#classicBox', e => e.hidden), true);
 
   /* ---------- E. 古籍卦例库 → 装入排盘 ---------- */
   say('E. 古籍卦例库');

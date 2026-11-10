@@ -486,6 +486,9 @@
     lockedDate = null;
     if (timeMode === 'live') selectedDate = beijingNow();
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
+    showClassic = false;
+    const bc = $('#btnClassic'); if (bc) bc.className = 'btn ghost';
+    const cb = $('#classicBox'); if (cb) cb.hidden = true;
     $('#useSelect').value = '';
     const uc = $('#useCustom'); if (uc) { uc.value = ''; uc.hidden = true; }
     const uy = $('#useYong'); if (uy) { uy.value = ''; uy.hidden = true; lastManualYong = ''; }
@@ -537,9 +540,9 @@
   // 之后的渲染、分析、断卦状态复位必须完全同源，故拆出 applyPan。
   function applyPan(nextPan) {
     pan = nextPan;
-    // 干支排盘的口子就是为「对勘古籍卦例」开的，默认直接给古籍版式；
-    // 公历口径维持原样（表格），需要时自己点开
-    showClassic = !!(nextPan.pillars && nextPan.pillars.ganzhiMode);
+    // 古籍版式是开关项（咱们桌面版的「古典」也是默认不勾），
+    // 页面主体已经是咱们那套排法，需要纯文本时自己点开
+    showClassic = false;
     renderPan();
     resetAIState();
     $('#panCard').hidden = false;
@@ -722,13 +725,26 @@
         '<td class="bian-cell">' + bianHtml + '</td>' +
         '</tr>';
     }
-    // 干支口径下不写公历：四柱不是由公历推出来的，并排写会让人以为两者对得上
-    const metaLine = pil.ganzhiMode
-      ? ('干支 ' + gzPillarText(pil) + ' ｜ 月建 ' + C.ZHI[pil.monthZhi] + ' ｜ 日辰 ' + C.ZHI[pil.dayZhi])
-      : ('占时 ' + fmtDT(selectedDate) + ' ｜ ' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时');
-    $('#panBody').innerHTML =
-      '<div class="hex-title">' + title + '</div>' +
-      '<div class="meta-line">' + metaLine + ' ｜ 旬空 <span class="kong">' + pil.kongStr + '</span></div>' +
+    // 干支口径：头部按「咱们那套」排——干支一行（旬空/占问），宫名卦名(卦型) 一行，
+    // 再接六爻表。公历口径保持原样（占时＋四柱）。
+    let headHtml;
+    if (pil.ganzhiMode) {
+      const q = (typeof currentQuestion === 'function') ? currentQuestion() : '';
+      let head = '干支：';
+      if (pil.yearGZ) head += ' ' + pil.yearGZ + '年';
+      head += ' ' + pil.monthGZ + '月  ' + pil.dayGZ + '日';
+      if (pil.hourGZ) head += '  ' + pil.hourGZ + '时';
+      head += '　(旬空：' + pil.kongStr + ')';
+      if (q) head += '　占问：' + q;
+      let gongLine = pan.palace + '宫：' + pan.benName + hexTag(pan);
+      if (pan.hasBian) gongLine += '　之　' + pan.bianPalace + '宫：' + pan.bianName + hexTag(pan);
+      headHtml = '<div class="meta-line gz-meta">' + head + '</div>' +
+        '<div class="hex-title gz-title">' + gongLine + '</div>';
+    } else {
+      headHtml = '<div class="hex-title">' + title + '</div>' +
+        '<div class="meta-line">占时 ' + fmtDT(selectedDate) + ' ｜ ' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时 ｜ 旬空 <span class="kong">' + pil.kongStr + '</span></div>';
+    }
+    $('#panBody').innerHTML = headHtml +
       '<table class="pan"><thead><tr><th>六神</th><th>伏神</th><th>本卦</th><th>世应</th><th>变爻</th></tr></thead><tbody>' + rows + '</tbody></table>';
     renderWxBlock();
     renderClassic();
