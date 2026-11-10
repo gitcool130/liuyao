@@ -16,6 +16,9 @@
 (function (root) {
   'use strict';
   const W = root;
+  // 只在本机模式（桌面壳 / ?local=1）收界面：线上部署保持仓库原有版式，
+  // 否则会把 #aiCard 搬进折叠面板，仓库自带的 UI 冒烟（盲摆/追问历史）就点不到了。
+  if (!W.LY_LOCAL_MODE) return;
   const PANELS = [
     { key: 'guji', sel: '#gujiCard', label: '古籍卦例库' },
     { key: 'api', sel: '#localApiCard', label: 'AI 接口设置' },
