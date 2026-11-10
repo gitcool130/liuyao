@@ -147,6 +147,9 @@
     return w.y + '-' + p(w.m) + '-' + p(w.d) + ' ' + p(w.h) + ':' + p(w.min);
   }
   function renderTime() {
+    // 干支排盘口径下没有公历时刻可显示，改由干支摘要顶替（#dtInput 保持原值不动，
+    // 切回公历模式时 renderTime 会重新按 selectedDate 填回）
+    if (castMode === 'ganzhi') { renderGzTime(); return; }
     const pil = C.fourPillars(selectedDate);
     $('#timeInfo').innerHTML =
       '<div class="muted">公历 ' + fmtDT(selectedDate) + '（北京时间）' +
@@ -171,6 +174,149 @@
     if (modeLbl) modeLbl.textContent = (timeMode === 'live')
       ? '占问时刻（北京时间 · 现场摇卦 · 首摇锁定）：'
       : '占问时刻（北京时间 · 补录模式 · 可改）：';
+  }
+
+  /* ============================================================
+   * 干支排盘（castMode = 'ganzhi'）
+   *
+   * 与「公历时刻」并列的第二种起卦口径：四柱不再由节气表推算，改由用户
+   * 直接指定「年／月建／日辰／时辰」。古籍卦例只记月日干支、不记公历，
+   * 反推公历必然走样（月建由节气定，同一个「戌月」跨公历两个月），故引擎侧
+   * 走 C.pillarsFromGanzhi 直接构造四柱，不经过 fourPillars。
+   *
+   * 六爻默认全阳（乾为天 · 静卦），点爻画切阴阳、点右侧动静块切动爻——
+   * 与已验证的桌面版（六爻助手）交互一致。
+   * ============================================================ */
+  const GZ_NONE = -1;                    // 「不填」哨兵：年柱 / 时辰可空
+  let castMode = 'date';                 // 'date' | 'ganzhi'
+  const gzState = {
+    yearIdx: GZ_NONE,                    // 0..59
+    monthZhi: 2,                         // 0..11（默认寅月）
+    dayIdx: 0,                           // 0..59（默认甲子）
+    hourZhi: GZ_NONE,                    // 0..11
+    yang: [true, true, true, true, true, true],   // 初→上，默认全阳
+    moving: [false, false, false, false, false, false]
+  };
+
+  // 下拉选项：60 甲子 / 12 支（月建、时辰各一套文案）
+  function fillGzSelects() {
+    let jiazi = '<option value="' + GZ_NONE + '">（不填）</option>';
+    for (let i = 0; i < 60; i++) jiazi += '<option value="' + i + '">' + C.ganzhiOfIndex(i) + '</option>';
+    $('#gzYear').innerHTML = jiazi;
+    $('#gzDay').innerHTML = jiazi.replace('<option value="' + GZ_NONE + '">（不填）</option>', '');
+    let months = '';
+    for (let i = 0; i < 12; i++) months += '<option value="' + i + '">' + C.ZHI[i] + '月</option>';
+    $('#gzMonth').innerHTML = months;
+    let hours = '<option value="' + GZ_NONE + '">（不填）</option>';
+    for (let i = 0; i < 12; i++) hours += '<option value="' + i + '">' + C.ZHI[i] + '时</option>';
+    $('#gzHour').innerHTML = hours;
+  }
+
+  // 默认为「今天的月建与日辰」：打开即可用，要复现古籍再改
+  function gzAdoptToday() {
+    const p = C.fourPillars(beijingNow());
+    gzState.yearIdx = p.yearIdx;
+    gzState.monthZhi = p.monthZhi;
+    gzState.dayIdx = p.dayIdx;
+    gzState.hourZhi = p.hourZhi;
+  }
+
+  function gzSyncSelects() {
+    $('#gzYear').value = String(gzState.yearIdx);
+    $('#gzMonth').value = String(gzState.monthZhi);
+    $('#gzDay').value = String(gzState.dayIdx);
+    $('#gzHour').value = String(gzState.hourZhi);
+  }
+
+  // 当前选择 → 四柱（年/时为空则不传，由 pillarsFromGanzhi 决定月干五虎遁、时干五鼠遁）
+  function gzPillars() {
+    return C.pillarsFromGanzhi({
+      yearIdx: gzState.yearIdx === GZ_NONE ? null : gzState.yearIdx,
+      monthZhi: gzState.monthZhi,
+      dayIdx: gzState.dayIdx,
+      hourZhi: gzState.hourZhi === GZ_NONE ? null : gzState.hourZhi
+    });
+  }
+
+  // 六爻 → 爻值（1 少阳 / 0 少阴 / 9 老阳动 / 6 老阴动）
+  function gzVals() {
+    return gzState.yang.map(function (y, i) {
+      if (!gzState.moving[i]) return y ? 1 : 0;
+      return y ? 9 : 6;
+    });
+  }
+
+  // 干支文本：缺柱整段省略（不出现「戌月 丁亥日 年」这种空标签）
+  function gzPillarText(pil) {
+    let s = '';
+    if (pil.yearGZ) s += pil.yearGZ + '年 ';
+    s += pil.monthGZ + '月 ' + pil.dayGZ + '日';
+    if (pil.hourGZ) s += ' ' + pil.hourGZ + '时';
+    return s;
+  }
+
+  // 干支模式下的 #timeInfo：与公历模式同格式，但标注口径与旬空
+  function renderGzTime() {
+    let pil;
+    try { pil = gzPillars(); } catch (e) { $('#timeInfo').textContent = e.message; return; }
+    $('#timeInfo').innerHTML =
+      '<div class="muted">干支排盘（不经公历换算）· 六爻自行指定</div>' +
+      '<div class="gz">' + (pil.yearGZ ? pil.yearGZ + '年 · ' : '') + pil.monthGZ + '月 · <b>' + pil.dayGZ + '日</b>' +
+      (pil.hourGZ ? ' · ' + pil.hourGZ + '时' : '') + '</div>' +
+      '<div class="muted">月建 <b class="gz-hi">' + C.ZHI[pil.monthZhi] + '</b> ｜ 日辰 <b class="gz-hi">' + C.ZHI[pil.dayZhi] + '</b> ｜ 旬空 <b class="kong">' + pil.kongStr + '</b></div>';
+  }
+
+  // 六爻网格 + 候选卦名预览
+  function renderGz() {
+    const box = $('#gzYao');
+    if (!box) return;
+    let html = '';
+    // 古籍从下往上排：上爻先显示
+    for (let i = 5; i >= 0; i--) {
+      const yang = gzState.yang[i], dong = gzState.moving[i];
+      const bar = yang
+        ? '<i style="width:134px"></i>'
+        : '<i style="width:60px"></i><i style="width:60px"></i>';
+      html += '<div class="gz-row" data-i="' + i + '">' +
+        '<span class="pos">' + LINE_NAMES[i] + '</span>' +
+        '<div class="gz-bar' + (dong ? ' dong' : '') + '" data-act="yang" title="点一下切阴阳">' + bar + '</div>' +
+        '<div class="gz-dyn' + (dong ? ' on' : '') + '" data-act="dong" title="点一下切静/动">' +
+        (dong ? (yang ? '○动' : '×动') : '静') + '</div>' +
+        '</div>';
+    }
+    box.innerHTML = html;
+
+    // 底部预览：本卦 / 变卦 / 动爻数（直接用引擎算，避免预览与真排盘不一致）
+    const pre = $('#gzPreview');
+    if (!pre) return;
+    let pil;
+    try { pil = gzPillars(); } catch (e) { pre.textContent = e.message; return; }
+    const p = C.paipan(gzVals(), null, { pillars: pil });
+    const moves = [];
+    for (let i = 0; i < 6; i++) if (gzState.moving[i]) moves.push(LINE_NAMES[i]);
+    pre.innerHTML = '干支：<b>' + gzPillarText(pil) + '</b>　旬空 <b class="kong">' + pil.kongStr + '</b><br>' +
+      '本卦 <b>' + p.benName + '</b>（' + p.palace + '宫 · ' + p.palaceWx + '）' +
+      (p.hasBian ? ' 之 <b>' + p.bianName + '</b>（' + p.bianPalace + '宫）' : '（静卦 · 无变卦）') +
+      '<br><span class="muted">动爻 ' + moves.length + ' 个' + (moves.length ? '：' + moves.join('、') : '') + '</span>';
+  }
+
+  function setCastMode(mode) {
+    castMode = (mode === 'ganzhi') ? 'ganzhi' : 'date';
+    const isGz = castMode === 'ganzhi';
+    $('#gzCard').hidden = !isGz;
+    $('#castCard').hidden = isGz;
+    $('#dateRow').hidden = isGz;
+    $('#btnModeDate').className = 'btn ' + (isGz ? 'ghost' : 'primary');
+    $('#btnModeGz').className = 'btn ' + (isGz ? 'primary' : 'ghost');
+    // 切口径即作废当前盘：两种占时口径的盘不能混着看
+    records = []; pan = null; lastBullets = []; lastAnalysis = null;
+    resetTossState();
+    timeLocked = false; lockedDate = null;
+    if (!isGz && timeMode === 'live') selectedDate = beijingNow();
+    $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
+    const shh = $('#shareHint'); if (shh) shh.innerHTML = '';
+    if (isGz) { gzSyncSelects(); renderGz(); }
+    renderTime(); renderCoins(); renderTossHint(); renderStack();
   }
 
   // ---------- 起卦 ----------
@@ -366,8 +512,10 @@
   };
 
   // ---------- 排盘 ----------
-  function computePan() {
-    pan = C.paipan(records.map(function (r) { return r.val; }), selectedDate);
+  // 排完之后的统一出口：两种口径（公历 / 干支）只在「怎么得到 pan」上不同，
+  // 之后的渲染、分析、断卦状态复位必须完全同源，故拆出 applyPan。
+  function applyPan(nextPan) {
+    pan = nextPan;
     renderPan();
     resetAIState();
     $('#panCard').hidden = false;
@@ -376,6 +524,46 @@
     renderAnalysis();
     $('#panCard').scrollIntoView({ behavior: 'smooth' });
   }
+
+  function computePan() {
+    if (castMode === 'ganzhi') {
+      // 干支口径：四柱由用户指定，selectedDate 不参与（传 null 明确表态）
+      applyPan(C.paipan(gzVals(), null, { pillars: gzPillars() }));
+      return;
+    }
+    applyPan(C.paipan(records.map(function (r) { return r.val; }), selectedDate));
+  }
+
+  // ---------- 干支排盘交互 ----------
+  $('#btnModeDate').onclick = function () { setCastMode('date'); };
+  $('#btnModeGz').onclick = function () { setCastMode('ganzhi'); };
+  ['gzYear', 'gzMonth', 'gzDay', 'gzHour'].forEach(function (id) {
+    $('#' + id).onchange = function () {
+      const v = parseInt(this.value, 10);
+      if (id === 'gzYear') gzState.yearIdx = v;
+      else if (id === 'gzMonth') gzState.monthZhi = v;
+      else if (id === 'gzDay') gzState.dayIdx = v;
+      else gzState.hourZhi = v;
+      renderGzTime();
+      renderGz();
+    };
+  });
+  $('#gzYao').onclick = function (e) {
+    const row = e.target.closest ? e.target.closest('.gz-row') : null;
+    if (!row) return;
+    const bar = e.target.closest('.gz-bar'), dyn = e.target.closest('.gz-dyn');
+    if (!bar && !dyn) return;
+    const i = parseInt(row.getAttribute('data-i'), 10);
+    if (bar) gzState.yang[i] = !gzState.yang[i];
+    else gzState.moving[i] = !gzState.moving[i];
+    renderGz();
+  };
+  $('#btnGzReset').onclick = function () {
+    gzState.yang = [true, true, true, true, true, true];
+    gzState.moving = [false, false, false, false, false, false];
+    renderGz();
+  };
+  $('#btnGzPaipan').onclick = function () { computePan(); };
 
   function yaoSymHTML(yang, moving, old) {
     const base = yang ? '━━━━━━━' : '━━━　━━━';
@@ -800,7 +988,13 @@
   function buildPanText(forAI) {
     const pil = pan.pillars;
     let txt = '【六爻排盘】\n';
-    txt += '时间：' + fmtDT(selectedDate) + '（北京时间；' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时，旬空' + pil.kongStr + '）\n';
+    if (pil.ganzhiMode) {
+      // 干支口径：不能写「时间：2026-…（北京时间）」——四柱并非由公历推得，
+      // 写公历会让人以为两者对得上（实际常常对不上，这正是干支排盘的用途）
+      txt += '时间：' + gzPillarText(pil) + '（干支排盘，不经公历换算；旬空' + pil.kongStr + '）\n';
+    } else {
+      txt += '时间：' + fmtDT(selectedDate) + '（北京时间；' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时，旬空' + pil.kongStr + '）\n';
+    }
     if (pil.outOfTable) txt += '注：该年超出节气时刻表覆盖范围（1900–2100），月柱与年柱按典型交节日近似（±2 日以内），日柱与时柱为精确值。\n';
     const q = currentQuestion();
     if (q) txt += '所测：' + q + '\n';
@@ -938,6 +1132,12 @@
   }
   $('#btnShare').onclick = function () {
     const btn = $('#btnShare'), hint = $('#shareHint');
+    if (castMode === 'ganzhi') {
+      // 分享码的种子是「占时（北京墙上时间）＋六爻爻值」，干支盘没有可逆的公历占时，
+      // 存进去再还原必然得到另一张盘——宁可不给，也不给一张错的。
+      if (hint) hint.textContent = '干支排盘不记公历时刻，分享码只能存「占时＋爻值」，故干支模式暂不支持分享链接。可改用「复制排盘文本」转发。';
+      return;
+    }
     if (!pan || records.length !== 6) {
       if (hint) hint.textContent = '先完成起卦，再分享盘面。';
       return;
@@ -2528,15 +2728,22 @@
 
   function recordPayload() {
     const pil = pan.pillars;
+    // 干支排盘：库里没有公历可写，datetime 存干支原文并标注口径；
+    // tosses 由六爻网格即时换算（干支模式下 records 恒为空）。
+    const isGz = !!pil.ganzhiMode;
+    const tossArr = isGz
+      ? gzVals().map(function (v) { return { val: v, mode: 'ganzhi' }; })
+      : records;
     return {
       id: castId,
-      datetime: fmtDT(selectedDate),
-      pillars: pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时',
+      datetime: isGz ? ('干支 ' + gzPillarText(pil)) : fmtDT(selectedDate),
+      pillars: isGz ? gzPillarText(pil)
+        : (pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时'),
       // 卦例库统一存「标签｜原文」：原先固定类存的是整条选项文案
       // （「求财 · 买卖 · 财物 · 妻（男测婚姻）」），既长又丢用户原话。
       question: currentQuestion(),
       hex: pan.benName + (pan.hasBian ? ' 之 ' + pan.bianName : '（静卦）'),
-      tosses: records,
+      tosses: tossArr,
       panText: buildPanText(true),
       baseline: baselineSnapshot(),
       messages: aiStates   // { modelId: [{role, content}] }
@@ -3105,6 +3312,9 @@
     }
     timeMode = 'backfill';
     timeLocked = false;
+    // 分享码只存「占时＋爻值」，属公历口径；干支模式下打开链接须先切回公历，
+    // 否则 computePan 会走干支分支、忽略链接带来的爻值。
+    if (castMode === 'ganzhi') setCastMode('date');
     lockedDate = null;
     selectedDate = C.dateOfWall(d.wall);
     records = d.vals.map(function (v) {
@@ -3141,7 +3351,14 @@
 
   renderModelChips();
   loadModels();
+  // 供「AI 接口设置」保存后即时刷新模型芯片（本地接口层不重启页面就能生效）
+  window.__lyReloadModels = loadModels;
   renderLoginBtn();
+  // 干支排盘：先铺选项，再把默认值设成「今天的月建与日辰」（打开即可用）
+  fillGzSelects();
+  gzAdoptToday();
+  gzSyncSelects();
+  renderGz();
   renderTime();
   renderCoins();
   renderTossHint();

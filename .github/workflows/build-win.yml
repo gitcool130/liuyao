@@ -1,0 +1,109 @@
+name: Windows 便携版
+
+# 只手动触发 / 推送 main 时构建；产物只做临时 artifact（保留 1 天，不留 Release）。
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: win-portable-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 清掉历史产物：不在 GitHub 上留编译结果（本人要求）
+      - name: 清理历史 artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ids = gh api "repos/${{ github.repository }}/actions/artifacts" --jq '.artifacts[].id' 2>$null
+          foreach ($id in $ids) {
+            if ($id) { gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" 2>$null }
+          }
+          Write-Host "历史 artifact 已清理"
+
+      - name: 前端自检（干支排盘 + 语法）
+        shell: pwsh
+        run: |
+          node test-ganzhi.js
+          node --check public/app.js
+          node --check public/core/calendar.js
+          node --check public/core/paipan.js
+          node --check public/core/local-api.js
+
+      # 服务端提示词只存在于 functions/api/interpret.js，本地版要复用同一份，
+      # 构建时抽出来烧进 public/core/prompt.js（避免手工维护第二份）
+      - name: 生成本地提示词
+        shell: pwsh
+        run: node tools/gen-local-prompt.mjs
+
+      - name: 取 WebView2 SDK
+        shell: pwsh
+        run: |
+          $ver = "1.0.2903.40"
+          $url = "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/$ver"
+          Invoke-WebRequest -Uri $url -OutFile wv2.zip -UseBasicParsing
+          Expand-Archive wv2.zip -DestinationPath wv2 -Force
+          Get-ChildItem wv2\lib, wv2\runtimes -Recurse -Filter *.dll |
+            Where-Object { $_.Name -match 'WebView2' } |
+            Select-Object -First 12 | ForEach-Object { Write-Host $_.FullName }
+
+      - name: 打包页面 payload
+        shell: pwsh
+        run: |
+          if (Test-Path payload.zip) { Remove-Item payload.zip -Force }
+          # 7z 按「相对当前目录」存条目，必须在 public 内打包，否则会多出 public\ 前缀
+          Push-Location public
+          7z a -tzip -mx=9 ..\payload.zip * | Out-Null
+          Pop-Location
+          $first = (7z l -ba payload.zip | Select-Object -First 1)
+          Write-Host "首条目: $first"
+          if ($first -match '^(public|stage)[\\/]') { throw "payload 首层带了多余目录：$first" }
+          Write-Host ("payload: {0:N1} KB" -f ((Get-Item payload.zip).Length / 1KB))
+
+      - name: 编译单文件 exe
+        shell: pwsh
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (-not (Test-Path $csc)) { throw "找不到 csc：$csc" }
+          $wvRoot = "$PWD\wv2"
+          $core = "$wvRoot\lib\net45\Microsoft.Web.WebView2.Core.dll"
+          $winf = "$wvRoot\lib\net45\Microsoft.Web.WebView2.WinForms.dll"
+          $ldr  = "$wvRoot\runtimes\win-x64\native\WebView2Loader.dll"
+          foreach ($p in @($core, $winf, $ldr)) { if (-not (Test-Path $p)) { throw "缺少 $p" } }
+
+          $out = "莲斋六爻排盘.exe"
+          & $csc /nologo /target:winexe /platform:anycpu /optimize+ /langversion:7.3 `
+                 /win32manifest:windows-shell\app.manifest `
+                 /out:$out /utf8output `
+                 /resource:payload.zip,payload.zip `
+                 /resource:$core,Microsoft.Web.WebView2.Core.dll `
+                 /resource:$winf,Microsoft.Web.WebView2.WinForms.dll `
+                 /resource:$ldr,WebView2Loader.dll `
+                 /r:$core /r:$winf `
+                 /r:System.Windows.Forms.dll /r:System.Drawing.dll `
+                 /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
+                 windows-shell\Program.cs
+          if (-not (Test-Path $out)) { throw "编译失败：没有产物" }
+          Write-Host ("exe: {0:N1} MB" -f ((Get-Item $out).Length / 1MB))
+          Get-ChildItem *.exe | Select-Object Name, Length
+
+      - name: 上传（保留 1 天）
+        uses: actions/upload-artifact@v4
+        with:
+          name: liuyao-win-portable
+          path: 莲斋六爻排盘.exe
+          retention-days: 1

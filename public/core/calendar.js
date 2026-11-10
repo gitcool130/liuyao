@@ -191,6 +191,65 @@
     };
   }
 
+  /* ---------- 按干支直接起四柱（干支排盘用） ----------
+   * 场景：复现古籍卦例、复盘他人卦例时，手上只有「某月某日某时」的干支，
+   * 没有（或算不准）公历时刻。此时不能反推公历——月建由节气定，同一个
+   * 「戌月」跨公历两个月，反推必然走样。故直接以干支构造 pillars。
+   *
+   * 入参（下标制，与内部一致）：
+   *   dayIdx    必填 0..59  日辰（六爻以日辰为主，无日不成盘）
+   *   monthZhi  必填 0..11  月建地支（月建、日辰是旺衰的两根轴）
+   *   monthGan  可选 0..9   不给则按年干五虎遁推；年也未给时留空
+   *   yearIdx   可选 0..59  年干支；不给则年柱留空（显示时整段省略）
+   *   hourZhi   可选 0..11  时辰地支；不给则时柱留空
+   *   hourGan   可选 0..9   不给则按日干五鼠遁推
+   * 返回结构与 fourPillars 完全一致，下游（analyze / 渲染 / 文本）无需分支。
+   */
+  function pillarsFromGanzhi(g) {
+    g = g || {};
+    const dayIdx = g.dayIdx;
+    if (typeof dayIdx !== 'number' || !isFinite(dayIdx) || dayIdx < 0 || dayIdx >= 60) {
+      throw new Error('pillarsFromGanzhi: dayIdx 须为 0..59 的整数，实得 ' + JSON.stringify(g.dayIdx));
+    }
+    const monthZhi = g.monthZhi;
+    if (typeof monthZhi !== 'number' || !isFinite(monthZhi) || monthZhi < 0 || monthZhi >= 12) {
+      throw new Error('pillarsFromGanzhi: monthZhi 须为 0..11 的整数，实得 ' + JSON.stringify(g.monthZhi));
+    }
+    const dayGan = dayIdx % 10, dayZhi = dayIdx % 12;
+
+    // 旬空：与本文件 fourPillars 同一算式（旬首地支 +10 / +11）
+    const xunStart = dayIdx - (dayIdx % 10);
+    const startBranch = xunStart % 12;
+    const kong = [(startBranch + 10) % 12, (startBranch + 11) % 12];
+
+    const yearIdx = (typeof g.yearIdx === 'number' && g.yearIdx >= 0 && g.yearIdx < 60) ? g.yearIdx : null;
+
+    // 月干：给了就用，没给且知年干则五虎遁（正月建寅起）
+    let monthGan = (typeof g.monthGan === 'number' && g.monthGan >= 0 && g.monthGan < 10) ? g.monthGan : null;
+    if (monthGan == null && yearIdx != null) {
+      monthGan = (WUHU[GAN[yearIdx % 10]] + ((monthZhi - 2 + 12) % 12)) % 10;
+    }
+
+    const hourZhi = (typeof g.hourZhi === 'number' && g.hourZhi >= 0 && g.hourZhi < 12) ? g.hourZhi : null;
+    let hourGan = (typeof g.hourGan === 'number' && g.hourGan >= 0 && g.hourGan < 10) ? g.hourGan : null;
+    if (hourZhi != null && hourGan == null) hourGan = (WUSHU[GAN[dayGan]] + hourZhi) % 10;
+
+    return {
+      // 干支起盘时月/年柱不由节气推算，历法精度降级标记与「超出节气表」是两回事
+      outOfTable: false,
+      ganzhiMode: true,
+      yearIdx: yearIdx,
+      yearGZ: yearIdx != null ? ganzhiOfIndex(yearIdx) : '',
+      monthGZ: (monthGan != null) ? GAN[monthGan] + ZHI[monthZhi] : ZHI[monthZhi],
+      monthZhi: monthZhi, monthGan: monthGan,
+      dayIdx: dayIdx, dayGZ: ganzhiOfIndex(dayIdx), dayGan: dayGan, dayZhi: dayZhi,
+      hourGZ: hourZhi != null ? GAN[hourGan] + ZHI[hourZhi] : '',
+      hourZhi: hourZhi,
+      nightZi: false, nightZiMode: LY.nightZiMode,
+      kong: kong, kongStr: ZHI[kong[0]] + ZHI[kong[1]]
+    };
+  }
+
   // 六神起法：甲乙青龙，丙丁朱雀，戊勾陈，己腾蛇，庚辛白虎，壬癸玄武
   function beastStart(dayGanIdx) {
     const g = dayGanIdx % 10;
@@ -210,5 +269,6 @@
   LY.yearGanZhiIndex = yearGanZhiIndex;
   LY.ganzhiOfIndex = ganzhiOfIndex;
   LY.fourPillars = fourPillars;
+  LY.pillarsFromGanzhi = pillarsFromGanzhi;
   LY.beastStart = beastStart;
 })(typeof window !== 'undefined' ? window : globalThis);

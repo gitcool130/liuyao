@@ -285,6 +285,38 @@
     background: #fff; border: 1px solid var(--line); border-radius: 6px;
     padding: 10px; margin: 10px 0; line-height: 1.6;
   }
+  /* ---- 干支排盘（按年月建日辰时辰直接起卦，复现古籍卦例用） ---- */
+  .gz-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .gz-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-light); }
+  .gz-grid select {
+    font-family: inherit; font-size: 15px; padding: 7px 8px;
+    border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink);
+  }
+  .gz-yao { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px; }
+  .gz-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+  .gz-row .pos { width: 44px; font-size: 13px; color: var(--ink-light); letter-spacing: 1px; }
+  .gz-bar {
+    flex: 1; height: 34px; display: flex; align-items: center; justify-content: center;
+    gap: 14px; border: 1px solid transparent; border-radius: 6px;
+    background: #fbf7ee; cursor: pointer; user-select: none;
+  }
+  .gz-bar:hover { border-color: var(--line); }
+  .gz-bar i { display: block; height: 9px; background: var(--ink); border-radius: 1px; }
+  .gz-bar.dong i { background: var(--cinnabar); }
+  .gz-dyn {
+    width: 60px; height: 30px; display: flex; align-items: center; justify-content: center;
+    font-size: 13px; border: 1px solid var(--line); border-radius: 6px;
+    background: #fff; color: var(--ink-light); cursor: pointer; user-select: none;
+  }
+  .gz-dyn.on { border-color: var(--cinnabar); color: var(--cinnabar); background: #fbf1ef; font-weight: 600; }
+  .gz-preview {
+    margin-top: 12px; padding: 10px 12px; border: 1px dashed var(--line);
+    border-radius: 8px; background: #fbf8f1; font-size: 14px;
+  }
+  .gz-preview b { color: var(--cinnabar-dark); }
+  @media (max-width: 640px) {
+    .gz-grid { grid-template-columns: repeat(2, 1fr); }
+  }
   [hidden] { display: none !important; }
   @media (max-width: 640px) {
     .cast-grid { flex-direction: column; }
@@ -306,13 +338,39 @@
   </header>
 
   <!-- 时间 -->
-  <section class="card">
+  <section class="card" id="timeCard">
     <h2>占时</h2>
+    <div class="btn-row" style="justify-content:flex-start;margin-bottom:12px">
+      <button class="btn primary" id="btnModeDate" title="按公历时刻起卦：四柱由节气表自动推算">公历时刻</button>
+      <button class="btn ghost" id="btnModeGz" title="直接指定年月建日辰时辰，不经公历——复现古籍卦例、复盘他人卦例用">干支排盘</button>
+    </div>
     <div id="timeInfo"></div>
-    <div class="date-row">
+    <div class="date-row" id="dateRow">
       <label class="muted" for="dtInput" id="dtLabel">占问时刻（北京时间 · 现场摇卦 · 首摇锁定）：</label>
       <input type="datetime-local" id="dtInput" aria-label="占问时刻">
       <button class="btn ghost" id="btnTimeMode" title="现场摇卦：首摇瞬间锁定时刻，不可改；补录模式：为既往时刻补卦，时间可改">切换补录模式</button>
+    </div>
+  </section>
+
+  <!-- 干支排盘：直接以干支起卦，六爻自行指定 -->
+  <section class="card" id="gzCard" hidden>
+    <h2>干支排盘</h2>
+    <div class="muted" style="margin-bottom:10px">直接指定年月建日辰时辰，不经公历——用于复现古籍卦例、复盘他人卦例。年柱与时辰可留空。</div>
+    <div class="gz-grid">
+      <label>年柱<select class="gz-sel" id="gzYear" aria-label="年柱"></select></label>
+      <label>月建<select class="gz-sel" id="gzMonth" aria-label="月建"></select></label>
+      <label>日辰<select class="gz-sel" id="gzDay" aria-label="日辰"></select></label>
+      <label>时辰<select class="gz-sel" id="gzHour" aria-label="时辰"></select></label>
+    </div>
+    <div class="muted" id="gzPillarHint" style="margin-top:10px"></div>
+    <div class="gz-yao" id="gzYao"></div>
+    <div class="muted" style="margin-top:6px;font-size:12px;line-height:1.7">
+      点爻画切换阴阳；点右侧「静／动」切换动静（阳动○／阴动×）。初爻在最下，与古籍从下往上排一致。
+    </div>
+    <div class="gz-preview" id="gzPreview"></div>
+    <div class="btn-row" style="margin-top:12px">
+      <button class="btn primary" id="btnGzPaipan">开始排盘</button>
+      <button class="btn ghost" id="btnGzReset">六爻复位（乾为天 · 静卦）</button>
     </div>
   </section>
 
@@ -444,8 +502,11 @@
 <script src="core/fact-audit.js?v=20261109a"></script>
 <script src="core/coverage-audit.js?v=20261109a"></script>
 <script src="core/yingqi-window.js?v=20261109a"></script>
-<script src="core/share.js?v=20261109a"></script>
-<script src="app.js?v=20261109a"></script>
-<script src="bgm.js?v=20261109a"></script>
+<script src="core/share.js?v=20261110a"></script>
+<!-- 离线/桌面版：提示词（构建时从 functions/api/interpret.js 抽取）+ 本地接口层 -->
+<script src="core/prompt.js?v=20261110a"></script>
+<script src="core/local-api.js?v=20261110a"></script>
+<script src="app.js?v=20261110a"></script>
+<script src="bgm.js?v=20261110a"></script>
 </body>
 </html>

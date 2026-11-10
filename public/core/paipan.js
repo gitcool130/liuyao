@@ -92,7 +92,11 @@
   // 毫不相干的卦却不报错；长度不足则抛 `Cannot read properties of undefined`。静默错排比
   // 报错危险得多（第十七轮就曾以 [6,7,7,7,7,7] 想排天风姤、实得坤为地），故此处显式拒绝。
   const TOSS_VALUES = [0, 1, 6, 9];
-  function paipan(tossVals, dt) {
+  /* opt（第三参，可选）：{ pillars } 传入显式四柱（干支排盘），此时 dt 只作
+   * 记录用的公历时刻（可为 null），四柱一律以 pillars 为准，不读 node 系统的历法。
+   * 不传则行为与旧版完全一致（按 dt 推四柱），既有调用方与回归测试不受影响。 */
+  function paipan(tossVals, dt, opt) {
+    const overridePil = (opt && opt.pillars) ? opt.pillars : null;
     if (!Array.isArray(tossVals) || tossVals.length !== 6) {
       throw new Error('paipan: tossVals 须为长度 6 的数组（自下而上），实得 ' +
         (Array.isArray(tossVals) ? '长度 ' + tossVals.length : Object.prototype.toString.call(tossVals)));
@@ -105,10 +109,11 @@
       }
     }
     // duck-typing 而非 instanceof：兼容跨 realm（vm / iframe）传入的 Date
-    if (!dt || typeof dt.getTime !== 'function' || isNaN(dt.getTime())) {
+    // 显式四柱模式下 dt 不参与排盘，允许为 null
+    if (!overridePil && (!dt || typeof dt.getTime !== 'function' || isNaN(dt.getTime()))) {
       throw new Error('paipan: dt 须为有效 Date，实得 ' + Object.prototype.toString.call(dt));
     }
-    const pil = LY.fourPillars(dt);
+    const pil = overridePil || LY.fourPillars(dt);
     const ben = tossVals.map(function (v) { return (v === 1 || v === 9) ? 1 : 0; });
     const moving = tossVals.map(function (v) { return (v === 9 || v === 6); });
     const bian = ben.map(function (b, i) { return moving[i] ? 1 - b : b; });
@@ -181,7 +186,7 @@
       palace: benInfo.palace, palaceWx: palaceWx,
       bianPalace: hasBian ? bianInfo.palace : null,
       shi: benInfo.shi, ying: benInfo.ying,
-      lines: lines, pillars: pil, date: dt
+      lines: lines, pillars: pil, date: overridePil ? (dt || null) : dt
     };
   }
 
