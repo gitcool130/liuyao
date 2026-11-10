@@ -51,6 +51,23 @@ jobs:
         shell: pwsh
         run: node tools/gen-local-prompt.mjs
 
+      - name: 安装测试依赖
+        shell: pwsh
+        run: npm ci --no-audit --no-fund
+
+      - name: 安装无头浏览器
+        shell: pwsh
+        run: npx playwright-core install chromium
+
+      # 干支引擎的逻辑由 node 单测覆盖；「四个下拉铺开没有」「点爻画真的切了阴阳」
+      # 「装入排盘真的把盘送进结果页」只有真浏览器能验
+      - name: UI 冒烟（干支排盘 / 古籍库 / 本地接口）
+        shell: pwsh
+        run: |
+          Start-Process -FilePath python -ArgumentList "-m","http.server","8931","--directory","public" -NoNewWindow
+          Start-Sleep -Seconds 3
+          node test-ui-ganzhi.mjs http://127.0.0.1:8931
+
       - name: 取 WebView2 SDK
         shell: pwsh
         run: |
