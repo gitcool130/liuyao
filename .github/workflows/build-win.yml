@@ -64,8 +64,22 @@ jobs:
       - name: UI 冒烟（干支排盘 / 古籍库 / 本地接口）
         shell: pwsh
         run: |
-          Start-Process -FilePath python -ArgumentList "-m","http.server","8931","--directory","public" -NoNewWindow
-          Start-Sleep -Seconds 3
+          # 起静态服务后必须**轮询就绪**再跑测试：只 sleep 3 秒会偶发
+          # ERR_CONNECTION_REFUSED（实测踩过一次，整条流水线白跑）
+          $srv = Start-Process -FilePath python `
+                   -ArgumentList "-m","http.server","8931","--directory","public" `
+                   -PassThru -NoNewWindow
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Milliseconds 500
+            try {
+              $r = Invoke-WebRequest -Uri "http://127.0.0.1:8931/index.html" -UseBasicParsing -TimeoutSec 2
+              if ($r.StatusCode -eq 200) { $ready = $true; break }
+            } catch { }
+            if (-not (Get-Process -Id $srv.Id -ErrorAction SilentlyContinue)) { break }
+          }
+          if (-not $ready) { throw "静态服务未就绪（127.0.0.1:8931），UI 冒烟无法进行" }
+          Write-Host "静态服务就绪"
           node test-ui-ganzhi.js http://127.0.0.1:8931
 
       - name: 取 WebView2 SDK
