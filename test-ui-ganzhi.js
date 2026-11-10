@@ -215,32 +215,45 @@ async function launchBrowser() {
 
   /* ---------- E3. 卦例库双击 → 还原成卦象 ---------- */
   say('E3. 卦例还原');
+  // 自己造一条记录再还原，不依赖前面某步是否入过库（步骤间耦合过，踩过一次）
+  const madeId = await page.evaluate(async function () {
+    const payload = {
+      id: null,
+      datetime: '干支 亥月 戊子日',
+      pillars: '亥月 戊子日',
+      question: '冒烟卦例',
+      hex: '乾为天 之 天风姤',
+      tosses: [{ val: 9 }, { val: 1 }, { val: 1 }, { val: 1 }, { val: 1 }, { val: 1 }],
+      panText: '',
+      messages: {}
+    };
+    const r = await fetch('/api/records', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    return d && d.id;
+  });
+  ok('造了一条卦例', !!madeId, String(madeId));
+
   await page.$eval('#toolCard .tb-btn[data-k="lib"]', el => el.click());
   await page.waitForTimeout(400);
   await page.$eval('#btnLib', el => el.click());
-  // 列表是异步拉的：等到真有条目或超时，别用固定 sleep
   await page.waitForSelector('#libList .lib-item[data-id]', { timeout: 6000 }).catch(function () { });
-  await page.waitForTimeout(300);
   const libCount = await page.$$eval('#libList .lib-item[data-id]', e => e.length);
-  const libDiag = await page.evaluate(function () {
-    let raw = '';
-    try { raw = localStorage.getItem('ly_records_v1') || ''; } catch (e) { }
-    const list = document.getElementById('libList');
-    return { store: raw.length, n: raw ? (JSON.parse(raw) || []).length : 0,
-              text: list ? list.innerText.slice(0, 80) : '(no list)' };
-  });
-  ok('卦例库列出了记录', libCount > 0, 'count=' + libCount + ' ' + JSON.stringify(libDiag));
+  ok('卦例库列出了记录', libCount > 0, 'count=' + libCount);
+
   if (libCount > 0) {
-    // 关掉结果卡，确认是「还原」把它重新打开
+    // 先关掉结果卡，确认是「还原」把它重新打开
     await page.evaluate(function () {
       document.getElementById('panCard').hidden = true;
       document.getElementById('classicText').textContent = '';
     });
     await page.dblclick('#libList .lib-item[data-id]');
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1300);
     eq('双击后结果卡重新出现', await page.$eval('#panCard', e => e.hidden), false);
     const rsText = await page.$eval('#classicText', e => e.textContent);
     ok('还原出的盘面有干支', /干支：/.test(rsText), (rsText.split('\n')[0] || '').slice(0, 40));
+    ok('还原出的是那条卦（乾为天 之 天风姤）', /乾为天/.test(rsText) && /天风姤/.test(rsText), rsText.split('\n')[1] || '');
   }
 
   // 起卦区右侧的爻位堆叠：不能被字距/折行拆坏（原 letter-spacing:4px 会把 ━━━━━ 变虚线）
