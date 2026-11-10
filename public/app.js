@@ -461,7 +461,6 @@
   $('#btnClassic').onclick = function () {
     if (!pan) return;
     showClassic = !showClassic;
-    this.className = showClassic ? 'btn' : 'btn ghost';
     renderClassic();
   };
   $('#btnClassicCopy').onclick = function () {
@@ -688,17 +687,22 @@
     return out.join('\n');
   }
 
+  /* 两种版式二选一：古籍版式（默认）↔ 卦象表格。
+   * 按钮是「切到另一种」的语义，所以文案随当前状态变。 */
   function renderClassic() {
     const box = $('#classicBox');
     const pre = $('#classicText');
-    if (!box || !pre) return;
+    const body = $('#panBody');
     const tgl = $('#btnClassic');
-    if (tgl) tgl.className = showClassic ? 'btn' : 'btn ghost';
+    if (!box || !pre) return;
+    if (tgl) {
+      tgl.className = showClassic ? 'btn' : 'btn ghost';
+      tgl.textContent = showClassic ? '卦象表格' : '古籍版式';
+    }
+    if (body) body.hidden = showClassic;      // 古籍版式展开时，表格收起
     if (!pan || !showClassic) { box.hidden = true; return; }
     pre.textContent = panClassicText(pan);
     box.hidden = false;
-    const btn = $('#btnClassic');
-    if (btn) btn.className = 'btn';
   }
 
   function renderPan() {

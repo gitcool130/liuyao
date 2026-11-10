@@ -126,22 +126,45 @@ async function launchBrowser() {
   await page.click('#btnGzPaipan');
   await page.waitForSelector('#panCard:not([hidden])', { timeout: 8000 });
   eq('结果页可见', await page.$eval('#panCard', e => e.hidden), false);
-  const panText = await page.evaluate(() => {
-    const btn = document.querySelector('#btnCopy');
-    return btn ? true : false;
-  });
-  ok('复制按钮在（说明盘已渲染）', panText);
-  const panHead = await page.$eval('#panCard', e => e.innerText);
-  ok('结果页含干支行', /干支|月建|日辰/.test(panHead), panHead.slice(0, 80).replace(/\n/g, ' '));
-  ok('结果页含旬空', panHead.indexOf('旬空') >= 0);
-  await page.waitForTimeout(400);
-  eq('排盘后断卦面板有内容', await page.$eval('.tb-pane[data-k="ai"]', e => e.getAttribute('data-empty')), '0');
+  ok('复制按钮在（说明盘已渲染）', await page.$('#btnCopy') !== null);
+
+  /* 默认版式：古籍版式展开、卦象表格收起、古籍版式排在表之前 */
+  eq('古籍版式默认展开', await page.$eval('#classicBox', e => e.hidden), false);
+  eq('卦象表格默认收起', await page.$eval('#panBody', e => e.hidden), true);
+  eq('开关文案为「卦象表格」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '卦象表格');
+  ok('古籍版式排在卦象表之前', await page.evaluate(function () {
+    const a = document.getElementById('classicBox');
+    const b = document.getElementById('panBody');
+    return !!(a && b && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+  }));
+
+  const classic = await page.$eval('#classicText', e => e.textContent);
+  const cLines = classic.split('\n');
+  ok('古籍版式首行为干支', /^干支：/.test(cLines[0] || ''), cLines[0]);
+  ok('古籍版式第二行为宫名卦名', /宫：/.test(cLines[1] || ''), cLines[1]);
+  ok('古籍版式第三行为四列表头', /六神　伏　　神/.test(cLines[2] || ''), cLines[2]);
+  ok('古籍版式六爻齐全', cLines.length >= 9, 'lines=' + cLines.length);
+  ok('古籍版式标出世应', /世|应/.test(classic));
+  ok('古籍版式含旬空', /旬空/.test(classic));
+
+  /* 切到卦象表格 */
+  await page.click('#btnClassic');
+  await page.waitForTimeout(350);
+  eq('表格显示出来', await page.$eval('#panBody', e => e.hidden), false);
+  eq('古籍版式收起', await page.$eval('#classicBox', e => e.hidden), true);
+  eq('开关文案变「古籍版式」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '古籍版式');
+
+  const gzMeta = await page.$eval('#panBody .gz-meta', e => e.innerText).catch(() => '');
+  const gzTitle = await page.$eval('#panBody .gz-title', e => e.innerText).catch(() => '');
+  ok('干支行以「干支：」开头', /^干支：/.test(gzMeta.trim()), gzMeta);
+  ok('干支行含旬空', gzMeta.indexOf('旬空') >= 0);
+  ok('宫名行形如「乾宫：乾为天」', /宫：/.test(gzTitle), gzTitle);
 
   // 变爻列：起出变卦后六爻全给，静爻用灰色（bian-static）与动爻（bian-move）区分
   const bianCells = await page.$$eval('#panBody table.pan tbody tr', rows => rows.map(function (r) {
     const c = r.querySelectorAll('td')[4];
     const sp = c.querySelector('span');
-    return { text: c.innerText.trim(), cls: sp ? sp.className : '' };
+    return { text: c.textContent.trim(), cls: sp ? sp.className : '' };
   }));
   eq('变爻列六行都有内容', bianCells.filter(function (x) { return !!x.text; }).length, 6);
   ok('存在灰色静爻变爻', bianCells.some(function (x) { return x.cls === 'bian-static'; }),
@@ -154,34 +177,14 @@ async function launchBrowser() {
   });
   ok('旬空/月破干支标红', redMarks.length > 0, JSON.stringify(redMarks));
 
-  // 结果页主体：咱们那套——干支一行 + 宫名卦名(卦型) 一行 + 六爻表
-  const gzMeta = await page.$eval('#panBody .gz-meta', e => e.innerText).catch(() => '');
-  const gzTitle = await page.$eval('#panBody .gz-title', e => e.innerText).catch(() => '');
-  ok('干支行以「干支：」开头', /^干支：/.test(gzMeta.trim()), gzMeta);
-  ok('干支行含旬空', gzMeta.indexOf('旬空') >= 0);
-  ok('宫名行形如「乾宫：乾为天」', /宫：/.test(gzTitle), gzTitle);
+  await page.waitForTimeout(300);
+  eq('排盘后断卦面板有内容', await page.$eval('.tb-pane[data-k="ai"]', e => e.getAttribute('data-empty')), '0');
 
-  // 古籍版式默认展开，且排在「卦象」表之前（对调后的顺序）
-  eq('古籍版式默认展开', await page.$eval('#classicBox', e => e.hidden), false);
-  ok('古籍版式排在卦象表之前', await page.evaluate(function () {
-    const a = document.getElementById('classicBox');
-    const b = document.getElementById('panBody');
-    return !!(a && b && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
-  }));
-  const classic = await page.$eval('#classicText', e => e.textContent);
-  const cLines = classic.split('\n');
-  ok('古籍版式首行为干支', /^干支：/.test(cLines[0] || ''), cLines[0]);
-  ok('古籍版式第二行为宫名卦名', /宫：/.test(cLines[1] || ''), cLines[1]);
-  ok('古籍版式第三行为四列表头', /六神　伏　　神/.test(cLines[2] || ''), cLines[2]);
-  ok('古籍版式六爻齐全', cLines.length >= 9, 'lines=' + cLines.length);
-  ok('古籍版式标出世应', /世|应/.test(classic));
-
+  /* 再切回古籍版式 */
   await page.click('#btnClassic');
-  await page.waitForTimeout(250);
-  eq('收起后只剩表格', await page.$eval('#classicBox', e => e.hidden), true);
-  await page.click('#btnClassic');
-  await page.waitForTimeout(250);
-  eq('可再展开', await page.$eval('#classicBox', e => e.hidden), false);
+  await page.waitForTimeout(300);
+  eq('可切回古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
+  eq('切回后表格再收起到', await page.$eval('#panBody', e => e.hidden), true);
 
   /* ---------- D2. 存入卦例库（按钮已挪到结果页） ---------- */
   say('D2. 存入卦例库');

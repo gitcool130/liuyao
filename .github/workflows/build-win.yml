@@ -130,6 +130,7 @@ jobs:
             '/nologo', '/target:winexe', '/platform:anycpu', '/optimize+', '/langversion:default',
             '/utf8output',
             '/win32manifest:windows-shell\app.manifest',
+            '/win32icon:windows-shell\app.ico',
             "/out:$out",
             '/resource:payload.zip,payload.zip',
             "/resource:$core,Microsoft.Web.WebView2.Core.dll",
