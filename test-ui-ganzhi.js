@@ -154,6 +154,23 @@ async function launchBrowser() {
   });
   ok('旬空/月破干支标红', redMarks.length > 0, JSON.stringify(redMarks));
 
+  // 古籍版式：干支口径默认展开，四列纯文本，可切回表格
+  eq('干支口径默认展示古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
+  const classic = await page.$eval('#classicText', e => e.textContent);
+  const cLines = classic.split('\n');
+  ok('古籍版式首行为干支', /^干支：/.test(cLines[0] || ''), cLines[0]);
+  ok('古籍版式第二行为宫名卦名', /宫：/.test(cLines[1] || ''), cLines[1]);
+  ok('古籍版式第三行为四列表头', /六神　伏　　神/.test(cLines[2] || ''), cLines[2]);
+  ok('古籍版式六爻齐全', cLines.length >= 9, 'lines=' + cLines.length);
+  ok('古籍版式标出世应', /世|应/.test(classic));
+
+  await page.click('#btnClassic');
+  await page.waitForTimeout(250);
+  eq('可切回表格', await page.$eval('#classicBox', e => e.hidden), true);
+  await page.click('#btnClassic');
+  await page.waitForTimeout(250);
+  eq('可再切回古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
+
   /* ---------- E. 古籍卦例库 → 装入排盘 ---------- */
   say('E. 古籍卦例库');
   ok('古籍卡片已挂载', await page.$('#gujiCard') !== null);

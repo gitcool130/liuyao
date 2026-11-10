@@ -454,6 +454,27 @@
     renderCoins(); renderTossHint(); renderStack();
   };
 
+  // ---------- 古籍版式开关 ----------
+  $('#btnClassic').onclick = function () {
+    if (!pan) return;
+    showClassic = !showClassic;
+    this.className = showClassic ? 'btn' : 'btn ghost';
+    renderClassic();
+  };
+  $('#btnClassicCopy').onclick = function () {
+    if (!pan) return;
+    const txt = panClassicText(pan);
+    const btn = this;
+    const done = function () {
+      const oldTxt = btn.textContent;
+      btn.textContent = '已复制 ✓';
+      setTimeout(function () { btn.textContent = oldTxt; }, 1400);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(done).catch(function () { fallbackCopy(txt); done(); });
+    } else { fallbackCopy(txt); done(); }
+  };
+
   $('#btnReset').onclick = function () {
     // 中-9：重新起卦 = 放弃本卦。resetAIState 中断在途请求并递增代数，
     // 与 :1119-1122 注释宣称的行为对齐（旧版两按钮只隐藏卡片，不断流）；
@@ -516,6 +537,9 @@
   // 之后的渲染、分析、断卦状态复位必须完全同源，故拆出 applyPan。
   function applyPan(nextPan) {
     pan = nextPan;
+    // 干支排盘的口子就是为「对勘古籍卦例」开的，默认直接给古籍版式；
+    // 公历口径维持原样（表格），需要时自己点开
+    showClassic = !!(nextPan.pillars && nextPan.pillars.ganzhiMode);
     renderPan();
     resetAIState();
     $('#panCard').hidden = false;
@@ -594,6 +618,81 @@
     return '<span class="yao-sym' + (moving ? ' moving' : '') + '">' + base + mark + '</span>';
   }
 
+  /* ---------- 古籍版式（纯文本四列） ----------
+   * 版式与六爻助手桌面版一致，古籍卦例对勘时用这个最省事：
+   *   干支： 戌月  丁亥日　(旬空：午未)  占问：黄金策
+   *   乾宫：乾为天(六冲)
+   *   六神　伏　　神　　【本　　卦】　　　　【变　　　卦】
+   *   青龙　　　　　　　父母壬戌土━━━　世
+   */
+  let showClassic = false;
+
+  function hexTag(p, name) {
+    const t = [];
+    if (p.isLiuChong) t.push('六冲');
+    if (p.isLiuHe) t.push('六合');
+    if (p.soul === '游魂' || p.soul === '归魂') t.push(p.soul);
+    return t.length ? '(' + t.join('·') + ')' : '';
+  }
+
+  function panClassicText(p) {
+    const pil = p.pillars;
+    const pad = function (str, w) {
+      str = str || '';
+      const n = Array.from(str).length;
+      return n >= w ? str : str + new Array(w - n + 1).join('　');
+    };
+    const out = [];
+
+    // 1) 干支 + 旬空 + 占问
+    let head = '干支：';
+    if (pil.yearGZ) head += ' ' + pil.yearGZ + '年';
+    head += ' ' + pil.monthGZ + '月  ' + pil.dayGZ + '日';
+    if (pil.hourGZ) head += '  ' + pil.hourGZ + '时';
+    head += '　(旬空：' + pil.kongStr + ')';
+    const q = (typeof currentQuestion === 'function') ? currentQuestion() : '';
+    if (q) head += '　占问：' + q;
+    out.push(head);
+
+    // 2) 宫名 + 卦名（含卦型），有变卦则并列
+    let gong = p.palace + '宫：' + p.benName + hexTag(p);
+    if (p.hasBian) gong += '　之　' + p.bianPalace + '宫：' + p.bianName + hexTag(p);
+    out.push(gong);
+
+    // 3) 表头
+    out.push('六神　伏　　神　　【本　　卦】' + (p.hasBian ? '　　　　【变　　　卦】' : ''));
+
+    // 4) 六爻（上 → 初）
+    for (let i = 5; i >= 0; i--) {
+      const L = p.lines[i];
+      const sym = L.yang ? '━━━' : '━　━';
+      const fu = L.fu ? (L.fu.lq + L.fu.zhi) : '';
+      const mark = L.shi ? '世' : (L.ying ? '应' : '　');
+      const dong = L.moving ? (L.yang ? '○' : '×') : '　';
+      let line = pad(L.beast === '勾陈' ? '勾陈' : L.beast, 3) + '　' +
+        pad(fu, 6) + '　' +
+        L.lq + L.gan + L.zhi + L.wx + sym + '　' + mark + dong;
+      if (p.hasBian && L.bian) {
+        // 变爻阴阳与本爻相反；静爻的变爻照样给（古籍右半也印）
+        const bSym = L.yang ? '━　━' : '━━━';
+        line += '　　' + L.bian.lq + L.bian.gan + L.bian.zhi + L.bian.wx + bSym;
+      }
+      out.push(line.replace(/\s+$/, ''));
+    }
+    return out.join('\n');
+  }
+
+  function renderClassic() {
+    const box = $('#classicBox');
+    const pre = $('#classicText');
+    if (!box || !pre) return;
+    if (!pan || !showClassic) { box.hidden = true; return; }
+    pre.textContent = panClassicText(pan);
+    box.hidden = false;
+    const btn = $('#btnClassic');
+    if (btn) btn.className = 'btn';
+  }
+
   function renderPan() {
     const pil = pan.pillars;
     const title = '<b>' + pan.benName + '</b>（' + pan.palace + '宫 · ' + pan.palaceWx + '）' +
@@ -632,6 +731,7 @@
       '<div class="meta-line">' + metaLine + ' ｜ 旬空 <span class="kong">' + pil.kongStr + '</span></div>' +
       '<table class="pan"><thead><tr><th>六神</th><th>伏神</th><th>本卦</th><th>世应</th><th>变爻</th></tr></thead><tbody>' + rows + '</tbody></table>';
     renderWxBlock();
+    renderClassic();
   }
 
   // 旺相休囚死：五行之气在当月令下的流转（自旺至死）。

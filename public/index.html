@@ -151,6 +151,8 @@
   .fu-cell { color: var(--ink-light); font-size: 13px; }
   .kong { color: var(--cinnabar); }     /* 旬空标记 */
   .gz-hi { color: var(--cinnabar); }    /* 月建/日辰干支高亮（原名 .kong，与旬空语义冲突，已拆分） */
+  .classic-bar { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; }
+  .classic-bar .muted { flex: 1; font-size: 12px; }
   .bian-cell { color: #4a6741; }
   /* 变爻列：动爻照常显示，静爻的「同位变爻」用灰色压下去，一眼能分出动静 */
   .bian-static { color: #b3ada4; }
@@ -411,8 +413,17 @@
   <section class="card" id="panCard" hidden>
     <h2>卦象</h2>
     <div id="panBody"></div>
+    <!-- 古籍版式：六神/伏神/本卦/变卦 四列纯文本，可选中、可整段复制 -->
+    <div id="classicBox" hidden>
+      <div class="classic-bar">
+        <span class="muted">古籍版式 · 可直接选中复制</span>
+        <button class="btn ghost" id="btnClassicCopy" style="padding:2px 10px;font-size:12px">复制</button>
+      </div>
+      <pre id="classicText" class="pan-text"></pre>
+    </div>
     <div id="wxBlock"></div>
     <div class="btn-row">
+      <button class="btn ghost" id="btnClassic">古籍版式</button>
       <button class="btn" id="btnCopy">复制排盘文本</button>
       <button class="btn ghost" id="btnShare">复制分享链接</button>
       <button class="btn ghost" id="btnReset">重新起卦</button>
