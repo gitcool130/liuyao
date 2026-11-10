@@ -74,7 +74,7 @@ async function launchBrowser() {
   await page.waitForTimeout(300);
   eq('排盘前断卦面板给提示', await page.$eval('.tb-pane[data-k="ai"]', e => e.getAttribute('data-empty')), '1');
 
-  /* ---------- B. 干支排盘界面 ---------- */
+  /* ---------- B. 干支排盘界面（本卦/变卦/占问 + 年月建日辰时辰） ---------- */
   say('B. 干支排盘界面');
   await page.click('#btnModeGz');
   await page.waitForTimeout(300);
@@ -83,38 +83,34 @@ async function launchBrowser() {
   eq('公历时间行隐藏', await page.$eval('#dateRow', e => e.hidden), true);
 
   const optCounts = await page.evaluate(() => ({
-    year: document.querySelectorAll('#gzYear option').length,     // 61（含「不填」）
-    month: document.querySelectorAll('#gzMonth option').length,   // 12
-    day: document.querySelectorAll('#gzDay option').length,       // 60
-    hour: document.querySelectorAll('#gzHour option').length      // 13（含「不填」）
+    ben: document.querySelectorAll('#gzBen option').length,        // 64 卦
+    bian: document.querySelectorAll('#gzBian option').length,      // 65（含「无」）
+    year: document.querySelectorAll('#gzYear option').length,      // 61（含「无」）
+    month: document.querySelectorAll('#gzMonth option').length,    // 12
+    day: document.querySelectorAll('#gzDay option').length,        // 60
+    hour: document.querySelectorAll('#gzHour option').length       // 13（含「无」）
   }));
-  eq('下拉选项数（年/月/日/时）', optCounts, { year: 61, month: 12, day: 60, hour: 13 });
+  eq('下拉选项数', optCounts, { ben: 64, bian: 65, year: 61, month: 12, day: 60, hour: 13 });
+  eq('本卦默认乾为天', await page.$eval('#gzBen', e => e.value), '乾为天');
+  eq('变卦默认为空（静卦）', await page.$eval('#gzBian', e => e.value), '');
+  ok('有占问输入框', await page.$('#gzQuestion') !== null);
+  eq('干支输入区不再有逐爻网格', await page.$$('#gzYao'), []);
 
-  eq('六爻行数', (await page.$$('#gzYao .gz-row')).length, 6);
-  eq('默认全为静', await page.$$eval('#gzYao .gz-dyn', e => e.map(x => x.textContent.trim())),
-    ['静', '静', '静', '静', '静', '静']);
+  let tip = await page.$eval('#timeInfo', e => e.innerText);
+  ok('摘要标出本卦与静卦', tip.indexOf('乾为天') >= 0 && tip.indexOf('静卦') >= 0, tip.replace(/\n/g, ' | '));
+  ok('摘要给出旬空', tip.indexOf('旬空') >= 0);
 
-  let prev = await page.$eval('#gzPreview', e => e.innerText);
-  ok('默认预览为乾为天·静卦', prev.indexOf('乾为天') >= 0 && prev.indexOf('静卦') >= 0, prev.replace(/\n/g, ' | '));
-  ok('预览给出旬空', prev.indexOf('旬空') >= 0);
-
-  /* ---------- C. 点爻画切阴阳、点动静切动爻 ---------- */
-  say('C. 爻画与动静交互');
-  // DOM 顺序是上爻→初爻，最后一行才是初爻
-  const rows = await page.$$('#gzYao .gz-row');
-  const lastRow = rows[rows.length - 1];
-  await lastRow.$eval('.gz-dyn', el => el.click());      // 初爻 静 → 动
-  await page.waitForTimeout(200);
-  prev = await page.$eval('#gzPreview', e => e.innerText);
-  ok('初爻动 → 变为天风姤', prev.indexOf('天风姤') >= 0, prev.replace(/\n/g, ' | '));
-  eq('初爻状态显示 ○动', (await page.$$eval('#gzYao .gz-dyn', e => e.map(x => x.textContent.trim())))[5], '○动');
-  eq('动爻数统计', (function (t) { const m = t.match(/动爻 (\d+) 个/); return m ? +m[1] : -1; })(prev), 1);
-
-  // 再点爻画把初爻改阴 → 卦应变成 天风姤 之 天水讼? 只断言「不再是乾为天」
-  await lastRow.$eval('.gz-bar', el => el.click());
-  await page.waitForTimeout(200);
-  const after = await page.$eval('#gzPreview', e => e.innerText);
-  ok('点爻画后本卦变化', after.indexOf('（六冲）') >= 0 || after.indexOf('本卦') >= 0);
+  /* ---------- C. 选变卦 → 由两卦位差自动定动爻 ---------- */
+  say('C. 本卦/变卦选卦');
+  await page.selectOption('#gzBian', '天风姤');
+  await page.waitForTimeout(300);
+  tip = await page.$eval('#timeInfo', e => e.innerText);
+  ok('摘要变成「乾为天 之 天风姤」', tip.indexOf('乾为天 之 天风姤') >= 0, tip.replace(/\n/g, ' | '));
+  // 选回（无）应回到静卦
+  await page.selectOption('#gzBian', '');
+  await page.waitForTimeout(250);
+  tip = await page.$eval('#timeInfo', e => e.innerText);
+  ok('清空变卦 → 回到静卦', tip.indexOf('静卦') >= 0, tip.replace(/\n/g, ' | '));
 
   /* ---------- D. 开始排盘 → 结果页 ---------- */
   say('D. 开始排盘');
@@ -122,6 +118,8 @@ async function launchBrowser() {
   await page.selectOption('#gzYear', '42');
   await page.selectOption('#gzMonth', '11');
   await page.selectOption('#gzDay', '24');
+  // 选一张变卦，让盘里真有动爻（变爻列与红标才有东西可断言）
+  await page.selectOption('#gzBian', '天风姤');
   await page.waitForTimeout(400);
   await page.click('#btnGzPaipan');
   await page.waitForSelector('#panCard:not([hidden])', { timeout: 8000 });

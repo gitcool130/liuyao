@@ -297,6 +297,22 @@
     background: #fff; border: 1px solid var(--line); border-radius: 6px;
     padding: 10px; margin: 10px 0; line-height: 1.6;
   }
+  /* ---- 干支排盘表单（本卦/变卦/占问 + 年/月建/日辰/时辰，贴参考图） ---- */
+  .gz-form { display: flex; flex-direction: column; gap: 12px; }
+  .gz-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .gz-line2 { border-top: 1px dashed var(--line); padding-top: 12px; }
+  .gz-f { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; color: var(--ink); }
+  .gz-f > span { color: var(--ink); white-space: nowrap; }
+  .gz-f select, .gz-f input {
+    font-family: inherit; font-size: 15px; padding: 6px 8px; min-width: 108px;
+    border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink);
+  }
+  .gz-grow { flex: 1 1 180px; }
+  .gz-grow input { flex: 1; min-width: 120px; }
+  .gz-go { background: var(--cinnabar); color: #fff; letter-spacing: 6px; padding: 8px 22px; }
+  .gz-go:hover { background: var(--cinnabar-dark); }
+  .gz-hint { font-size: 12px; }
+
   /* ---- 干支排盘（按年月建日辰时辰直接起卦，复现古籍卦例用） ---- */
   .gz-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
   .gz-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-light); }
@@ -367,22 +383,20 @@
   <!-- 干支排盘：直接以干支起卦，六爻自行指定 -->
   <section class="card" id="gzCard" hidden>
     <h2>干支排盘</h2>
-    <div class="muted" style="margin-bottom:10px">直接指定年月建日辰时辰，不经公历——用于复现古籍卦例、复盘他人卦例。年柱与时辰可留空。</div>
-    <div class="gz-grid">
-      <label>年柱<select class="gz-sel" id="gzYear" aria-label="年柱"></select></label>
-      <label>月建<select class="gz-sel" id="gzMonth" aria-label="月建"></select></label>
-      <label>日辰<select class="gz-sel" id="gzDay" aria-label="日辰"></select></label>
-      <label>时辰<select class="gz-sel" id="gzHour" aria-label="时辰"></select></label>
-    </div>
-    <div class="muted" id="gzPillarHint" style="margin-top:10px"></div>
-    <div class="gz-yao" id="gzYao"></div>
-    <div class="muted" style="margin-top:6px;font-size:12px;line-height:1.7">
-      点爻画切换阴阳；点右侧「静／动」切换动静（阳动○／阴动×）。初爻在最下，与古籍从下往上排一致。
-    </div>
-    <div class="gz-preview" id="gzPreview"></div>
-    <div class="btn-row" style="margin-top:12px">
-      <button class="btn primary" id="btnGzPaipan">开始排盘</button>
-      <button class="btn ghost" id="btnGzReset">六爻复位（乾为天 · 静卦）</button>
+    <div class="gz-form">
+      <div class="gz-line">
+        <label class="gz-f"><span>本卦</span><select id="gzBen" aria-label="本卦"></select></label>
+        <label class="gz-f"><span>变卦</span><select id="gzBian" aria-label="变卦"></select></label>
+        <label class="gz-f gz-grow"><span>占问</span><input id="gzQuestion" placeholder="如 占财" maxlength="40" aria-label="占问"></label>
+        <button class="btn primary gz-go" id="btnGzPaipan">排　盘</button>
+      </div>
+      <div class="gz-line gz-line2">
+        <label class="gz-f"><span>年</span><select id="gzYear" aria-label="年柱"></select></label>
+        <label class="gz-f"><span>月建</span><select id="gzMonth" aria-label="月建"></select></label>
+        <label class="gz-f"><span>日辰</span><select id="gzDay" aria-label="日辰"></select></label>
+        <label class="gz-f"><span>时辰</span><select id="gzHour" aria-label="时辰"></select></label>
+        <span class="muted gz-hint">本卦必选；变卦留（无）即为静卦。年与时辰可留空。</span>
+      </div>
     </div>
   </section>
 
