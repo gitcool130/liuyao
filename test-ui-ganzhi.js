@@ -213,18 +213,28 @@ async function launchBrowser() {
   eq('卦象表格默认收起', await page.$eval('#panBody', e => e.hidden), true);
   eq('开关文案为「卦象表格」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '卦象表格');
 
-  /* ---------- E3. 卦例库双击 → 还原成卦象 ---------- */
+  /* ---------- E3. 卦例库双击 → 还原成卦象（用真实记录的字段形状） ---------- */
   say('E3. 卦例还原');
-  // 自己造一条记录再还原，不依赖前面某步是否入过库（步骤间耦合过，踩过一次）
-  const madeId = await page.evaluate(async function () {
+  /* 这条 payload 照抄王哥本机那条真实记录（2026-11-10 23:08 那一卦）：
+     公历 datetime、6 个 tosses 带 coins/backs/mode、question 是事类标签。
+     之前只造了个干支简化版，没覆盖到真实形状。 */
+  const realTosses = [
+    { coins: ['背', '背', '背'], backs: 3, val: 9, mode: 'manual' },
+    { coins: ['背', '背', '背'], backs: 3, val: 9, mode: 'manual' },
+    { coins: ['字', '背', '背'], backs: 2, val: 0, mode: 'manual' },
+    { coins: ['背', '字', '背'], backs: 2, val: 0, mode: 'manual' },
+    { coins: ['字', '字', '背'], backs: 1, val: 1, mode: 'manual' },
+    { coins: ['背', '背', '背'], backs: 3, val: 9, mode: 'manual' }
+  ];
+  const madeId = await page.evaluate(async function (tosses) {
     const payload = {
       id: null,
-      datetime: '干支 亥月 戊子日',
-      pillars: '亥月 戊子日',
-      question: '冒烟卦例',
-      hex: '乾为天 之 天风姤',
-      tosses: [{ val: 9 }, { val: 1 }, { val: 1 }, { val: 1 }, { val: 1 }, { val: 1 }],
-      panText: '',
+      datetime: '2026-11-10 23:08',
+      pillars: '丙午年 己亥月 戊子日 甲子时',
+      question: '朋友·同事·竞争·破耗',
+      hex: '雷泽归妹 之 泽地萃',
+      tosses: tosses,
+      panText: '【六爻排盘】…',
       messages: {}
     };
     const r = await fetch('/api/records', {
@@ -232,8 +242,8 @@ async function launchBrowser() {
     });
     const d = await r.json();
     return d && d.id;
-  });
-  ok('造了一条卦例', !!madeId, String(madeId));
+  }, realTosses);
+  ok('造了一条真实形状的卦例', !!madeId, String(madeId));
 
   await page.$eval('#toolCard .tb-btn[data-k="lib"]', el => el.click());
   await page.waitForTimeout(400);
@@ -243,7 +253,6 @@ async function launchBrowser() {
   ok('卦例库列出了记录', libCount > 0, 'count=' + libCount);
 
   if (libCount > 0) {
-    // 先关掉结果卡，确认是「还原」把它重新打开
     await page.evaluate(function () {
       document.getElementById('panCard').hidden = true;
       document.getElementById('classicText').textContent = '';
@@ -252,8 +261,14 @@ async function launchBrowser() {
     await page.waitForTimeout(1300);
     eq('双击后结果卡重新出现', await page.$eval('#panCard', e => e.hidden), false);
     const rsText = await page.$eval('#classicText', e => e.textContent);
-    ok('还原出的盘面有干支', /干支：/.test(rsText), (rsText.split('\n')[0] || '').slice(0, 40));
-    ok('还原出的是那条卦（乾为天 之 天风姤）', /乾为天/.test(rsText) && /天风姤/.test(rsText), rsText.split('\n')[1] || '');
+    ok('还原出的盘面有干支', /干支：/.test(rsText), (rsText.split('\n')[0] || '').slice(0, 50));
+    // 占时按记录还原 → 四柱应与记录一致
+    ok('四柱还原正确（丙午年 己亥月 戊子日）',
+      /丙午年/.test(rsText) && /己亥月/.test(rsText) && /戊子日/.test(rsText),
+      (rsText.split('\n')[0] || ''));
+    ok('卦名与记录一致（雷泽归妹 之 泽地萃）',
+      /雷泽归妹/.test(rsText) && /泽地萃/.test(rsText), rsText.split('\n')[1] || '');
+    ok('事由回填', await page.$eval('#useCustom', e => e.value).then(v => v.length > 0).catch(() => false));
   }
 
   // 起卦区右侧的爻位堆叠：不能被字距/折行拆坏（原 letter-spacing:4px 会把 ━━━━━ 变虚线）
