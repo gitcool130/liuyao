@@ -45,6 +45,7 @@
       '<span class="bd-acts">' +
       '<button class="btn ghost" id="bdUndo">撤销</button>' +
       '<button class="btn ghost" id="bdClear">清空</button>' +
+      '<button class="btn ghost" id="bdPan">载入卦象</button>' +
       '<button class="btn ghost" id="bdImage">插入图片</button>' +
       '<button class="btn ghost" id="bdCopy">复制图片</button>' +
       '<button class="btn" id="bdSave">存 PNG</button>' +
@@ -149,6 +150,42 @@
       ctx.fillStyle = '#fffdf8';
       ctx.fillRect(0, 0, w, h);
     };
+    /* 载入卦象：把当前盘面按「古籍版式」画成底图，然后就能直接在上面圈点。
+       没有排盘时提示先排盘——不静默画一张空图。 */
+    sec.querySelector('#bdPan').onclick = function () {
+      const txt = (typeof W.__lyPanClassic === 'function') ? W.__lyPanClassic() : '';
+      if (!txt) { tip('先排一张盘，再点「载入卦象」'); return; }
+      snapshot();
+      const w = cv.width / dpr, h = cv.height / dpr;
+      ctx.fillStyle = '#fffdf8';
+      ctx.fillRect(0, 0, w, h);
+      const lines = txt.split('\n');
+      const fs = Math.max(12, Math.min(16, Math.floor(w / 46)));
+      const lh = Math.round(fs * 1.75);
+      ctx.font = fs + 'px "Noto Serif SC","Source Han Serif SC","SimSun",serif';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#33302a';
+      const x0 = 16;
+      let y = 14;
+      lines.forEach(function (ln) {
+        // 太长的行按字符数折行（古籍版式是等宽全角，按字符数折最稳）
+        const maxCh = Math.floor((w - x0 * 2) / (fs * 1.02));
+        if (Array.from(ln).length <= maxCh) {
+          ctx.fillText(ln, x0, y);
+          y += lh;
+        } else {
+          let rest = ln;
+          while (Array.from(rest).length > 0 && y < h - lh) {
+            const part = Array.from(rest).slice(0, maxCh).join('');
+            ctx.fillText(part, x0, y);
+            y += lh;
+            rest = Array.from(rest).slice(maxCh).join('');
+          }
+        }
+      });
+      tip('已载入当前卦象，可直接在上面圈点');
+    };
+
     sec.querySelector('#bdImage').onclick = function () {
       const inp = document.createElement('input');
       inp.type = 'file'; inp.accept = 'image/*';

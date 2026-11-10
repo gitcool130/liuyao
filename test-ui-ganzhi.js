@@ -144,16 +144,24 @@ async function launchBrowser() {
     await page.$$eval('#gzYao .gz-ybar', e => e.map(x => x.querySelectorAll('i').length)),
     [1, 1, 1, 1, 1, 1]);
 
-  // 点初爻爻画（DOM 顺序是上→初，最后一行才是初爻）→ 变阴 → 本卦应为天风姤
-  const yrows = await page.$$('#gzYao .gz-yrow');
-  await yrows[yrows.length - 1].$eval('.gz-ybar', el => el.click());
-  await page.waitForTimeout(300);
+  /* 注意：每次改动都会重绘按爻网格，元素句柄随即失效——
+     所以一律按索引重新取，不能缓存 ElementHandle（踩过一次）。 */
+  async function clickBar(i) {
+    await page.$$eval('#gzYao .gz-yrow', (rows, k) => rows[k].querySelector('.gz-ybar').click(), i);
+    await page.waitForTimeout(300);
+  }
+  async function clickMove(i) {
+    await page.$$eval('#gzYao .gz-yrow', (rows, k) => rows[k].querySelector('.gz-move').click(), i);
+    await page.waitForTimeout(300);
+  }
+
+  // 点初爻爻画（DOM 顺序是上→初，索引 5 才是初爻）→ 变阴 → 本卦应为天风姤
+  await clickBar(5);
   eq('点爻画后本卦跟变', await page.$eval('#gzBen', e => e.value), '天风姤');
   eq('未勾动时无变卦', await page.$eval('#gzBian', e => e.value), '');
 
   // 勾初爻「动」→ 变卦应为乾为天（初爻阴动化阳）
-  await yrows[yrows.length - 1].$eval('.gz-move', el => el.click());
-  await page.waitForTimeout(300);
+  await clickMove(5);
   eq('勾动后变卦跟变', await page.$eval('#gzBian', e => e.value), '乾为天');
 
   // 反向：从下拉改回静卦，按爻应回到全阳
@@ -254,6 +262,25 @@ async function launchBrowser() {
   ok('记录带排盘文本', saved.hasPan);
   ok('干支盘的占时写干支', /干支/.test(saved.dt || ''), saved.dt);
   ok('按钮回执变「已入卦例库」', /已入卦例库/.test(await page.$eval('#btnSave', e => e.textContent)));
+
+  /* ---------- D3. 画板载入卦象 ---------- */
+  say('D3. 画板载入卦象');
+  await page.click('#toolCard .tb-btn[data-k="board"]');
+  await page.waitForTimeout(400);
+  await page.evaluate(function () {
+    const cv = document.getElementById('bdCanvas');
+    cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+  });
+  await page.click('#bdPan');
+  await page.waitForTimeout(500);
+  const panInk = await page.evaluate(function () {
+    const cv = document.getElementById('bdCanvas');
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) { if (d[i] !== 255 || d[i + 1] !== 253 || d[i + 2] !== 248) n++; }
+    return n;
+  });
+  ok('「载入卦象」把盘面画到画布上', panInk > 2000, 'ink=' + panInk);
 
   /* ---------- E. 古籍卦例库 → 装入排盘 ---------- */
   say('E. 古籍卦例库');

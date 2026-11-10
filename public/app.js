@@ -715,6 +715,12 @@
     const card = $('#gzCard');
     if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+  // 供画板取「当前卦象」当底图：返回古籍版式纯文本（没排盘时为空串）
+  window.__lyPanClassic = function () {
+    if (!pan) return '';
+    try { return panClassicText(pan); } catch (e) { return ''; }
+  };
+
   // 当前干支选择（新增卦例时作为默认值）
   window.__lyGzState = function () {
     return { yearIdx: gzState.yearIdx, monthZhi: gzState.monthZhi, dayIdx: gzState.dayIdx, hourZhi: gzState.hourZhi };
