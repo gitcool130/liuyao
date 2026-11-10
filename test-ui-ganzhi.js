@@ -212,6 +212,16 @@ async function launchBrowser() {
   eq('古籍版式默认展开', await page.$eval('#classicBox', e => e.hidden), false);
   eq('卦象表格默认收起', await page.$eval('#panBody', e => e.hidden), true);
   eq('开关文案为「卦象表格」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '卦象表格');
+
+  // 起卦区右侧的爻位堆叠：不能被字距/折行拆坏（原 letter-spacing:4px 会把 ━━━━━ 变虚线）
+  const slot = await page.$eval('#yaoStack .yao-slot', e => ({
+    ls: getComputedStyle(e).letterSpacing,
+    h: Math.round(e.getBoundingClientRect().height),
+    n: e.children.length
+  }));
+  eq('爻位行高 40（不折行）', slot.h, 40);
+  ok('爻画无字距（不被拆成虚线）', slot.ls === 'normal' || parseFloat(slot.ls) === 0, slot.ls);
+  eq('爻位行两个片段（名称＋爻画）', slot.n, 2);
   ok('古籍版式排在卦象表之前', await page.evaluate(function () {
     const a = document.getElementById('classicBox');
     const b = document.getElementById('panBody');

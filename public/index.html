@@ -118,16 +118,20 @@
   .btn:disabled { opacity: .45; cursor: not-allowed; }
   .btn-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
 
-  /* 爻位堆叠 */
-  .yao-stack { width: 200px; margin: 0 auto; }
+  /* 爻位堆叠。
+     letter-spacing 必须为 0：原来给了 4px，会把 ━━━━━ 拆成一段段虚线，
+     看着像卦爻画错（2026-11-10 王哥指出的「卦爻显示不正常」就是这个）。
+     容器也不许被 flex 压缩，否则爻位名和爻画会各自折行。 */
+  .yao-stack { width: 210px; flex: 0 0 auto; margin: 0 auto; }
   .yao-slot {
     display: flex; align-items: center; justify-content: center;
     height: 40px; margin: 5px 0; font-size: 20px;
     border: 1px dashed var(--line); border-radius: 6px;
-    color: var(--ink-light); letter-spacing: 4px;
+    color: var(--ink-light); letter-spacing: 0; white-space: nowrap;
   }
   .yao-slot.current { border: 1.5px solid var(--cinnabar); background: #fbf1ef; }
-  .yao-slot .nm { font-size: 12px; margin-right: 10px; color: var(--ink-light); }
+  .yao-slot .nm { font-size: 12px; margin-right: 10px; color: var(--ink-light); white-space: nowrap; flex: 0 0 auto; }
+  .yao-slot > span:last-child { white-space: nowrap; font-family: "SimSun","Noto Serif SC",serif; }
   .yao-slot.moving-y { color: var(--cinnabar); font-weight: 600; }
 
   /* 排盘表 */
