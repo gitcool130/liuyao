@@ -255,10 +255,16 @@
     if (method === 'POST') {
       return (async function () {
         let p; try { p = await req.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
-        if (!p || !p.id) return json({ error: 'NO_ID', message: '缺少 id' }, 400);
-        const i = recs.findIndex(function (r) { return r.id === p.id; });
+        if (!p) return json({ error: 'BAD_JSON' }, 400);
+        /* id 由服务端兜底生成（functions/api/records.js 同一策略）：首次存入时
+         * 前端传的是 castId = null，本地层若照抄服务端的「缺 id 就 400」，
+         * 「存入卦例库」会静默失败——实测就是这条被 UI 冒烟抓出来的。 */
+        const id = (typeof p.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(p.id))
+          ? p.id
+          : ('c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+        const i = recs.findIndex(function (r) { return r.id === id; });
         const base = i >= 0 ? recs[i] : { created_at: nowISO() };
-        const merged = Object.assign({}, base, p, { updated_at: nowISO() });
+        const merged = Object.assign({}, base, p, { id: id, updated_at: nowISO() });
         // 回执不被后续保存冲掉（与服务端同一条约束）
         if (base.outcome && !p.outcome) merged.outcome = base.outcome;
         if (i >= 0) recs[i] = merged; else recs.unshift(merged);

@@ -489,8 +489,8 @@
     lockedDate = null;
     if (timeMode === 'live') selectedDate = beijingNow();
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
-    showClassic = false;
-    const bc = $('#btnClassic'); if (bc) bc.className = 'btn ghost';
+    showClassic = true;
+    const bc = $('#btnClassic'); if (bc) bc.className = 'btn';
     const cb = $('#classicBox'); if (cb) cb.hidden = true;
     $('#useSelect').value = '';
     const uc = $('#useCustom'); if (uc) { uc.value = ''; uc.hidden = true; }
@@ -543,9 +543,9 @@
   // 之后的渲染、分析、断卦状态复位必须完全同源，故拆出 applyPan。
   function applyPan(nextPan) {
     pan = nextPan;
-    // 古籍版式是开关项（咱们桌面版的「古典」也是默认不勾），
-    // 页面主体已经是咱们那套排法，需要纯文本时自己点开
-    showClassic = false;
+    // 古籍版式默认展开（王哥要求）：它排在「卦象」表格之前，先看文本版式，
+    // 需要看表格式的六神/伏神/变爻配色时再点按钮收起
+    showClassic = true;
     renderPan();
     resetAIState();
     $('#panCard').hidden = false;
@@ -692,6 +692,8 @@
     const box = $('#classicBox');
     const pre = $('#classicText');
     if (!box || !pre) return;
+    const tgl = $('#btnClassic');
+    if (tgl) tgl.className = showClassic ? 'btn' : 'btn ghost';
     if (!pan || !showClassic) { box.hidden = true; return; }
     pre.textContent = panClassicText(pan);
     box.hidden = false;
