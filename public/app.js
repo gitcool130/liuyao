@@ -610,9 +610,13 @@
         '<td class="bian-cell">' + (L.moving && L.bian ? L.bian.lq + ' ' + L.bian.gan + L.bian.zhi : '') + '</td>' +
         '</tr>';
     }
+    // 干支口径下不写公历：四柱不是由公历推出来的，并排写会让人以为两者对得上
+    const metaLine = pil.ganzhiMode
+      ? ('干支 ' + gzPillarText(pil) + ' ｜ 月建 ' + C.ZHI[pil.monthZhi] + ' ｜ 日辰 ' + C.ZHI[pil.dayZhi])
+      : ('占时 ' + fmtDT(selectedDate) + ' ｜ ' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时');
     $('#panBody').innerHTML =
       '<div class="hex-title">' + title + '</div>' +
-      '<div class="meta-line">占时 ' + fmtDT(selectedDate) + ' ｜ ' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时 ｜ 旬空 <span class="kong">' + pil.kongStr + '</span></div>' +
+      '<div class="meta-line">' + metaLine + ' ｜ 旬空 <span class="kong">' + pil.kongStr + '</span></div>' +
       '<table class="pan"><thead><tr><th>六神</th><th>伏神</th><th>本卦</th><th>世应</th><th>变爻</th></tr></thead><tbody>' + rows + '</tbody></table>';
     renderWxBlock();
   }

@@ -115,6 +115,46 @@ def build_texts():
     return made
 
 
+def build_duanyu():
+    """仓库自带的 68 条「断语用例」（tests/guji/cases/）：卦例 + 原文断语 +
+    预期规则断言（expect）。与 corpus 的 404 条是两套东西——corpus 是还原后的
+    六爻数据，这里是把原文断语与规则链的判定绑在一起，用于对勘「引擎断得对不对」。
+    数据源在仓库内，随仓库走，不进本脚本的敏感来源。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    made = []
+    for f, key, name in [
+        ("zengshan-boyi", "zengshan-duanyu", "增删卜易 · 断语用例"),
+        ("bushi-zhengzong", "bushizhengzong-duanyu", "卜筮正宗 · 断语用例"),
+    ]:
+        p = os.path.join(root, "tests", "guji", "cases", f + ".json")
+        if not os.path.exists(p):
+            continue
+        d = json.load(open(p, encoding="utf-8"))
+        out = []
+        for c in d.get("cases", []):
+            out.append({
+                "id": c.get("id"),
+                "title": c.get("title") or "（无题）",
+                "chapter": c.get("chapter") or "",
+                "line": c.get("bookLine"),
+                "monthZhi": c.get("monthZhi") or "",
+                "dayGZ": c.get("dayGZ") or "",
+                "toss": c.get("toss"),
+                "quote": c.get("quote") or "",
+                "note": c.get("note") or "",
+                "expect": c.get("expect") or [],
+                "date": c.get("date") or "",
+            })
+        os.makedirs(os.path.join(OUT, "cases"), exist_ok=True)
+        fp = os.path.join(OUT, "cases", key + ".json")
+        with open(fp, "w", encoding="utf-8") as f2:
+            json.dump({"book": name, "cases": out}, f2, ensure_ascii=False, separators=(",", ":"))
+        made.append({"key": key, "name": name, "kind": "duanyu", "count": len(out),
+                     "file": "guji/cases/%s.json" % key})
+        print("%-24s 例 %4d  %6.1f KB" % (name, len(out), os.path.getsize(fp) / 1024))
+    return made
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     books = []
@@ -130,6 +170,7 @@ def main():
             books.append({"key": key, "name": name, "kind": "corpus", "count": n, "file": rel})
             print("%-24s 例 %4d  （复用仓库回归集）" % (name, n))
     books += build_cases()
+    books += build_duanyu()
     books += build_texts()
     with open(os.path.join(OUT, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump({"generated": True, "books": books}, f, ensure_ascii=False, indent=1)

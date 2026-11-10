@@ -168,6 +168,8 @@
       conclusion: c.conclusion || c.text || '',
       quote: c.quote || '',
       raw6: Array.isArray(c.raw6) ? c.raw6 : [],
+      note: c.note || '',
+      expect: Array.isArray(c.expect) ? c.expect : [],
       kind: kind || 'corpus'
     };
   }
@@ -185,7 +187,7 @@
   function renderBookSelect() {
     const sel = document.getElementById('gujiBook');
     if (!sel) return;
-    const groups = { corpus: [], cases: [], text: [], user: [] };
+    const groups = { corpus: [], duanyu: [], cases: [], text: [], user: [] };
     state.books.forEach(function (b) { (groups[b.kind] || groups.corpus).push(b); });
     const mk = function (arr) {
       return arr.map(function (b) {
@@ -195,6 +197,7 @@
     };
     let html = '';
     if (groups.corpus.length) html += '<optgroup label="六爻卦例（含爻值）">' + mk(groups.corpus) + '</optgroup>';
+    if (groups.duanyu.length) html += '<optgroup label="断语用例（原文＋规则断言）">' + mk(groups.duanyu) + '</optgroup>';
     if (groups.cases.length) html += '<optgroup label="古籍原文卦例">' + mk(groups.cases) + '</optgroup>';
     if (groups.text.length) html += '<optgroup label="古籍全文">' + mk(groups.text) + '</optgroup>';
     if (groups.user.length) html += '<optgroup label="我的书籍">' + mk(groups.user) + '</optgroup>';
@@ -299,7 +302,13 @@
       '<div class="muted">' + esc(c.book) + (c.chapter ? '　·　' + esc(c.chapter) : '') + (gz ? '　·　' + esc(gz) : '') + '</div>' +
       hexLine + raw +
       (c.quote ? '<div class="guji-quote">原文：' + esc(c.quote) + '</div>' : '') +
-      (c.conclusion ? '<div class="guji-concl">' + esc(c.conclusion) + '</div>' : '') +
+      (c.conclusion && c.kind !== 'duanyu' ? '<div class="guji-concl">' + esc(c.conclusion) + '</div>' : '') +
+      (c.expect && c.expect.length ? '<div class="guji-expect">规则断言：' + c.expect.map(function (e) {
+        if (e.tag && e.rule) return esc(e.tag + ' → ' + e.rule);
+        if (e.trend) return esc('引擎判定：' + e.trend);
+        return esc(JSON.stringify(e));
+      }).join('　｜　') + '</div>' : '') +
+      (c.note ? '<div class="guji-quote">校勘：' + esc(c.note) + '</div>' : '') +
       '<div class="btn-row" style="margin-top:10px">' +
       '<button class="btn primary" id="btnGujiLoad"' + (c.toss ? '' : ' disabled') + '>装入排盘</button>' +
       '<button class="btn ghost" id="btnGujiCopy">复制原文</button>' +
@@ -436,7 +445,7 @@
     sec.id = 'gujiCard';
     sec.innerHTML =
       '<h2>古籍卦例库</h2>' +
-      '<div class="muted" style="margin-bottom:10px">《增删卜易》《卜筮正宗》《易冒》《易隐》《火珠林》等 12 本、共 1616 条（六爻卦例 + 古籍全文）。' +
+      '<div class="muted" style="margin-bottom:10px">《增删卜易》《卜筮正宗》《易冒》《易隐》《火珠林》等 14 本、共 1687 条（六爻卦例 / 断语用例 / 古籍全文）。' +
       '古籍只写「某卦之某卦」，动爻由本卦与变卦异位反推；点「装入排盘」把六爻与月日原样送进干支排盘对勘。可自建书籍与卦例，存本机。</div>' +
       '<div class="guji-bar">' +
       '<select id="gujiBook" aria-label="选择书籍"></select>' +
@@ -490,6 +499,7 @@
     '.guji-raw{white-space:pre-wrap;font-family:"Courier New",monospace;font-size:12px;line-height:1.7;background:#fff;border:1px solid var(--line);border-radius:6px;padding:8px;margin:8px 0;overflow:auto}' +
     '.guji-concl,.guji-quote,.guji-text{font-size:13px;line-height:1.9;margin-top:8px;max-height:320px;overflow:auto;white-space:normal}' +
     '.guji-quote,.guji-text{color:var(--ink)}' +
+    '.guji-expect{margin-top:8px;padding:8px 10px;border-left:3px solid var(--gold);background:#fdf9ee;font-size:13px;line-height:1.8}' +
     '.guji-text{background:#fff;border:1px solid var(--line);border-radius:6px;padding:10px}' +
     '.guji-add-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}' +
     '.guji-add-grid label,.guji-yao{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--ink-light)}' +

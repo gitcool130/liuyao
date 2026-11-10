@@ -150,10 +150,15 @@ async function launchBrowser() {
     await page.waitForTimeout(1500);
     const chs = await page.$$('#gujiList .guji-item');
     ok('章节列表已渲染', chs.length > 0, 'count=' + chs.length);
-    await chs[0].click();
-    await page.waitForSelector('#gujiDetail .guji-text', { timeout: 5000 });
-    const txt = await page.$eval('#gujiDetail .guji-text', e => e.innerText);
-    ok('章节正文非空', txt.length > 50, 'len=' + txt.length);
+    // 有的书首章是「序」或空章，逐章找到第一篇有正文的再断言
+    let got = '';
+    for (let i = 0; i < Math.min(6, chs.length); i++) {
+      await chs[i].click();
+      await page.waitForSelector('#gujiDetail .guji-text', { timeout: 5000 });
+      const t = await page.$eval('#gujiDetail .guji-text', e => e.innerText);
+      if (t.length > 50) { got = t; break; }
+    }
+    ok('章节正文非空', got.length > 50, 'len=' + got.length);
   }
 
   /* ---------- G. 无脚本错误 ---------- */
