@@ -241,9 +241,14 @@ static class Shell
     {
         var simple = new AssemblyName(args.Name).Name;
         var asm = Assembly.GetExecutingAssembly();
+        var target = simple + ".dll";
         foreach (var n in asm.GetManifestResourceNames())
         {
-            if (!n.EndsWith("." + simple + ".dll", StringComparison.OrdinalIgnoreCase)) continue;
+            // 资源名是 /resource:<file>,<name> 里的 <name>，通常就是「Microsoft.Web.WebView2.Core.dll」
+            // 这种**不带前导点**的裸文件名；早期只判 EndsWith(".XXX.dll") 会漏掉裸名，
+            // 表现为 FileNotFoundException 说「找到了清单但缺依赖」。
+            if (!n.Equals(target, StringComparison.OrdinalIgnoreCase) &&
+                !n.EndsWith("." + target, StringComparison.OrdinalIgnoreCase)) continue;
             using (var s = asm.GetManifestResourceStream(n))
             {
                 if (s == null) continue;
@@ -252,6 +257,7 @@ static class Shell
                 return Assembly.Load(buf);
             }
         }
+        Log("ResolveManaged 未命中: " + args.Name + "（现有资源：" + string.Join(",", asm.GetManifestResourceNames()) + "）", null);
         return null;
     }
 }
