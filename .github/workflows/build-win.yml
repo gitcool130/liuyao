@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: write      # 清理历史 artifact 需要（删除产物比创建更需要写权限）
 
 concurrency:
   group: win-portable-${{ github.ref }}
@@ -80,10 +81,16 @@ jobs:
           $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
           if (-not (Test-Path $csc)) { throw "找不到 csc：$csc" }
           $wvRoot = "$PWD\wv2"
-          $core = "$wvRoot\lib\net45\Microsoft.Web.WebView2.Core.dll"
-          $winf = "$wvRoot\lib\net45\Microsoft.Web.WebView2.WinForms.dll"
+          # nuget 包内托管 dll 在 lib\net462（不是 net45），按实际路径取，别写死
+          $core = (Get-ChildItem "$wvRoot\lib" -Recurse -Filter Microsoft.Web.WebView2.Core.dll |
+                   Where-Object { $_.FullName -notmatch 'native_uap' } | Select-Object -First 1).FullName
+          $winf = (Get-ChildItem "$wvRoot\lib" -Recurse -Filter Microsoft.Web.WebView2.WinForms.dll |
+                   Select-Object -First 1).FullName
           $ldr  = "$wvRoot\runtimes\win-x64\native\WebView2Loader.dll"
-          foreach ($p in @($core, $winf, $ldr)) { if (-not (Test-Path $p)) { throw "缺少 $p" } }
+          foreach ($p in @($core, $winf, $ldr)) { if (-not $p -or -not (Test-Path $p)) { throw "缺少 $p" } }
+          Write-Host "core=$core"
+          Write-Host "winf=$winf"
+          Write-Host "ldr=$ldr"
 
           $out = "莲斋六爻排盘.exe"
           & $csc /nologo /target:winexe /platform:anycpu /optimize+ /langversion:7.3 `
