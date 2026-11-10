@@ -15,6 +15,9 @@
 (function (root) {
   'use strict';
   const W = root;
+  // 与 core/local-api.js 同一开关：只有桌面壳/本地模式才挂载古籍库，
+  // 线上部署（数据不在仓库里）不出现这张卡片，避免「载入失败」空壳
+  if (!W.LY_LOCAL_MODE) return;
   const C = W.LY;
   const USER_KEY = 'ly_guji_user_v1';
   const PAGE = 40;

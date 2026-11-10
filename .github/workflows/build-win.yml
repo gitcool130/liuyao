@@ -78,8 +78,8 @@ jobs:
       - name: 编译单文件 exe
         shell: pwsh
         run: |
-          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          if (-not (Test-Path $csc)) { throw "找不到 csc：$csc" }
+          $compiler = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (-not (Test-Path $compiler)) { throw "找不到 csc：$compiler" }
           $wvRoot = "$PWD\wv2"
           # nuget 包内托管 dll 在 lib\net462（不是 net45），按实际路径取，别写死
           $core = (Get-ChildItem "$wvRoot\lib" -Recurse -Filter Microsoft.Web.WebView2.Core.dll |
@@ -93,17 +93,23 @@ jobs:
           Write-Host "ldr=$ldr"
 
           $out = "莲斋六爻排盘.exe"
-          & $csc /nologo /target:winexe /platform:anycpu /optimize+ /langversion:default `
-                 /win32manifest:windows-shell\app.manifest `
-                 /out:$out /utf8output `
-                 /resource:payload.zip,payload.zip `
-                 /resource:$core,Microsoft.Web.WebView2.Core.dll `
-                 /resource:$winf,Microsoft.Web.WebView2.WinForms.dll `
-                 /resource:$ldr,WebView2Loader.dll `
-                 /r:$core /r:$winf `
-                 /r:System.Windows.Forms.dll /r:System.Drawing.dll `
-                 /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
-                 windows-shell\Program.cs
+          # 参数必须走数组 + 双引号字符串：写成 `/resource:$core,...` 时 PowerShell 不展开变量，
+          # 会把字面量 $core 传给编译器（CS1566）
+          $compilerArgs = @(
+            '/nologo', '/target:winexe', '/platform:anycpu', '/optimize+', '/langversion:default',
+            '/utf8output',
+            '/win32manifest:windows-shell\app.manifest',
+            "/out:$out",
+            '/resource:payload.zip,payload.zip',
+            "/resource:$core,Microsoft.Web.WebView2.Core.dll",
+            "/resource:$winf,Microsoft.Web.WebView2.WinForms.dll",
+            "/resource:$ldr,WebView2Loader.dll",
+            "/r:$core", "/r:$winf",
+            '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
+            '/r:System.IO.Compression.dll', '/r:System.IO.Compression.FileSystem.dll',
+            'windows-shell\Program.cs'
+          )
+          & $compiler @compilerArgs
           if (-not (Test-Path $out)) { throw "编译失败：没有产物" }
           Write-Host ("exe: {0:N1} MB" -f ((Get-Item $out).Length / 1MB))
           Get-ChildItem *.exe | Select-Object Name, Length

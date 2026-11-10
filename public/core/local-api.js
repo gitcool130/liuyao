@@ -19,6 +19,24 @@
 (function (root) {
   'use strict';
   const W = root;
+
+  /* 只在「本机模式」启用：桌面壳把 public/ 映射成 https://liuyao.local，
+   * 或直接用 file:// 打开。部署到 Cloudflare 时（真实域名 / 本地静态服务器）
+   * 本文件整体不生效，页面照旧走服务端 Functions —— 否则线上会被本地
+   * localStorage 顶掉，库里一条都存不进去。
+   * 本地调试想启用：http://127.0.0.1:PORT/index.html?local=1 */
+  const LOCAL_MODE = (function () {
+    try {
+      const h = location.hostname;
+      if (h === 'liuyao.local') return true;
+      if (location.protocol === 'file:') return true;
+      if ((h === '127.0.0.1' || h === 'localhost') && /[?&]local=1(?:&|$)/.test(location.search)) return true;
+    } catch (e) { }
+    return false;
+  })();
+  W.LY_LOCAL_MODE = LOCAL_MODE;
+  if (!LOCAL_MODE) return;
+
   const CFG_KEY = 'ly_api_cfg_v1';
   const REC_KEY = 'ly_records_v1';
   const nativeFetch = W.fetch.bind(W);
