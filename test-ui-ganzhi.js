@@ -215,10 +215,12 @@ async function launchBrowser() {
 
   /* ---------- E3. 卦例库双击 → 还原成卦象 ---------- */
   say('E3. 卦例还原');
-  await page.click('#toolCard .tb-btn[data-k="lib"]');
+  await page.$eval('#toolCard .tb-btn[data-k="lib"]', el => el.click());
+  await page.waitForTimeout(400);
+  await page.$eval('#btnLib', el => el.click());
+  // 列表是异步拉的：等到真有条目或超时，别用固定 sleep
+  await page.waitForSelector('#libList .lib-item[data-id]', { timeout: 6000 }).catch(function () { });
   await page.waitForTimeout(300);
-  await page.click('#btnLib');
-  await page.waitForTimeout(900);
   const libCount = await page.$$eval('#libList .lib-item[data-id]', e => e.length);
   ok('卦例库列出了记录', libCount > 0, 'count=' + libCount);
   if (libCount > 0) {
