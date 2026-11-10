@@ -282,6 +282,21 @@ async function launchBrowser() {
   });
   ok('「载入卦象」把盘面画到画布上', panInk > 2000, 'ink=' + panInk);
 
+  /* ---------- E2. 公历口径也默认「古籍版式」+ 收起卦象表格 ---------- */
+  say('E2. 公历口径的默认版式');
+  await page.click('#toolCard .tb-btn[data-k="board"]');   // 收起画板
+  await page.click('#btnModeDate');
+  await page.waitForTimeout(400);
+  await page.fill('#guaNameInput', '水火既济');
+  await page.click('#btnByName');
+  await page.waitForTimeout(1000);
+  eq('公历口径也默认展开古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
+  eq('公历口径默认收起卦象表格', await page.$eval('#panBody', e => e.hidden), true);
+  const dText = await page.$eval('#classicText', e => e.textContent);
+  ok('公历口径古籍版式首行为干支', /^干支：/.test((dText.split('\n')[0] || '').trim()),
+    (dText.split('\n')[0] || '').slice(0, 40));
+  eq('开关文案为「卦象表格」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '卦象表格');
+
   /* ---------- E. 古籍卦例库 → 装入排盘 ---------- */
   say('E. 古籍卦例库');
   ok('古籍卡片已挂载', await page.$('#gujiCard') !== null);
