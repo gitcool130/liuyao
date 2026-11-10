@@ -43,12 +43,21 @@ static class Shell
     [STAThread]
     static void Main()
     {
-        // 托管依赖必须先挂上解析器，晚一步 Core.dll 就找不到了
+        /* 关键：Main 里**不能**出现任何 WebView2 类型。
+         * CLR 在进入方法前就把整个方法体 JIT 完，类型解析发生在
+         * AppDomain.AssemblyResolve 注册**之前**——那样内嵌的
+         * Microsoft.Web.WebView2.Core.dll 根本来不及被解析，
+         * 进程会直接以 0xE0434352（CLR 未处理异常）退出，且不弹任何框。
+         * 所以 Main 只做三件事：挂解析器、备原生 loader、解压页面，
+         * 真正碰 WebView2 的代码全部挪进 RunUi。 */
         AppDomain.CurrentDomain.AssemblyResolve += ResolveManaged;
-        // DPI 由 app.manifest 的 permonitorv2 声明，代码里不再调 SetHighDpiMode
-        // （那是 .NET Core 3+ 的 API，.NET Framework 的 csc 编不过）
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
+
+        try { PrepareNative(); }
+        catch (Exception ex)
+        {
+            MessageBox.Show("初始化 WebView2 加载器失败：\n" + ex.Message, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
 
         string webRoot;
         try { webRoot = EnsurePayload(); }
@@ -57,12 +66,21 @@ static class Shell
             MessageBox.Show("解压内置页面失败：\n" + ex.Message, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
-        try { PrepareNative(); }
+
+        try { RunUi(webRoot); }
         catch (Exception ex)
         {
-            MessageBox.Show("初始化 WebView2 加载器失败：\n" + ex.Message, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
+            MessageBox.Show("界面启动失败：\n" + ex, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    /* 以下方法才引用 WebView2 类型（JIT 时解析器已就位） */
+    static void RunUi(string webRoot)
+    {
+        // DPI 由 app.manifest 的 permonitorv2 声明，代码里不再调 SetHighDpiMode
+        // （那是 .NET Core 3+ 的 API，.NET Framework 的编译器编不过）
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
 
         var form = new Form
         {
