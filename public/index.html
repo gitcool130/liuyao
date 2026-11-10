@@ -428,9 +428,12 @@
     <div class="btn-row">
       <button class="btn ghost" id="btnClassic">古籍版式</button>
       <button class="btn" id="btnCopy">复制排盘文本</button>
+      <button class="btn" id="btnSave">存入卦例库</button>
       <button class="btn ghost" id="btnShare">复制分享链接</button>
       <button class="btn ghost" id="btnReset">重新起卦</button>
     </div>
+    <!-- 入库回执（原在断卦面板内，随按钮一起挪出来） -->
+    <div class="muted" id="saveTip" hidden style="font-size:12px;margin-top:6px;line-height:1.6"></div>
     <div class="muted" id="shareHint" style="margin-top:6px;font-size:12px"></div>
   </section>
 
@@ -477,10 +480,8 @@
     <div class="muted" id="modelWarn" hidden style="font-size:12px;margin-top:6px;line-height:1.6"></div>
     <div class="btn-row" style="justify-content:flex-start">
       <button class="btn primary" id="btnAI">开始断卦</button>
-      <button class="btn" id="btnSave">存入卦例库</button>
       <button class="btn" id="btnVote" title="同一张盘让三个免费模型各投一票，只看分歧落在哪一格">三模型对账</button>
     </div>
-    <div class="muted" id="saveTip" hidden style="font-size:12px;margin-top:6px;line-height:1.6"></div>
     <div id="aiConsensus" class="verdict" style="margin-top:12px;font-size:13px;line-height:1.7" hidden></div>
     <div id="aiReply" class="ai-cols" style="margin-top:14px"></div>
     <div id="chatBox" hidden>

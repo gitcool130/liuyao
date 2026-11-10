@@ -314,6 +314,9 @@
     timeLocked = false; lockedDate = null;
     if (!isGz && timeMode === 'live') selectedDate = beijingNow();
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
+    // 存入按钮已搬到结果页：切口径后要把「已入卦例库 ✓」和回执条复位
+    const bs = $('#btnSave'); if (bs) { bs.textContent = '存入卦例库'; bs.disabled = false; }
+    const st = $('#saveTip'); if (st) { st.hidden = true; st.textContent = ''; }
     const shh = $('#shareHint'); if (shh) shh.innerHTML = '';
     if (isGz) { gzSyncSelects(); renderGz(); }
     renderTime(); renderCoins(); renderTossHint(); renderStack();

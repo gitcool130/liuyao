@@ -177,6 +177,22 @@ async function launchBrowser() {
   await page.waitForTimeout(250);
   eq('可再收起', await page.$eval('#classicBox', e => e.hidden), true);
 
+  /* ---------- D2. 存入卦例库（按钮已挪到结果页） ---------- */
+  say('D2. 存入卦例库');
+  ok('存入按钮在结果页', await page.$('#panCard #btnSave') !== null);
+  ok('断卦面板里不再有存入按钮', await page.$('#aiCard #btnSave') === null);
+  await page.click('#btnSave');
+  await page.waitForTimeout(1000);
+  const saved = await page.evaluate(function () {
+    const a = JSON.parse(localStorage.getItem('ly_records_v1') || '[]');
+    return { n: a.length, hex: a[0] && a[0].hex, hasPan: !!(a[0] && a[0].panText), dt: a[0] && a[0].datetime };
+  });
+  eq('本机库落了 1 条', saved.n, 1);
+  ok('记录带卦名', !!saved.hex, JSON.stringify(saved).slice(0, 120));
+  ok('记录带排盘文本', saved.hasPan);
+  ok('干支盘的占时写干支', /干支/.test(saved.dt || ''), saved.dt);
+  ok('按钮回执变「已入卦例库」', /已入卦例库/.test(await page.$eval('#btnSave', e => e.textContent)));
+
   /* ---------- E. 古籍卦例库 → 装入排盘 ---------- */
   say('E. 古籍卦例库');
   ok('古籍卡片已挂载', await page.$('#gujiCard') !== null);
