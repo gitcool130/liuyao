@@ -23,7 +23,8 @@
     { key: 'guji', sel: '#gujiCard', label: '古籍卦例库' },
     { key: 'api', sel: '#localApiCard', label: 'AI 接口设置' },
     { key: 'ai', sel: '#aiCard', label: '大模型断卦', needPan: true },
-    { key: 'lib', sel: '#libCard', label: '卦例库' }
+    { key: 'lib', sel: '#libCard', label: '卦例库' },
+    { key: 'board', sel: '#boardCard', label: '画板' }
   ];
   let cur = '';
 

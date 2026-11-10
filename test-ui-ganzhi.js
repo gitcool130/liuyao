@@ -56,7 +56,7 @@ async function launchBrowser() {
   /* ---------- A2. 工具栏：四块收成一行按钮 ---------- */
   say('A2. 工具栏');
   const tbLabels = await page.$$eval('#toolCard .tb-btn', e => e.map(x => x.textContent.trim()));
-  eq('四个按钮', tbLabels, ['古籍卦例库', 'AI 接口设置', '大模型断卦', '卦例库']);
+  eq('五个按钮', tbLabels, ['古籍卦例库', 'AI 接口设置', '大模型断卦', '卦例库', '画板']);
   eq('默认全收起', await page.$eval('#toolBody', e => e.hidden), true);
 
   await page.click('#toolCard .tb-btn[data-k="api"]');
@@ -73,6 +73,41 @@ async function launchBrowser() {
   await page.click('#toolCard .tb-btn[data-k="ai"]');
   await page.waitForTimeout(300);
   eq('排盘前断卦面板给提示', await page.$eval('.tb-pane[data-k="ai"]', e => e.getAttribute('data-empty')), '1');
+
+  // 画板：canvas 就绪、能画一笔、撤销可用
+  await page.click('#toolCard .tb-btn[data-k="board"]');
+  await page.waitForTimeout(500);
+  eq('画板面板展开', await page.$eval('.tb-pane[data-k="board"]', e => e.hidden), false);
+  const cvBox = await page.$eval('#bdCanvas', e => ({ w: e.width, h: e.height }));
+  ok('canvas 已按容器定尺寸', cvBox.w > 300 && cvBox.h > 200, JSON.stringify(cvBox));
+  await page.evaluate(function () {
+    const cv = document.getElementById('bdCanvas');
+    const r = cv.getBoundingClientRect();
+    const opts = { bubbles: true, clientX: r.left + 40, clientY: r.top + 40, pointerId: 1 };
+    cv.dispatchEvent(new PointerEvent('pointerdown', opts));
+    cv.dispatchEvent(new PointerEvent('pointermove', Object.assign({}, opts, { clientX: r.left + 120, clientY: r.top + 90 })));
+    cv.dispatchEvent(new PointerEvent('pointerup', opts));
+  });
+  await page.waitForTimeout(200);
+  const inked = await page.evaluate(function () {
+    const cv = document.getElementById('bdCanvas');
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) { if (d[i] !== 255 || d[i + 1] !== 253 || d[i + 2] !== 248) n++; }
+    return n;
+  });
+  ok('画笔在画布上留下笔迹', inked > 50, 'ink=' + inked);
+  await page.click('#bdUndo');
+  await page.waitForTimeout(200);
+  const afterUndo = await page.evaluate(function () {
+    const cv = document.getElementById('bdCanvas');
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) { if (d[i] !== 255 || d[i + 1] !== 253 || d[i + 2] !== 248) n++; }
+    return n;
+  });
+  ok('撤销清掉笔迹', afterUndo < inked, afterUndo + ' < ' + inked);
+  await page.click('#toolCard .tb-btn[data-k="board"]');
 
   /* ---------- B. 干支排盘界面（本卦/变卦/占问 + 年月建日辰时辰） ---------- */
   say('B. 干支排盘界面');
