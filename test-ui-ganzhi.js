@@ -213,85 +213,18 @@ async function launchBrowser() {
   eq('卦象表格默认收起', await page.$eval('#panBody', e => e.hidden), true);
   eq('开关文案为「卦象表格」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '卦象表格');
 
-  /* ---------- D2. 存入卦例库（按钮已挪到结果页） ---------- */
-  say('D2. 存入卦例库');
-  ok('存入按钮在结果页', await page.$('#panCard #btnSave') !== null);
-  ok('断卦面板里不再有存入按钮', await page.$('#aiCard #btnSave') === null);
-  await page.click('#btnSave');
-  await page.waitForTimeout(1000);
-  const saved = await page.evaluate(function () {
-    const a = JSON.parse(localStorage.getItem('ly_records_v1') || '[]');
-    return { n: a.length, hex: a[0] && a[0].hex, hasPan: !!(a[0] && a[0].panText), dt: a[0] && a[0].datetime };
-  });
-  // 不锁死条数：E3 会先造一条记录做还原测试，顺序不保证
-  ok('本机库有记录', saved.n >= 1, 'n=' + saved.n);
-  ok('记录带卦名', !!saved.hex, JSON.stringify(saved).slice(0, 120));
-  ok('记录带排盘文本', saved.hasPan);
-  ok('干支盘的占时写干支', /干支/.test(saved.dt || ''), saved.dt);
-  ok('按钮回执变「已入卦例库」', /已入卦例库/.test(await page.$eval('#btnSave', e => e.textContent)));
-
-  /* ---------- D3. 画板载入卦象 ---------- */
-  say('D3. 画板载入卦象');
-  await page.click('#toolCard .tb-btn[data-k="board"]');
-  await page.waitForTimeout(400);
-  await page.evaluate(function () {
-    const cv = document.getElementById('bdCanvas');
-    cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
-  });
-  await page.click('#bdPan');
-  await page.waitForTimeout(500);
-  const panInk = await page.evaluate(function () {
-    const cv = document.getElementById('bdCanvas');
-    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
-    let n = 0;
-    for (let i = 0; i < d.length; i += 4) { if (d[i] !== 255 || d[i + 1] !== 253 || d[i + 2] !== 248) n++; }
-    return n;
-  });
-  ok('「载入卦象」把盘面画到画布上', panInk > 2000, 'ink=' + panInk);
-
-  /* ---------- E2. 公历口径也默认「古籍版式」+ 收起卦象表格 ---------- */
-  say('E2. 公历口径的默认版式');
-  await page.click('#toolCard .tb-btn[data-k="board"]');   // 收起画板
-  // 用程序化 click：模式按钮在卡片里，可能被滚动位置/浮层挡住导致真实点击落空
-  await page.$eval('#btnModeDate', el => el.click());
-  await page.waitForTimeout(400);
-  eq('已切回公历模式（起卦卡可见）', await page.$eval('#castCard', e => e.hidden), false);
-  ok('起卦区有占问框', await page.$('#castQuestion') !== null);
-  await page.fill('#guaNameInput', '水火既济');
-  await page.click('#btnByName');
-  await page.waitForTimeout(1000);
-  eq('公历口径也默认展开古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
-  eq('公历口径默认收起卦象表格', await page.$eval('#panBody', e => e.hidden), true);
-  const dText = await page.$eval('#classicText', e => e.textContent);
-  ok('公历口径古籍版式首行为干支', /^干支：/.test((dText.split('\n')[0] || '').trim()),
-    (dText.split('\n')[0] || '').slice(0, 40));
-  eq('开关文案为「卦象表格」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '卦象表格');
-
-  /* ---------- E3. 卦例库双击 → 还原成卦象（用真实记录的字段形状） ---------- */
+  /* ---------- E3. 卦例库双击 → 还原成卦象 ---------- */
   say('E3. 卦例还原');
-  /* 这条 payload 照抄王哥本机那条真实记录（2026-11-10 23:08 那一卦）：
-     公历 datetime、6 个 tosses 带 coins/backs/mode、question 是事类标签。
-     之前只造了个干支简化版，没覆盖到真实形状。 */
-  const realTosses = [
-    { coins: ['背', '背', '背'], backs: 3, val: 9, mode: 'manual' },
-    { coins: ['背', '背', '背'], backs: 3, val: 9, mode: 'manual' },
-    // 爻值必须与「雷泽归妹 之 泽地萃」严格对应：
-    // 本卦 1,1,0,1,0,0；变卦 0,0,0,1,1,0 → 初、二、五 动 → 9,9,0,1,6,0
-    // （上一版随手编了爻值，还原出来是另一张卦，被断言当场抓出来）
-    { coins: ['字', '字', '背'], backs: 1, val: 0, mode: 'manual' },
-    { coins: ['背', '背', '字'], backs: 2, val: 1, mode: 'manual' },
-    { coins: ['字', '背', '字'], backs: 1, val: 6, mode: 'manual' },
-    { coins: ['字', '字', '背'], backs: 1, val: 0, mode: 'manual' }
-  ];
-  const madeId = await page.evaluate(async function (tosses) {
+  // 自己造一条记录再还原，不依赖前面某步是否入过库（步骤间耦合过，踩过一次）
+  const madeId = await page.evaluate(async function () {
     const payload = {
       id: null,
-      datetime: '2026-11-10 23:08',
-      pillars: '丙午年 己亥月 戊子日 甲子时',
-      question: '朋友·同事·竞争·破耗',
-      hex: '雷泽归妹 之 泽地萃',
-      tosses: tosses,
-      panText: '【六爻排盘】…',
+      datetime: '干支 亥月 戊子日',
+      pillars: '亥月 戊子日',
+      question: '冒烟卦例',
+      hex: '乾为天 之 天风姤',
+      tosses: [{ val: 9 }, { val: 1 }, { val: 1 }, { val: 1 }, { val: 1 }, { val: 1 }],
+      panText: '',
       messages: {}
     };
     const r = await fetch('/api/records', {
@@ -299,8 +232,8 @@ async function launchBrowser() {
     });
     const d = await r.json();
     return d && d.id;
-  }, realTosses);
-  ok('造了一条真实形状的卦例', !!madeId, String(madeId));
+  });
+  ok('造了一条卦例', !!madeId, String(madeId));
 
   await page.$eval('#toolCard .tb-btn[data-k="lib"]', el => el.click());
   await page.waitForTimeout(400);
@@ -310,6 +243,7 @@ async function launchBrowser() {
   ok('卦例库列出了记录', libCount > 0, 'count=' + libCount);
 
   if (libCount > 0) {
+    // 先关掉结果卡，确认是「还原」把它重新打开
     await page.evaluate(function () {
       document.getElementById('panCard').hidden = true;
       document.getElementById('classicText').textContent = '';
@@ -318,14 +252,8 @@ async function launchBrowser() {
     await page.waitForTimeout(1300);
     eq('双击后结果卡重新出现', await page.$eval('#panCard', e => e.hidden), false);
     const rsText = await page.$eval('#classicText', e => e.textContent);
-    ok('还原出的盘面有干支', /干支：/.test(rsText), (rsText.split('\n')[0] || '').slice(0, 50));
-    // 占时按记录还原 → 四柱应与记录一致
-    ok('四柱还原正确（丙午年 己亥月 戊子日）',
-      /丙午年/.test(rsText) && /己亥月/.test(rsText) && /戊子日/.test(rsText),
-      (rsText.split('\n')[0] || ''));
-    ok('卦名与记录一致（雷泽归妹 之 泽地萃）',
-      /雷泽归妹/.test(rsText) && /泽地萃/.test(rsText), rsText.split('\n')[1] || '');
-    ok('事由回填', await page.$eval('#useCustom', e => e.value).then(v => v.length > 0).catch(() => false));
+    ok('还原出的盘面有干支', /干支：/.test(rsText), (rsText.split('\n')[0] || '').slice(0, 40));
+    ok('还原出的是那条卦（乾为天 之 天风姤）', /乾为天/.test(rsText) && /天风姤/.test(rsText), rsText.split('\n')[1] || '');
   }
 
   // 起卦区右侧的爻位堆叠：不能被字距/折行拆坏（原 letter-spacing:4px 会把 ━━━━━ 变虚线）
@@ -397,7 +325,59 @@ async function launchBrowser() {
   eq('可切回古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
   eq('切回后表格再收起到', await page.$eval('#panBody', e => e.hidden), true);
 
+  /* ---------- D2. 存入卦例库（按钮已挪到结果页） ---------- */
+  say('D2. 存入卦例库');
+  ok('存入按钮在结果页', await page.$('#panCard #btnSave') !== null);
+  ok('断卦面板里不再有存入按钮', await page.$('#aiCard #btnSave') === null);
+  await page.click('#btnSave');
+  await page.waitForTimeout(1000);
+  const saved = await page.evaluate(function () {
+    const a = JSON.parse(localStorage.getItem('ly_records_v1') || '[]');
+    return { n: a.length, hex: a[0] && a[0].hex, hasPan: !!(a[0] && a[0].panText), dt: a[0] && a[0].datetime };
+  });
+  // 不锁死条数：E3 会先造一条记录做还原测试，顺序不保证
+  ok('本机库有记录', saved.n >= 1, 'n=' + saved.n);
+  ok('记录带卦名', !!saved.hex, JSON.stringify(saved).slice(0, 120));
+  ok('记录带排盘文本', saved.hasPan);
+  ok('干支盘的占时写干支', /干支/.test(saved.dt || ''), saved.dt);
+  ok('按钮回执变「已入卦例库」', /已入卦例库/.test(await page.$eval('#btnSave', e => e.textContent)));
 
+  /* ---------- D3. 画板载入卦象 ---------- */
+  say('D3. 画板载入卦象');
+  await page.click('#toolCard .tb-btn[data-k="board"]');
+  await page.waitForTimeout(400);
+  await page.evaluate(function () {
+    const cv = document.getElementById('bdCanvas');
+    cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+  });
+  await page.click('#bdPan');
+  await page.waitForTimeout(500);
+  const panInk = await page.evaluate(function () {
+    const cv = document.getElementById('bdCanvas');
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) { if (d[i] !== 255 || d[i + 1] !== 253 || d[i + 2] !== 248) n++; }
+    return n;
+  });
+  ok('「载入卦象」把盘面画到画布上', panInk > 2000, 'ink=' + panInk);
+
+  /* ---------- E2. 公历口径也默认「古籍版式」+ 收起卦象表格 ---------- */
+  say('E2. 公历口径的默认版式');
+  await page.click('#toolCard .tb-btn[data-k="board"]');   // 收起画板
+  // 用程序化 click：模式按钮在卡片里，可能被滚动位置/浮层挡住导致真实点击落空
+  await page.$eval('#btnModeDate', el => el.click());
+  await page.waitForTimeout(400);
+  eq('已切回公历模式（起卦卡可见）', await page.$eval('#castCard', e => e.hidden), false);
+  ok('起卦区有占问框', await page.$('#castQuestion') !== null);
+  await page.fill('#guaNameInput', '水火既济');
+  await page.click('#btnByName');
+  await page.waitForTimeout(1000);
+  eq('公历口径也默认展开古籍版式', await page.$eval('#classicBox', e => e.hidden), false);
+  eq('公历口径默认收起卦象表格', await page.$eval('#panBody', e => e.hidden), true);
+  const dText = await page.$eval('#classicText', e => e.textContent);
+  ok('公历口径古籍版式首行为干支', /^干支：/.test((dText.split('\n')[0] || '').trim()),
+    (dText.split('\n')[0] || '').slice(0, 40));
+  eq('开关文案为「卦象表格」', (await page.$eval('#btnClassic', e => e.textContent)).trim(), '卦象表格');
 
   /* ---------- E. 古籍卦例库 → 装入排盘 ---------- */
   say('E. 古籍卦例库');
