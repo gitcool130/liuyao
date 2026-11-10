@@ -90,7 +90,12 @@ function harden(headers) {
 
 // 已消费 body 后按原样重建响应（fallback 路径用，保留原始头）
 function rebuild(asset, body) {
-  return new Response(body, { status: asset.status, headers: harden(new Headers(asset.headers)) });
+  const headers = harden(new Headers(asset.headers));
+  // 体被重新编码/读取后，资产的 Content-Length / Content-Encoding 已不代表新体；
+  // 复制旧头会让运行时按旧长度截断或按 gzip 解压未压缩 body（dsh P2-1）。
+  headers.delete('content-length');
+  headers.delete('content-encoding');
+  return new Response(body, { status: asset.status, headers: headers });
 }
 
 export async function onRequestGet(context) {
@@ -130,6 +135,9 @@ export async function onRequestGet(context) {
     const headers = new Headers(asset.headers);
     headers.delete('etag');
     headers.delete('last-modified');
+    // 体已改写：旧长度/编码必失配，必须一并删除（dsh P2-1）
+    headers.delete('content-length');
+    headers.delete('content-encoding');
     headers.set('cache-control', 'public, max-age=300');
     return new Response(out, { status: asset.status, headers: harden(headers) });
   } catch (e) {

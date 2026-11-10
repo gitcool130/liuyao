@@ -1037,3 +1037,25 @@ M22–M24 三轮里多次据此下的判断（含「上游退化」「模型不�
 探针复核：大雪午后得「出月约 29 日后」，立春交节前得「今日交节即解」，误报超表消失。
 
 **边界**：每年 12 个交节日 × 月破假破盘受影响；错的是应期窗口锚点与提示文案，不涉及吉凶判定。
+
+---
+
+## 第三十五轮 · 2026-11-09 全项目审计修复
+
+**输入**：`docs/audit-2026-11-09` 同级审计报告（基于 `a8e558e`），P0×0 / P1×7 / P2×16。
+本轮把 P1/P2 的代码项全部落地，并补真实 SQLite 集成测试。
+
+**引擎**：`lineStates` 与 `ruleDayChong` 统一「动空逢日冲=冲实」，补回归；`ruleSanHe`
+的 source owner 改为按爻位（同一动爻本/变不得同局），补带 pillars 的真实盘回归。
+**数据层**：`schema.sql` 直接建出 `baseline` 列（新库不再需要手工 ALTER）；readings
+派生改为 `WHERE NOT EXISTS` 任意状态兜底，dismissed/acted 不再二次排队；删除 cast 同步清 readings。
+**前端**：`autoSaveCast` 加保存代际（saveGen），旧响应不得写回旧 castId；`renderTime`
+统一同步时间模式文案（分享还原不再谎报锁定）；分享码「用神为空」也还原题面；天气/手动用神
+的 baseline 重算与 renderAnalysis 同源；动爻输入拒绝非纯数字；流式硬顶收敛到 180s 内。
+**安全/健壮性**：所有 POST 要求 `application/json`；API 响应 `Cache-Control: no-store`；
+请求体改为流式字节限长（chunked 不再绕过 512KB/32KB）；缺口令的 401 不再计入爆破桶；
+OG 改写删旧 Content-Length/Content-Encoding。
+
+**测试**：test-rules 297、test-premise 156、test-functions 391、test-db 11（真实 SQLite）、
+test-shake 82、guji 12148、其余全绿；`test:all` exit 0。
+**部署**：资源戳 `?v=20261109a`。

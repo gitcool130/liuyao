@@ -384,6 +384,85 @@ async function launchBrowser() {
     await page.close();
   }
 
+  // ---------- C2. 分享还原的初始时间模式（P1-7） ----------
+  {
+    const page = await browser.newPage();
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#btnRandom', { timeout: 15000 });
+    const shareCode = await page.evaluate(function () {
+      const dt = new Date(2026, 10, 9, 12, 0);
+      dt.__wall = { y: 2026, m: 11, d: 9, h: 12, min: 0 };
+      return window.LY.encodeCast({ time: dt, vals: [1, 0, 1, 0, 1, 0], use: '妻财', question: '测试' });
+    });
+    const sep = BASE.indexOf('?') >= 0 ? '&' : '?';
+    await page.goto(BASE + sep + 's=' + encodeURIComponent(shareCode), { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(300);
+    console.log('C2. 分享还原时间模式');
+    eq('分享还原 → 标签为补录模式',
+      (await page.$eval('#dtLabel', e => e.textContent)).indexOf('补录模式') >= 0, true);
+    eq('分享还原 → 按钮为切回现场摇卦',
+      await page.$eval('#btnTimeMode', e => e.textContent), '切回现场摇卦');
+    eq('分享还原 → 输入框可编辑', await page.$eval('#dtInput', e => e.disabled), false);
+
+    // P2-5：用神代码为 '-' 的合法分享码也必须还原题面
+    const qCode = await page.evaluate(function () {
+      const dt = new Date(2026, 10, 9, 12, 0);
+      dt.__wall = { y: 2026, m: 11, d: 9, h: 12, min: 0 };
+      return window.LY.encodeCast({ time: dt, vals: [1, 0, 1, 0, 1, 0], use: '', question: '这笔货款能到吗' });
+    });
+    await page.goto(BASE + sep + 's=' + encodeURIComponent(qCode), { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(300);
+    eq('分享还原 → 无神码也保留题面',
+      await page.$eval('#useCustom', e => e.value), '这笔货款能到吗');
+    await page.close();
+  }
+
+  // ---------- C3. 在途保存与重新起卦的竞态（P1-6） ----------
+  {
+    const page = await browser.newPage();
+    const bodies = [];
+    await page.route('**/api/records*', async route => {
+      if (route.request().method() !== 'POST') return route.continue();
+      bodies.push(JSON.parse(route.request().postData() || '{}'));
+      if (bodies.length === 1) {
+        await new Promise(r => setTimeout(r, 900));
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'old-id', hasBaseline: true }) });
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'new-id', hasBaseline: true }) });
+    });
+    await page.route('**/api/interpret', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ reply: '断语正文\n\n结论：吉\n应期：11月上旬\n验证标志：对方来电\n用神：妻财卯木' })
+    }));
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#btnRandom', { timeout: 15000 });
+    const cast6 = async () => {
+      for (let i = 0; i < 6; i++) { await page.click('#btnRandom'); await page.waitForTimeout(40); await page.click('#btnConfirm'); await page.waitForTimeout(40); }
+    };
+    await cast6();
+    await page.selectOption('#useSelect', '妻财');
+    await page.waitForTimeout(80);
+    const firstReq = page.waitForRequest(r => r.url().indexOf('/api/records') >= 0 && r.method() === 'POST');
+    await page.click('#btnAI');
+    await page.waitForFunction(() => document.body.innerText.indexOf('断语正文') >= 0, null, { timeout: 10000 });
+    await firstReq;
+    await page.click('#btnReset');            // 旧保存响应仍在 900ms 延迟中
+    await page.waitForTimeout(40);
+    await cast6();
+    await page.selectOption('#useSelect', '妻财');
+    await page.waitForTimeout(80);
+    const secondReq = page.waitForRequest(r => r.url().indexOf('/api/records') >= 0 && r.method() === 'POST');
+    await page.click('#btnAI');
+    await page.waitForFunction(() => document.body.innerText.indexOf('断语正文') >= 0, null, { timeout: 10000 });
+    await secondReq;
+    await page.waitForTimeout(300);
+    console.log('C3. 在途保存 / 重新起卦竞态');
+    eq('首卦保存请求 id 为空', bodies.length >= 1 && bodies[0].id == null, true);
+    eq('旧保存响应不得把旧 id 写回', bodies.length >= 2 && bodies[1].id !== 'old-id', true);
+    eq('新卦保存 id 仍为空（未覆盖旧记录）', bodies.length >= 2 && bodies[1].id == null, true);
+    await page.close();
+  }
+
   // ---------- D. core 加载失败守卫（#17） ----------
   {
     const page = await browser.newPage();

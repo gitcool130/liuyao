@@ -285,7 +285,10 @@ export async function requireCode(request, expected, message) {
     if (rec) AUTH_FAILS.delete(key);
     return null;
   }
-  if (key) {
+  // P2-4（dsh 2026-11-09）：只有「带了口令但错了」才计数。缺口令的 401 是未登录，
+  // 不是爆破尝试；若把它也计入，未登录用户每次自动保存/开卦例库都失败一次，
+  // 20 次后同 NAT 出口全员 429（自锁，连正确口令也进不来）。
+  if (key && given) {
     if (!rec) rec = { n: 0, until: now + AUTH_WINDOW_MS };
     rec.n++;
     AUTH_FAILS.set(key, rec);
