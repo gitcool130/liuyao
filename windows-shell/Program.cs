@@ -52,6 +52,14 @@ static class Shell
          * 真正碰 WebView2 的代码全部挪进 RunUi。 */
         AppDomain.CurrentDomain.AssemblyResolve += ResolveManaged;
 
+        /* 崩溃取证：WinExe 没有控制台，异常一冒泡进程就直接没了（0xE0434352），
+         * 排查只能靠落盘日志。三条通道各管一段：UI 线程异常、非 UI 线程异常、
+         * 后台任务未观察异常。 */
+        Application.ThreadException += (s, e) => Log("ThreadException", e.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (s, e) => Log("UnhandledException", e.ExceptionObject as Exception);
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (s, e) => Log("UnobservedTask", e.Exception);
+        Log("start", null);
+
         try { PrepareNative(); }
         catch (Exception ex)
         {
@@ -113,9 +121,11 @@ static class Shell
                     try { System.Diagnostics.Process.Start(b.Uri); } catch { }
                 };
                 core.Navigate("https://" + Host + "/index.html");
+                core.ProcessFailed += (a, b) => Log("WebViewProcessFailed:" + b.ProcessFailedKind, null);
             }
             catch (Exception ex)
             {
+                Log("WebView2Init", ex);
                 var msg = ex.Message ?? "";
                 if (msg.IndexOf("WebView2", StringComparison.OrdinalIgnoreCase) >= 0 ||
                     msg.IndexOf("runtime", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -135,6 +145,23 @@ static class Shell
         };
 
         Application.Run(form);
+    }
+
+    /* ---------- 崩溃日志 ---------- */
+
+    static void Log(string tag, Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(Root);
+            var path = Path.Combine(Root, "log.txt");
+            var sb = new StringBuilder();
+            sb.AppendLine("[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "] " + tag);
+            if (ex != null) sb.AppendLine(ex.ToString());
+            sb.AppendLine("----");
+            File.AppendAllText(path, sb.ToString(), Encoding.UTF8);
+        }
+        catch { }
     }
 
     /* ---------- 内嵌资源 → 磁盘 ---------- */
