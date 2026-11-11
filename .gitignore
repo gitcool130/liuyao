@@ -16,3 +16,7 @@ public/guji/cases/
 public/guji/text/
 public/guji/manifest.json
 public/guji/*.json
+
+# 本机调试脚本（不进仓库）
+l-probe.js
+node_modules/

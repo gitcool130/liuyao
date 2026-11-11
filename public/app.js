@@ -3369,6 +3369,7 @@
   function libItemHTML(r) {
     return '<div class="lib-item" data-id="' + escAttr(r.id) + '"><span>' + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) + '</span>' +
       '<span class="lib-side">' + outcomeBadge(r.outcome) + '<span class="muted">' + esc((r.created_at || '').slice(0, 10)) + '</span>' +
+      '<button class="lib-load" data-restore="' + escAttr(r.id) + '" title="把这条卦例还原成卦象（等同双击）">装入</button>' +
       '<button class="lib-del" data-del="' + escAttr(r.id) + '" title="删除此卦例">×</button></span></div>';
   }
 
@@ -3425,6 +3426,10 @@
     if (dis) { dismissDueTask(dis.dataset.dueDismiss); return; }
     const del = t.closest('.lib-del');
     if (del) { e.stopPropagation(); delCast(del.dataset.del); return; }
+    // 「装入」按钮：单击就还原，不靠双击——WebView2 里双击事件不一定能拿到，
+    // 且单击详情插入 DOM 后双击的两次落在不同节点上会丢事件。
+    const ld = t.closest('[data-restore]');
+    if (ld) { e.stopPropagation(); restoreCastById(ld.dataset.restore); return; }
     const more = t.closest('[data-lib-more]');
     if (more) { more.disabled = true; loadLibPage(libLoaded, true).catch(function (err) { alert('读取失败：' + err.message); more.disabled = false; }); return; }
     const item = t.closest('.lib-item');
@@ -3503,14 +3508,40 @@
     if (pc) pc.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  /* 还原结果一律落到页面上的可见条：alert 在 WebView2 里没挂 ScriptDialogOpening
+   * 时可能既不弹也不报错，等于「点了没反应」——这正是王哥遇到的现象。 */
+  function restoreStatus(msg, ok) {
+    let box = document.getElementById('libRestoreMsg');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'libRestoreMsg';
+      box.style.cssText = 'margin-top:10px;font-size:13px;line-height:1.7;padding:8px 10px;border-radius:6px';
+      const anchor = document.getElementById('libList');
+      if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(box, anchor);
+      else document.body.appendChild(box);
+    }
+    box.textContent = msg;
+    box.style.background = ok ? '#f2f7ee' : '#fdf1ef';
+    box.style.color = ok ? '#3f5a33' : '#a5352c';
+    box.style.border = '1px solid ' + (ok ? '#cddfc2' : '#f0cdc7');
+    box.hidden = false;
+    // 顺手留一份到本机，重启后还能看到上次为什么失败
+    try { localStorage.setItem('ly_restore_last', JSON.stringify({ t: Date.now(), ok: !!ok, msg: msg })); } catch (e) { }
+  }
+
   async function restoreCastById(id) {
+    restoreStatus('正在还原…', true);
     try {
       const res = await apiFetch('/api/records?id=' + encodeURIComponent(id), {});
       const data = await res.json();
-      if (!res.ok || !data.record) throw new Error(data.message || '读取失败');
+      if (!res.ok) throw new Error(data.message || ('HTTP ' + res.status));
+      if (!data.record) throw new Error('接口没返回 record（可能未登录口令）');
       restoreRecord(data.record);
+      restoreStatus('已还原：' + (data.record.question || '（未注明所测）') + ' · ' + (data.record.hex || ''), true);
     } catch (e) {
-      alert('还原卦象失败：' + e.message);
+      restoreStatus('还原失败：' + (e && e.message ? e.message : e), false);
+      // 同时写到日志，方便我这边直接看
+      try { console.error('[restore] 失败', e); } catch (err) { }
     }
   }
   window.__lyRestoreCast = restoreCastById;   // 供详情按钮/测试调用

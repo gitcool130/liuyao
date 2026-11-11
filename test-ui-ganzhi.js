@@ -254,6 +254,22 @@ async function launchBrowser() {
     const rsText = await page.$eval('#classicText', e => e.textContent);
     ok('还原出的盘面有干支', /干支：/.test(rsText), (rsText.split('\n')[0] || '').slice(0, 40));
     ok('还原出的是那条卦（乾为天 之 天风姤）', /乾为天/.test(rsText) && /天风姤/.test(rsText), rsText.split('\n')[1] || '');
+
+    /* 「装入」按钮：单击即可，不依赖双击（WebView2 里双击事件不可靠；
+       王哥实测双击没反应——入口必须有单击路径） */
+    ok('每行有「装入」按钮', await page.$('#libList .lib-item[data-id] .lib-load') !== null);
+    await page.evaluate(function () {
+      document.getElementById('panCard').hidden = true;
+      document.getElementById('classicText').textContent = '';
+      const m = document.getElementById('libRestoreMsg'); if (m) m.textContent = '';
+    });
+    await page.click('#libList .lib-item[data-id] .lib-load');
+    await page.waitForTimeout(1300);
+    eq('点「装入」结果卡出现', await page.$eval('#panCard', e => e.hidden), false);
+    const btnText = await page.$eval('#classicText', e => e.textContent);
+    ok('点「装入」也是那一卦', /乾为天/.test(btnText) && /天风姤/.test(btnText), (btnText.split('\n')[1] || ''));
+    const msg = await page.$eval('#libRestoreMsg', e => e.textContent).catch(() => '');
+    ok('页内给出还原回执（不再靠 alert）', /已还原/.test(msg), msg);
   }
 
   // 起卦区右侧的爻位堆叠：不能被字距/折行拆坏（原 letter-spacing:4px 会把 ━━━━━ 变虚线）

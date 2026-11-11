@@ -107,7 +107,11 @@ static class Shell
             try
             {
                 Directory.CreateDirectory(ProfileDir);
-                var env = await CoreWebView2Environment.CreateAsync(null, ProfileDir, null);
+                // 排错用：设了 LY_WEBVIEW_ARGS 才加浏览器参数（例如 --remote-debugging-port=9222），
+                // 平时不传，不对外开端口
+                var dbg = Environment.GetEnvironmentVariable("LY_WEBVIEW_ARGS");
+                var envOpts = string.IsNullOrEmpty(dbg) ? null : new CoreWebView2EnvironmentOptions(dbg);
+                var env = await CoreWebView2Environment.CreateAsync(null, ProfileDir, envOpts);
                 await view.EnsureCoreWebView2Async(env);
                 var core = view.CoreWebView2;
                 core.SetVirtualHostNameToFolderMapping(Host, webRoot, CoreWebView2HostResourceAccessKind.Allow);
@@ -211,8 +215,37 @@ static class Shell
             }
         }
         File.WriteAllText(marker, stamp, Encoding.UTF8);
+
+        /* 页面换了，WebView2 的 HTTP 缓存必须一起清：
+         * 它按 URL 缓存响应，磁盘文件重写不影响已有缓存条目。脚本 URL 上的 ?v=
+         * 长期不变，于是「换了 exe 但页面还是旧的」——王哥几次遇到「改了没生效」
+         * 都是这个原因。这里只删可再生的缓存目录，profile 里的 localStorage（卦例、
+         * 配置）不动。 */
+        PurgeWebCache();
+
         MergeExternalGuji();
         return WebDir;
+    }
+
+    static void PurgeWebCache()
+    {
+        var names = new[] { "Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "Service Worker" };
+        // WebView2 的实际用户数据在 profile\EBWebView，缓存又在它的 Default 下
+        var roots = new[]
+        {
+            ProfileDir,
+            Path.Combine(ProfileDir, "EBWebView"),
+            Path.Combine(ProfileDir, "EBWebView", "Default"),
+            Path.Combine(ProfileDir, "Default")
+        };
+        foreach (var root in roots)
+        {
+            foreach (var name in names)
+            {
+                var p = Path.Combine(root, name);
+                try { if (Directory.Exists(p)) Directory.Delete(p, true); } catch { }
+            }
+        }
     }
 
     /* 古籍书籍与卦例（约 4.6MB）不进仓库，改为外置：

@@ -277,6 +277,13 @@
     color: var(--ink-light); cursor: pointer; transition: all .2s;
   }
   .lib-del:hover { border-color: var(--cinnabar); color: var(--cinnabar); background: #fbf1ef; }
+  /* 每行的「装入」：一键把该卦例还原成卦象（不依赖双击） */
+  .lib-load {
+    font-family: inherit; font-size: 12px; line-height: 1; padding: 5px 9px;
+    border: 1px solid var(--line); border-radius: 12px; background: #fff;
+    color: var(--ink); cursor: pointer; transition: all .2s; white-space: nowrap;
+  }
+  .lib-load:hover { border-color: var(--gold); background: #fdf8ec; color: var(--cinnabar); }
   /* 结果回执（M16） */
   .oc-badge {
     font-size: 11px; padding: 1px 7px; border-radius: 10px; white-space: nowrap;
@@ -556,6 +563,7 @@
       <button class="btn ghost" id="btnLogin">口令登录</button>
       <span class="muted" id="loginTip" style="align-self:center;font-size:13px">卦例库需口令，浏览与装入均需登录</span>
     </div>
+    <div class="muted" style="font-size:12px;margin-top:6px">点条目看详情；点右侧「装入」把这一卦还原成卦象（双击条目也行）</div>
     <div id="libStats" style="margin-top:10px"></div>
     <div id="libDue" style="margin-top:10px"></div>
     <div id="libList" style="margin-top:12px"></div>
@@ -586,7 +594,7 @@
 <script src="core/guji-lib.js?v=20261110b"></script>
 <script src="core/board.js?v=20261110c"></script>
 <script src="core/toolbar.js?v=20261110c"></script>
-<script src="app.js?v=20261110b"></script>
+<script src="app.js?v=20261111a"></script>
 <script src="bgm.js?v=20261110a"></script>
 </body>
 </html>
