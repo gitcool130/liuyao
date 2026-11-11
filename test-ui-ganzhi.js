@@ -72,6 +72,17 @@ async function launchBrowser() {
   await page.click('#sideRail .tb-btn[data-k="home"]');
   await page.waitForTimeout(350);
   eq('点首页排盘回主页', await page.$eval('#mainView', e => e.hidden), false);
+  await page.waitForTimeout(300);
+  const fit = await page.evaluate(function () {
+    const tops = [].map.call(document.querySelectorAll('#timeCard .btn-row .btn'),
+      function (b) { return Math.round(b.getBoundingClientRect().top); });
+    return {
+      scroll: document.documentElement.scrollHeight, view: window.innerHeight,
+      rows: Array.from(new Set(tops)).length
+    };
+  });
+  ok('首页一屏放得下（无竖向滚动条）', fit.scroll <= fit.view + 2, JSON.stringify(fit));
+  eq('六颗起卦按钮排成一行', fit.rows, 1);
   eq('面板收起', await page.$eval('#toolCard', e => e.hidden), true);
 
   await page.click('#sideRail .tb-btn[data-k="ai"]');
@@ -399,7 +410,7 @@ async function launchBrowser() {
       n: e.children.length, txt: (e.lastElementChild || {}).textContent || ''
     };
   });
-  ok('爻位行高为 40（不折行）', slot.h === 40, JSON.stringify(slot).slice(0, 120));
+  ok('爻位行高固定且不折行', slot.h >= 28 && slot.h <= 44, JSON.stringify(slot).slice(0, 120));
   ok('爻画无字距（不被拆成虚线）', slot.ls === 'normal' || parseFloat(slot.ls) === 0, slot.ls);
   eq('爻位行不换行', slot.ws, 'nowrap');
   eq('爻位行两个片段（名称＋爻画）', slot.n, 2);

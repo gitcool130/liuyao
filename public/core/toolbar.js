@@ -180,6 +180,37 @@
     '#mainView > #analysisCard,#mainView > #aiCard{grid-column:1 / -1}' +
     '#mainView > .card{margin:0}' +
     '}' +
+    /* ---- 紧凑排版：首页一屏放得下（王哥 2026-11-11 要求）----
+     * 原来 .wrap 封死 860px，两栏各只剩 352px，六颗起卦按钮被挤成三行，
+     * 占时卡里空出一大片。这里放宽到 1380、并整体收一档间距。 */
+    /* 右侧留出导航的宽度（原来只给 .wrap 加 padding-right，被下面的 padding 简写覆盖了，
+     * 结果卡片被导航压住——初爻那一行正好藏在按钮底下） */
+    'body.has-rail{padding:0 122px 18px 0}' +
+    'body.has-rail .wrap{max-width:1380px;padding:0 12px}' +
+    'body.has-rail header{padding:14px 0 8px}' +
+    'body.has-rail header h1{font-size:29px;letter-spacing:10px;text-indent:10px}' +
+    'body.has-rail header .sub{font-size:12.5px;letter-spacing:2px;margin-top:3px}' +
+    'body.has-rail header .divider{margin-top:9px}' +
+    'body.has-rail .card{padding:13px 18px;margin-top:10px}' +
+    'body.has-rail .card h2{font-size:17px;margin:0 0 7px}' +
+    'body.has-rail .btn{font-size:13.5px;padding:7px 14px;letter-spacing:1px}' +
+    'body.has-rail .btn-row{gap:8px;margin-top:8px}' +
+    'body.has-rail #timeCard .btn-row{gap:7px;margin-bottom:6px}' +
+    'body.has-rail #timeCard .btn-row .btn{font-size:13px;padding:6px 10px;letter-spacing:0}' +
+    'body.has-rail #timeInfo{font-size:13.5px;line-height:1.55}' +
+    'body.has-rail #timeInfo .gz{font-size:15.5px;margin:2px 0}' +
+    'body.has-rail .date-row{margin-top:8px}' +
+    'body.has-rail .cast-grid{gap:16px}' +
+    'body.has-rail .coin{width:62px;height:62px;font-size:22px}' +
+    'body.has-rail .coin-row{margin:8px 0 4px;gap:14px}' +
+    'body.has-rail .yao-stack{width:172px}' +
+    'body.has-rail .yao-slot{height:31px;margin:3px 0;font-size:18px}' +
+    /* 按卦名起卦那一行：四个控件必须能自动折行，否则一头扎出卡片 */
+    'body.has-rail #castCard .cast-left > .btn-row{flex-wrap:wrap;row-gap:6px}' +
+    'body.has-rail #guaNameInput{width:124px!important}' +
+    'body.has-rail #castQuestion{width:124px!important}' +
+    'body.has-rail #guaDongInput{width:166px!important}' +
+    'body.has-rail .use-select{max-width:100%}' +
     '@media(max-width:820px){#sideRail{top:auto;bottom:10px;right:10px;flex-direction:row;overflow-x:auto;' +
     'max-width:calc(100vw - 20px)}.tb-btn{min-width:auto;font-size:12.5px;padding:8px 10px}' +
     'body.has-rail .wrap{padding-right:0;padding-bottom:64px}}';
