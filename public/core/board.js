@@ -58,7 +58,8 @@
       '<span class="bd-sep"></span>' +
       '<button class="bd-mini" id="bdUndo" title="后退（Ctrl+Z）">后退</button>' +
       '<button class="bd-mini" id="bdRedo" title="前进（Ctrl+Y）">前进</button>' +
-      '<button class="bd-mini" id="bdClear">清空</button>' +
+      '<button class="bd-mini" id="bdClear" title="只清笔迹，保留卦象底图">清空</button>' +
+      '<button class="bd-mini bd-red" id="bdReset" title="笔迹与卦象底图一起清掉">重置</button>' +
       '</div>' +
       '<div class="bd-bar bd-bar2">' +
       '<button class="bd-mini bd-green" id="bdShot" title="Win+Shift+S 截图后点这里（或直接 Ctrl+V）">截屏批注</button>' +
@@ -68,6 +69,12 @@
       '<button class="bd-mini" id="bdCollapse">收起</button>' +
       '<span class="muted" id="bdTip" style="margin-left:6px;font-size:12px"></span>' +
       '</div>' +
+      '<div class="bd-textrow">' +
+      '<textarea id="bdPanText" placeholder="把卦象文本粘到这里（古籍版式、六爻助手复制出来的都行），再点右边「按文本画出」。也可用来改卦再画。"></textarea>' +
+      '<span class="bd-textbtns">' +
+      '<button class="bd-mini bd-green" id="bdDrawText">按文本画出</button>' +
+      '<button class="bd-mini" id="bdCopyText" title="把文本框内容复制走">复制文本</button>' +
+      '</span></div>' +
       '<div class="bd-wrap"><canvas id="bdCanvas"></canvas></div>';
     if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(sec, anchor);
     else document.querySelector('.wrap').appendChild(sec);
@@ -147,10 +154,15 @@
       } else if (st.tool === 'line') {
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       } else if (st.tool === 'arc') {
-        // 圆弧：起点为圆心，拖拽距离为半径，画上半圆
-        const r = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        /* 圆弧：起点为圆心、拖拽距离为半径。默认画右半圆；往左拖画左半圆，
+         * 往上/下拖画上半/下半圆——这样左右都能用，不再只会「向下」。 */
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const r = Math.hypot(dx, dy) || 1;
+        let s0 = -Math.PI / 2;
+        if (Math.abs(dx) >= Math.abs(dy)) s0 = dx >= 0 ? -Math.PI / 2 : Math.PI / 2;   // 右 / 左
+        else s0 = dy >= 0 ? 0 : Math.PI;                                                // 下 / 上
         ctx.beginPath();
-        ctx.arc(a.x, a.y, r, 0, Math.PI, false);
+        ctx.arc(a.x, a.y, r, s0, s0 + Math.PI, false);
         if (st.fill) { ctx.closePath(); ctx.fill(); } else ctx.stroke();
       } else if (st.tool === 'arrow') {
         drawArrow(a, b, w, c);
@@ -259,28 +271,11 @@
       ctx.putImageData(st.fwd.pop(), 0, 0);
       tip('');
     };
-    sec.querySelector('#bdClear').onclick = function () {
-      snap();
-      blank(cv.width / dpr, cv.height / dpr);
-      tip('已清空（可后退找回）');
-    };
+    /* 底图（卦象文本或图片）单独记一份，清空时重新画回来——
+     * 「清空」只清笔迹，不再把卦象一起抹掉（王哥要求）。 */
+    let base = null;   // { type:'text', val:string } | { type:'image', val:Image }
 
-    function drawImageToCanvas(im) {
-      snap();
-      const w = cv.width / dpr, h = cv.height / dpr;
-      const s = Math.min(w / im.width, h / im.height);
-      const dw = im.width * s, dh = im.height * s;
-      blank(w, h);
-      ctx.drawImage(im, (w - dw) / 2, (h - dh) / 2, dw, dh);
-    }
-
-    // 载入卦象：把当前盘面按古籍版式画成底图
-    sec.querySelector('#bdPan').onclick = function () {
-      const txt = (typeof W.__lyPanClassic === 'function') ? W.__lyPanClassic() : '';
-      if (!txt) { tip('先排一张盘，再点「载入卦象」'); return; }
-      snap();
-      const w = cv.width / dpr, h = cv.height / dpr;
-      blank(w, h);
+    function paintTextBlock(txt, w, h) {
       const fs = Math.max(12, Math.min(16, Math.floor(w / 46)));
       const lh = Math.round(fs * 1.75);
       ctx.font = fs + 'px "Noto Serif SC","Source Han Serif SC","SimSun",serif';
@@ -288,7 +283,7 @@
       ctx.fillStyle = '#33302a';
       const x0 = 16;
       let y = 14;
-      txt.split('\n').forEach(function (ln) {
+      String(txt).split('\n').forEach(function (ln) {
         const maxCh = Math.floor((w - x0 * 2) / (fs * 1.02));
         let rest = ln;
         if (Array.from(rest).length <= maxCh) { ctx.fillText(ln, x0, y); y += lh; return; }
@@ -298,7 +293,74 @@
           rest = Array.from(rest).slice(maxCh).join('');
         }
       });
+    }
+
+    function paintBase() {
+      const w = cv.width / dpr, h = cv.height / dpr;
+      blank(w, h);
+      if (!base) return;
+      if (base.type === 'text') { paintTextBlock(base.val, w, h); return; }
+      const im = base.val;
+      const s = Math.min(w / im.width, h / im.height);
+      const dw = im.width * s, dh = im.height * s;
+      ctx.drawImage(im, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    }
+
+    // 清空：只清笔迹，底图重画回来
+    sec.querySelector('#bdClear').onclick = function () {
+      snap();
+      paintBase();
+      tip(base ? '已清笔迹，卦象保留（可后退找回）' : '已清空（可后退找回）');
+    };
+    // 重置：笔迹与卦象底图一起清
+    sec.querySelector('#bdReset').onclick = function () {
+      snap();
+      base = null;
+      const ta = sec.querySelector('#bdPanText'); if (ta) ta.value = '';
+      blank(cv.width / dpr, cv.height / dpr);
+      tip('已全部清空（画与卦象都清了，可后退找回）');
+    };
+
+    function drawImageToCanvas(im) {
+      snap();
+      base = { type: 'image', val: im };
+      paintBase();
+    }
+
+    /* 供外部调用：把一段卦象文本直接画到画板上（卦例库 / 古籍卦例库的「导入画板」） */
+    W.__lyBoardLoadText = function (txt) {
+      if (!txt) { tip('没有可导入的卦象文本'); return false; }
+      const ta = sec.querySelector('#bdPanText'); if (ta) ta.value = txt;
+      snap();
+      base = { type: 'text', val: txt };
+      paintBase();
+      tip('已导入卦象，可直接圈点');
+      return true;
+    };
+
+    // 载入卦象：把当前盘面按古籍版式画成底图
+    sec.querySelector('#bdPan').onclick = function () {
+      const txt = (typeof W.__lyPanClassic === 'function') ? W.__lyPanClassic() : '';
+      if (!txt) { tip('先排一张盘，再点「载入卦象」'); return; }
+      W.__lyBoardLoadText(txt);
       tip('已载入当前卦象，可直接圈点');
+    };
+
+    // 按文本框里的卦象文本画出（支持从别处复制粘贴进来）
+    sec.querySelector('#bdDrawText').onclick = function () {
+      const ta = sec.querySelector('#bdPanText');
+      const txt = (ta && ta.value || '').trim();
+      if (!txt) { tip('先在文本框里粘一段卦象'); return; }
+      W.__lyBoardLoadText(txt);
+    };
+    sec.querySelector('#bdCopyText').onclick = function () {
+      const ta = sec.querySelector('#bdPanText');
+      const txt = ta ? ta.value : '';
+      if (!txt) { tip('文本框是空的'); return; }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(function () { tip('已复制卦象文本'); })
+          .catch(function () { tip('复制失败，请手动选中复制'); });
+      } else { tip('此环境不能写剪贴板，请手动选中复制'); }
     };
 
     // 截屏批注：读剪贴板里的图片（Win+Shift+S 之后再点）
@@ -420,7 +482,13 @@
     '.bd-width input{width:110px}' +
     '.bd-width b{display:inline-block;min-width:18px;text-align:right;color:var(--ink)}' +
     '.bd-bar2{padding-top:2px}' +
-    '.bd-wrap{border:1px solid var(--line);border-radius:8px;background:' + PAPER + ';overflow:hidden;line-height:0}' +
+    '.bd-textrow{display:flex;gap:8px;align-items:stretch;margin-top:8px}' +
+    '#bdPanText{flex:1;min-height:52px;max-height:120px;resize:vertical;font-family:inherit;font-size:12.5px;' +
+    'line-height:1.6;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}' +
+    '.bd-textbtns{display:flex;flex-direction:column;gap:6px;justify-content:center}' +
+    '.bd-mini.bd-red{color:#a5352c;border-color:#e6bdb7}' +
+    '.bd-mini.bd-red:hover{background:#fdf1ef}' +
+    '.bd-wrap{border:1px solid var(--line);border-radius:8px;background:' + PAPER + ';overflow:hidden;line-height:0;margin-top:8px}' +
     '#bdCanvas{touch-action:none;cursor:crosshair;display:block;max-width:100%}';
   document.head.appendChild(css);
 

@@ -68,39 +68,104 @@
 
   /* 全页面阅读：铺满整屏的浮层，Esc 或「关闭」退出。
      与行内阅读共用同一个字号设置。 */
-  function openReader(bookName, title, text) {
+  /* 全页面阅读：左侧目录（默认展开）＋ 正文 ＋ 顶部字号与「干支排盘」。
+   * opts.chapters：整本书的章节（[{no,title,text}]），用于生成目录；
+   * opts.onPick(i)：点目录某一章时由调用方换正文（列表可能还在懒加载）。 */
+  function openReader(bookName, title, text, opts) {
+    opts = opts || {};
     const old = document.getElementById('readerOverlay');
     if (old) old.remove();
+    const chapters = Array.isArray(opts.chapters) ? opts.chapters : [];
+    const curIdx = (typeof opts.index === 'number') ? opts.index : -1;
+    let tocOpen = true;
+
     const ov = document.createElement('div');
     ov.id = 'readerOverlay';
     ov.innerHTML =
       '<div class="rd-top">' +
+      '<button class="rd-toc-btn" id="rdTocBtn" title="显示/隐藏目录">目录</button>' +
       '<span class="rd-title">' + esc(title) + '</span>' +
       '<span class="rd-acts">' +
       '<span class="rd-fs">字号 <button class="rd-fs-btn" data-fs="-1">A−</button>' +
       '<b class="rd-fs-val">' + fontOf() + 'px</b>' +
       '<button class="rd-fs-btn" data-fs="1">A＋</button>' +
       '<button class="rd-fs-btn" data-fs="0">默认</button></span>' +
+      '<button class="rd-gz" id="rdGz" title="收起阅读，回到干支排盘">干支排盘</button>' +
       '<button class="rd-close">关闭（Esc）</button>' +
       '</span></div>' +
+      '<div class="rd-main">' +
+      '<aside class="rd-toc" id="rdToc">' +
+      '<div class="rd-toc-head">目录<span class="muted">' + (chapters.length ? chapters.length + ' 章' : '') + '</span></div>' +
+      '<div class="rd-toc-list" id="rdTocList"></div>' +
+      '</aside>' +
       '<div class="rd-body"><div class="rd-inner">' +
-      '<div class="muted rd-src">《' + esc(bookName.replace(' · 原文', '')) + '》</div>' +
-      '<div class="rd-text"></div></div></div>';
+      '<div class="muted rd-src">《' + esc(String(bookName).replace(' · 原文', '')) + '》</div>' +
+      '<div class="rd-text"></div></div></div>' +
+      '</div>';
     document.body.appendChild(ov);
+
     const body = ov.querySelector('.rd-text');
-    body.textContent = text;
-    body.style.fontSize = fontOf() + 'px';
-    // 按空行切成段，读长文更省眼
-    const ps = String(text).split(/\n+/).filter(function (x) { return x.trim(); });
-    body.innerHTML = ps.map(function (x) { return '<p>' + esc(x) + '</p>'; }).join('');
+    const tocList = ov.querySelector('#rdTocList');
+    const toc = ov.querySelector('#rdToc');
+    const main = ov.querySelector('.rd-main');
+
+    function fillText(t) {
+      body.style.fontSize = fontOf() + 'px';
+      const ps = String(t).split(/\n+/).filter(function (x) { return x.trim(); });
+      body.innerHTML = ps.map(function (x) { return '<p>' + esc(x) + '</p>'; }).join('');
+      const rb = ov.querySelector('.rd-body');
+      if (rb) rb.scrollTop = 0;
+    }
+    function fillToc() {
+      if (!chapters.length) {
+        tocList.innerHTML = '<div class="muted" style="padding:8px 10px">本书没有分章目录</div>';
+        return;
+      }
+      tocList.innerHTML = chapters.map(function (c, i) {
+        const label = (c.no ? c.no + '．' : '') + (c.title || '');
+        return '<button class="rd-toc-item' + (i === curIdx ? ' on' : '') + '" data-i="' + i + '">' +
+          esc(label) + '</button>';
+      }).join('');
+      tocList.querySelectorAll('.rd-toc-item').forEach(function (b) {
+        b.onclick = function () {
+          const i = parseInt(b.getAttribute('data-i'), 10);
+          const c = chapters[i];
+          if (!c) return;
+          tocList.querySelectorAll('.rd-toc-item').forEach(function (x) { x.classList.remove('on'); });
+          b.classList.add('on');
+          ov.querySelector('.rd-title').textContent = (c.no ? c.no + '．' : '') + (c.title || '');
+          fillText(c.text || '');
+          if (typeof opts.onPick === 'function') opts.onPick(i);
+        };
+      });
+      const onEl = tocList.querySelector('.rd-toc-item.on');
+      if (onEl && onEl.scrollIntoView) onEl.scrollIntoView({ block: 'center' });
+    }
+    fillText(text);
+    fillToc();
+
+    function setToc(open) {
+      tocOpen = open;
+      toc.hidden = !open;
+      main.classList.toggle('no-toc', !open);
+    }
+    setToc(true);                                  // 默认开启
+    ov.querySelector('#rdTocBtn').onclick = function () { setToc(!tocOpen); };
 
     ov.querySelectorAll('.rd-fs-btn').forEach(function (b) {
       b.onclick = function () {
         const d = parseInt(b.getAttribute('data-fs'), 10);
-        const v = setFont(d === 0 ? 16 : fontOf() + d);
-        body.style.fontSize = v + 'px';
+        body.style.fontSize = setFont(d === 0 ? 16 : fontOf() + d) + 'px';
       };
     });
+    // 阅读时直接去干支排盘：收起阅读、回首页、切到干支口径
+    ov.querySelector('#rdGz').onclick = function () {
+      close();
+      if (typeof W.__lyGoHome === 'function') W.__lyGoHome();
+      const btn = document.getElementById('btnModeGz');
+      if (btn) setTimeout(function () { btn.click(); }, 60);
+    };
+
     ov.querySelector('.rd-close').onclick = close;
     function onKey(e) { if (e.key === 'Escape') close(); }
     document.addEventListener('keydown', onKey);
@@ -111,7 +176,6 @@
     window.__rdApply = function () { body.style.fontSize = fontOf() + 'px'; };
     return ov;
   }
-
 
   /* ---------- 工具 ---------- */
 
@@ -380,7 +444,11 @@
     bindFontBar(box);
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     document.getElementById('btnGujiFull').onclick = function () {
-      openReader(b.name, (ch.no ? ch.no + '．' : '') + (ch.title || ''), ch.text);
+      const chs = (b.chapters || []);
+      const idx = chs.indexOf(ch);
+      openReader(b.name, (ch.no ? ch.no + '．' : '') + (ch.title || ''), ch.text, {
+        chapters: chs, index: idx
+      });
     };
     document.getElementById('btnGujiClose').onclick = function () { box.hidden = true; };
     document.getElementById('btnGujiCopy').onclick = function () {
@@ -414,6 +482,7 @@
       (c.note ? '<div class="guji-quote">校勘：' + esc(c.note) + '</div>' : '') +
       '<div class="btn-row" style="margin-top:10px">' +
       '<button class="btn primary" id="btnGujiLoad"' + (c.toss ? '' : ' disabled') + '>装入排盘</button>' +
+      '<button class="btn ghost" id="btnGujiBoard"' + (c.toss ? '' : ' disabled') + ' title="把这一卦画到画板上圈点">导入画板</button>' +
       '<button class="btn ghost" id="btnGujiCopy">复制原文</button>' +
       '<button class="btn ghost" id="btnGujiClose">收起</button>' +
       (c.monthZhi == null ? '<span class="muted" style="margin-left:8px">本例未记月建，装入后请自行补选</span>' : '') +
@@ -422,11 +491,44 @@
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
     document.getElementById('btnGujiClose').onclick = function () { box.hidden = true; };
+    /* 月建在数据里是「戌」这种单字地支、日辰是「丁亥」干支——原来直接把
+     * 字符串塞给 __lyLoadGujiCase（它只认 number），于是月建日辰根本没进去，
+     * 装出来的盘是「今天的月日」，看着就像「点了没反应」。这里统一换算成序号。 */
+    const ZHI_STR = '子丑寅卯辰巳午未申酉戌亥';
+    function caseMonthIdx(x) {
+      if (typeof x === 'number') return x;
+      const s = String(x || '');
+      for (let i = 0; i < s.length; i++) if (ZHI_STR.indexOf(s.charAt(i)) >= 0) return ZHI_STR.indexOf(s.charAt(i));
+      return null;
+    }
+    function caseDayIdx(x) {
+      if (typeof x === 'number') return x;
+      const s = String(x || '').replace(/日$/, '');
+      if (s.length < 2) return null;
+      const g = '甲乙丙丁戊己庚辛壬癸'.indexOf(s.charAt(0));
+      const z = ZHI_STR.indexOf(s.charAt(1));
+      if (g < 0 || z < 0) return null;
+      for (let i = 0; i < 60; i++) if (i % 10 === g && i % 12 === z) return i;
+      return null;
+    }
+
     const loadBtn = document.getElementById('btnGujiLoad');
     if (loadBtn) loadBtn.onclick = function () {
       if (typeof W.__lyLoadGujiCase !== 'function') { alert('排盘模块未就绪'); return; }
-      W.__lyLoadGujiCase({ monthZhi: c.monthZhi, dayIdx: c.dayIdx, toss: c.toss });
+      W.__lyLoadGujiCase({
+        monthZhi: caseMonthIdx(c.monthZhi),
+        dayIdx: caseDayIdx(c.dayGZ),
+        toss: c.toss
+      });
       box.hidden = true;
+    };
+
+    const boardBtn = document.getElementById('btnGujiBoard');
+    if (boardBtn) boardBtn.onclick = function () {
+      const txt = (typeof W.__lyClassicFromCase === 'function') ? W.__lyClassicFromCase(c) : '';
+      if (!txt) { alert('这一例没有可还原的六爻'); return; }
+      if (typeof W.__lyOpenPane === 'function') W.__lyOpenPane('board');
+      if (typeof W.__lyBoardLoadText === 'function') W.__lyBoardLoadText(txt);
     };
     document.getElementById('btnGujiCopy').onclick = function () {
       const txt = [c.title, c.book + ' ' + (c.chapter || ''), gz, c.benGua, raw ? c.raw6.join('\n') : '', c.quote, c.conclusion]
@@ -508,6 +610,92 @@
     };
   }
 
+  /* ---------- 我的卦例库：导出 / 导入 / 清空 ----------
+   * 自建书籍与卦例只存在 localStorage（ly_guji_user_v1），换电脑、清缓存都会丢。
+   * 这里给一组 JSON 导入导出，格式与「卦例库」的备份一致，便于一起搬。 */
+  function userCountText() {
+    const u = loadUser();
+    const books = u.books || [];
+    const cases = books.reduce(function (n, b) { return n + (b.cases || []).length; }, 0);
+    return books.length ? ('共 ' + books.length + ' 本、' + cases + ' 条') : '还没有自建内容';
+  }
+
+  function bindUserBackup() {
+    const cnt = document.getElementById('gujiUserCount');
+    const paint = function () { if (cnt) cnt.textContent = userCountText(); };
+    paint();
+
+    const exp = document.getElementById('btnGujiExport');
+    if (exp) exp.onclick = function () {
+      const u = loadUser();
+      if (!u.books || !u.books.length) { alert('还没有自建的书籍或卦例。'); return; }
+      const d = new Date();
+      const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+      const name = '古籍自建-' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '.json';
+      const blob = new Blob([JSON.stringify(u, null, 1)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+    };
+
+    const imp = document.getElementById('btnGujiImport');
+    const file = document.getElementById('gujiUserFile');
+    if (imp && file) {
+      imp.onclick = function () { file.value = ''; file.click(); };
+      file.onchange = function () {
+        const f = file.files && file.files[0];
+        if (!f) return;
+        const fr = new FileReader();
+        fr.onload = function () {
+          let data;
+          try { data = JSON.parse(String(fr.result)); } catch (e) { alert('这个文件不是有效的 JSON'); return; }
+          if (!data || !Array.isArray(data.books)) { alert('文件里没有 books 列表，可能不是本程序导出的。'); return; }
+          const cur = loadUser();
+          let addedBooks = 0, addedCases = 0, skipped = 0;
+          data.books.forEach(function (nb) {
+            const name = nb && nb.name;
+            if (!name) return;
+            let target = cur.books.filter(function (b) { return b.name === name; })[0];
+            if (!target) { target = { name: name, cases: [] }; cur.books.push(target); addedBooks++; }
+            target.cases = target.cases || [];
+            const ids = {};
+            target.cases.forEach(function (c) { if (c && c.id) ids[c.id] = 1; });
+            (nb.cases || []).forEach(function (c) {
+              if (!c) return;
+              // 同 id 或同标题+六爻，视为重复，跳过
+              const dup = (c.id && ids[c.id]) || target.cases.some(function (x) {
+                return x && x.title === c.title && String(x.toss) === String(c.toss);
+              });
+              if (dup) { skipped++; return; }
+              target.cases.push(c);
+              if (c.id) ids[c.id] = 1;
+              addedCases++;
+            });
+          });
+          if (!saveUser(cur)) return;
+          paint();
+          loadManifest().then(function () {
+            renderBookSelect(); renderBookTools(); renderList();
+            alert('导入完成：新增 ' + addedBooks + ' 本、' + addedCases + ' 条' + (skipped ? '（跳过重复 ' + skipped + ' 条）' : ''));
+          });
+        };
+        fr.readAsText(f, 'utf-8');
+      };
+    }
+
+    const wipe = document.getElementById('btnGujiWipe');
+    if (wipe) wipe.onclick = function () {
+      const u = loadUser();
+      if (!u.books || !u.books.length) { alert('没有自建内容可清。'); return; }
+      if (!confirm('清空所有自建书籍与卦例？不可恢复（建议先导出备份）。')) return;
+      if (!saveUser({ books: [] })) return;
+      paint();
+      loadManifest().then(function () { renderBookSelect(); renderBookTools(); renderList(); });
+    };
+  }
+
   function newBook() {
     const name = prompt('新建书籍，输入书名（如：火珠林、易隐）：');
     if (!name) return;
@@ -561,7 +749,15 @@
       '<div id="gujiList" class="guji-list"><div class="muted">载入中…</div></div>' +
       '<div class="btn-row" id="gujiMoreRow" hidden><button class="btn" id="btnGujiMore">加载更多</button></div>' +
       '<div id="gujiDetail" class="guji-detail" hidden></div>' +
-      '<div id="gujiAdd" class="guji-add" hidden></div>';
+      '<div id="gujiAdd" class="guji-add" hidden></div>' +
+      '<div class="guji-backup">' +
+      '<span class="muted">我的卦例库（自建书籍与卦例，存本机）：</span>' +
+      '<button class="btn ghost" id="btnGujiExport">导出</button>' +
+      '<button class="btn ghost" id="btnGujiImport">导入</button>' +
+      '<button class="btn ghost" id="btnGujiWipe">清空我的</button>' +
+      '<span class="muted" id="gujiUserCount"></span>' +
+      '<input type="file" id="gujiUserFile" accept=".json,application/json" hidden>' +
+      '</div>';
     if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(sec, anchor);
     else document.querySelector('.wrap').appendChild(sec);
 
@@ -579,6 +775,7 @@
     document.getElementById('btnGujiNewBook').onclick = newBook;
     document.getElementById('btnGujiNewCase').onclick = openAddForm;
     document.getElementById('btnGujiMore').onclick = function () { state.shown += PAGE; renderList(); };
+    bindUserBackup();
 
     loadManifest().then(function () {
       renderBookSelect(); renderBookTools(); renderList();
@@ -592,6 +789,7 @@
     '.guji-bar select,.guji-bar input{font-family:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}' +
     '.guji-bar input{flex:1;min-width:150px}' +
     '.guji-tools{margin-top:8px;font-size:12px}' +
+    '.guji-backup{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px}' +
     '.guji-list{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:#fff}' +
     '.guji-item{padding:7px 10px;border-bottom:1px solid #f0eade;cursor:pointer}' +
     '.guji-item:hover{background:#fbf6ea}' +
@@ -615,7 +813,18 @@
     '.rd-acts{display:flex;align-items:center;gap:12px}' +
     '.rd-fs{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-light)}' +
     '.rd-close{font-family:inherit;font-size:13px;padding:5px 12px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink);cursor:pointer}' +
-    '.rd-body{flex:1;overflow:auto;padding:20px 0 60px}' +
+    '.rd-main{flex:1;display:flex;min-height:0}' +
+    '.rd-toc{width:250px;flex:0 0 auto;border-right:1px solid var(--line);background:#fffdf8;display:flex;flex-direction:column;min-height:0}' +
+    '.rd-toc-head{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;color:var(--ink)}' +
+    '.rd-toc-list{flex:1;overflow:auto;padding:6px}' +
+    '.rd-toc-item{display:block;width:100%;text-align:left;font-family:inherit;font-size:13px;line-height:1.5;' +
+    'padding:7px 9px;border:0;border-radius:6px;background:transparent;color:var(--ink);cursor:pointer}' +
+    '.rd-toc-item:hover{background:#f8f1e2}' +
+    '.rd-toc-item.on{background:var(--cinnabar);color:#fff}' +
+    '.rd-toc-btn,.rd-gz{font-family:inherit;font-size:12.5px;padding:5px 11px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink);cursor:pointer}' +
+    '.rd-gz{border-color:var(--cinnabar);color:var(--cinnabar)}' +
+    '.rd-gz:hover{background:#fdf1ef}' +
+    '.rd-body{flex:1;overflow:auto;padding:20px 0 60px;min-width:0}' +
     '.rd-inner{max-width:820px;margin:0 auto;padding:0 24px}' +
     '.rd-src{font-size:12px;margin-bottom:8px}' +
     '.rd-text{font-size:16px;line-height:2.05;color:var(--ink)}' +

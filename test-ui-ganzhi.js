@@ -53,29 +53,102 @@ async function launchBrowser() {
   ok('AI 接口设置卡片已挂载', await page.$('#localApiCard') !== null);
   ok('设置卡片有 3 个接口槽', (await page.$$('#localApiCard .local-api-row')).length === 3);
 
-  /* ---------- A2. 工具栏：四块收成一行按钮 ---------- */
-  say('A2. 工具栏');
-  const tbLabels = await page.$$eval('#toolCard .tb-btn', e => e.map(x => x.textContent.trim()));
-  eq('五个按钮', tbLabels, ['古籍卦例库', 'AI 接口设置', '大模型断卦', '卦例库', '画板']);
-  eq('默认全收起', await page.$eval('#toolBody', e => e.hidden), true);
+  /* ---------- A2. 右侧竖排导航 + 单页切换 ---------- */
+  say('A2. 右侧导航');
+  const tbLabels = await page.$$eval('#sideRail .tb-btn', e => e.map(x => x.textContent.trim()));
+  eq('六个按钮（首页排盘在最上）', tbLabels,
+    ['首页排盘', '古籍卦例', '个人卦例', '画板涂鸦', '模型试断', '接口设置']);
+  eq('默认看首页', await page.$eval('#toolCard', e => e.hidden), true);
+  eq('主页可见', await page.$eval('#mainView', e => e.hidden), false);
 
-  await page.click('#toolCard .tb-btn[data-k="api"]');
-  await page.waitForTimeout(300);
-  eq('点开后展开', await page.$eval('#toolBody', e => e.hidden), false);
+  await page.click('#sideRail .tb-btn[data-k="api"]');
+  await page.waitForTimeout(350);
+  eq('面板容器出现', await page.$eval('#toolCard', e => e.hidden), false);
+  eq('主页收起（只显示相关页）', await page.$eval('#mainView', e => e.hidden), true);
   eq('只显示被点的那块',
     await page.$$eval('#toolBody .tb-pane', e => e.filter(x => !x.hidden).map(x => x.getAttribute('data-k'))), ['api']);
-  ok('AI 设置卡片已搬进面板', await page.$('#toolBody .tb-pane[data-k="api"] #localApiCard') !== null);
+  ok('接口设置卡片已搬进面板', await page.$('#toolBody .tb-pane[data-k="api"] #localApiCard') !== null);
 
-  await page.click('#toolCard .tb-btn[data-k="api"]');
-  await page.waitForTimeout(300);
-  eq('再点收起', await page.$eval('#toolBody', e => e.hidden), true);
+  await page.click('#sideRail .tb-btn[data-k="home"]');
+  await page.waitForTimeout(350);
+  eq('点首页排盘回主页', await page.$eval('#mainView', e => e.hidden), false);
+  eq('面板收起', await page.$eval('#toolCard', e => e.hidden), true);
 
-  await page.click('#toolCard .tb-btn[data-k="ai"]');
+  await page.click('#sideRail .tb-btn[data-k="ai"]');
   await page.waitForTimeout(300);
   eq('排盘前断卦面板给提示', await page.$eval('.tb-pane[data-k="ai"]', e => e.getAttribute('data-empty')), '1');
 
+  // 自建书籍/卦例的备份入口（存在 ly_guji_user_v1，换机必丢）
+  await page.click('#sideRail .tb-btn[data-k="guji"]');
+  await page.waitForTimeout(500);
+  ok('古籍面板有「导出」', await page.$('#btnGujiExport') !== null);
+  ok('古籍面板有「导入」', await page.$('#btnGujiImport') !== null);
+  ok('古籍面板有「清空我的」', await page.$('#btnGujiWipe') !== null);
+  ok('有隐藏的文件选择框', await page.$('#gujiUserFile') !== null);
+  ok('显示自建内容计数', /自建|共 \d+ 本|还没有/.test(await page.$eval('#gujiUserCount', e => e.textContent)),
+    await page.$eval('#gujiUserCount', e => e.textContent));
+  await page.click('#sideRail .tb-btn[data-k="home"]');
+  await page.waitForTimeout(300);
+
+  /* ---------- A3. 数字卦 / 报数卦 / 时间卦 / 电脑卦 ---------- */
+  say('A3. 四种起卦');
+  await page.click('#sideRail .tb-btn[data-k="home"]');
+  await page.waitForTimeout(300);
+  const modeBtns = await page.$$eval('#timeCard .btn-row .btn', e => e.map(x => x.textContent.trim()));
+  eq('占时区六种口径', modeBtns, ['公历时刻', '干支排盘', '数字卦', '报数卦', '时间卦', '电脑卦']);
+
+  // 数字卦：7 与 11 → 上艮下离 = 山火贲，18 除 6 尽 → 6 爻动 → 之 地火明夷
+  await page.click('#btnModeNum');
+  await page.waitForTimeout(300);
+  eq('数字卦卡出现', await page.$eval('#cast4Card', e => e.hidden), false);
+  eq('摇卦卡收起', await page.$eval('#castCard', e => e.hidden), true);
+  await page.fill('#c4a', '7');
+  await page.fill('#c4b', '11');
+  await page.click('#c4Go');
+  await page.waitForTimeout(900);
+  let c4 = await page.$eval('#c4Out', e => e.innerText);
+  ok('数字卦算对上艮下离·6爻动', /上卦 艮/.test(c4) && /下卦 离/.test(c4) && /第 6 爻动/.test(c4), c4.replace(/\n/g, ' | '));
+  ok('数字卦排出山火贲之地火明夷', /山火贲/.test(c4) && /地火明夷/.test(c4), c4.replace(/\n/g, ' | '));
+  eq('数字卦出了盘面', await page.$eval('#panCard', e => e.hidden), false);
+
+  // 报数卦：3 8 5 → 上离下坤 = 火地晋，5 爻动
+  await page.click('#btnModeBao');
+  await page.waitForTimeout(300);
+  await page.fill('#c4nums', '3 8 5');
+  await page.click('#c4Go');
+  await page.waitForTimeout(900);
+  c4 = await page.$eval('#c4Out', e => e.innerText);
+  ok('报数卦算对上离下坤·5爻动', /上卦 离/.test(c4) && /下卦 坤/.test(c4) && /第 5 爻动/.test(c4), c4.replace(/\n/g, ' | '));
+
+  // 时间卦：按此刻四柱地支
+  await page.click('#btnModeTime');
+  await page.waitForTimeout(300);
+  const timeTip = await page.$eval('#c4Body .c4-tip', e => e.innerText);
+  ok('时间卦给出四数算式', /年 \d+、月 \d+、日 \d+、时 \d+/.test(timeTip), timeTip.split('\n')[0]);
+  await page.click('#c4Go');
+  await page.waitForTimeout(900);
+  ok('时间卦出了盘面', await page.$eval('#panCard', e => e.hidden) === false);
+  const tOne = await page.$eval('#classicText', e => (e.textContent || '').split('\n')[1] || '');
+  ok('时间卦的盘有宫名', /宫：/.test(tOne), tOne);
+
+  // 电脑卦：随机，两次不同
+  await page.click('#btnModeRand');
+  await page.waitForTimeout(300);
+  await page.click('#c4Go');
+  await page.waitForTimeout(700);
+  const r1 = await page.$eval('#classicText', e => (e.textContent || '').split('\n')[1] || '');
+  await page.click('#c4Go');
+  await page.waitForTimeout(700);
+  const r2 = await page.$eval('#classicText', e => (e.textContent || '').split('\n')[1] || '');
+  ok('电脑卦两次结果不同（真随机）', r1 !== r2, r1 + ' vs ' + r2);
+  ok('电脑卦出了盘面', await page.$eval('#panCard', e => e.hidden) === false);
+
+  // 回公历口径，后面的干支用例不受影响
+  await page.click('#btnModeDate');
+  await page.waitForTimeout(300);
+
   // 画板：canvas 就绪、能画一笔、撤销可用
-  await page.click('#toolCard .tb-btn[data-k="board"]');
+  await page.click('#sideRail .tb-btn[data-k="board"]');
   await page.waitForTimeout(500);
   eq('画板面板展开', await page.$eval('.tb-pane[data-k="board"]', e => e.hidden), false);
   const cvBox = await page.$eval('#bdCanvas', e => ({ w: e.width, h: e.height }));
@@ -126,7 +199,44 @@ async function launchBrowser() {
     return n;
   });
   ok('前进把笔迹还原', afterRedo >= inked, afterRedo + ' >= ' + inked);
-  await page.click('#toolCard .tb-btn[data-k="board"]');
+
+  /* 文本卦象：粘一段进来直接画（古籍版式/别处复制都行） */
+  await page.fill('#bdPanText', '干支： 戌月  丁亥日\n艮宫：山天大畜 之 山火贲\n六神 伏 神 【本 卦】');
+  await page.click('#bdDrawText');
+  await page.waitForTimeout(400);
+  const txtInk = await page.evaluate(function () {
+    const cv = document.getElementById('bdCanvas');
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) { if (d[i] !== 255 || d[i + 1] !== 253 || d[i + 2] !== 248) n++; }
+    return n;
+  });
+  ok('文本卦象画到画布上', txtInk > 1000, 'ink=' + txtInk);
+
+  /* 清空只清笔迹、卦象留着；重置才全清 */
+  await page.click('#bdClear');
+  await page.waitForTimeout(350);
+  const clearedInk = await page.evaluate(function () {
+    const cv = document.getElementById('bdCanvas');
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) { if (d[i] !== 255 || d[i + 1] !== 253 || d[i + 2] !== 248) n++; }
+    return n;
+  });
+  ok('清空后卦象仍在（只清笔迹）', clearedInk > 500, 'ink=' + clearedInk);
+  await page.click('#bdReset');
+  await page.waitForTimeout(350);
+  const resetInk = await page.evaluate(function () {
+    const cv = document.getElementById('bdCanvas');
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) { if (d[i] !== 255 || d[i + 1] !== 253 || d[i + 2] !== 248) n++; }
+    return n;
+  });
+  eq('重置把画与卦象都清掉', resetInk, 0);
+  eq('重置同时清空文本框', await page.$eval('#bdPanText', e => e.value), '');
+
+  await page.click('#sideRail .tb-btn[data-k="home"]');   // 回首页再动主页面
 
   /* ---------- B. 干支排盘界面（本卦/变卦/占问 + 年月建日辰时辰） ---------- */
   say('B. 干支排盘界面');
@@ -235,7 +345,7 @@ async function launchBrowser() {
   });
   ok('造了一条卦例', !!madeId, String(madeId));
 
-  await page.$eval('#toolCard .tb-btn[data-k="lib"]', el => el.click());
+  await page.$eval('#sideRail .tb-btn[data-k="lib"]', el => el.click());
   await page.waitForTimeout(400);
   await page.$eval('#btnLib', el => el.click());
   await page.waitForSelector('#libList .lib-item[data-id]', { timeout: 6000 }).catch(function () { });
@@ -249,7 +359,9 @@ async function launchBrowser() {
       document.getElementById('classicText').textContent = '';
     });
     await page.dblclick('#libList .lib-item[data-id]');
-    await page.waitForTimeout(1300);
+    await page.waitForTimeout(900);
+    await page.click('#sideRail .tb-btn[data-k="home"]');   // 回首页才看得到结果卡
+    await page.waitForTimeout(500);
     eq('双击后结果卡重新出现', await page.$eval('#panCard', e => e.hidden), false);
     const rsText = await page.$eval('#classicText', e => e.textContent);
     ok('还原出的盘面有干支', /干支：/.test(rsText), (rsText.split('\n')[0] || '').slice(0, 40));
@@ -258,17 +370,22 @@ async function launchBrowser() {
     /* 「装入」按钮：单击即可，不依赖双击（WebView2 里双击事件不可靠；
        王哥实测双击没反应——入口必须有单击路径） */
     ok('每行有「装入」按钮', await page.$('#libList .lib-item[data-id] .lib-load') !== null);
+    await page.click('#sideRail .tb-btn[data-k="lib"]');   // 回个人卦例面板再点
+    await page.waitForTimeout(400);
     await page.evaluate(function () {
       document.getElementById('panCard').hidden = true;
       document.getElementById('classicText').textContent = '';
       const m = document.getElementById('libRestoreMsg'); if (m) m.textContent = '';
     });
     await page.click('#libList .lib-item[data-id] .lib-load');
-    await page.waitForTimeout(1300);
+    await page.waitForTimeout(900);
+    // 页内回执条在面板里，先记下来再回首页
+    const msg = await page.$eval('#libRestoreMsg', e => e.textContent).catch(() => '');
+    await page.click('#sideRail .tb-btn[data-k="home"]');
+    await page.waitForTimeout(500);
     eq('点「装入」结果卡出现', await page.$eval('#panCard', e => e.hidden), false);
     const btnText = await page.$eval('#classicText', e => e.textContent);
     ok('点「装入」也是那一卦', /乾为天/.test(btnText) && /天风姤/.test(btnText), (btnText.split('\n')[1] || ''));
-    const msg = await page.$eval('#libRestoreMsg', e => e.textContent).catch(() => '');
     ok('页内给出还原回执（不再靠 alert）', /已还原/.test(msg), msg);
   }
 
@@ -360,7 +477,7 @@ async function launchBrowser() {
 
   /* ---------- D3. 画板载入卦象 ---------- */
   say('D3. 画板载入卦象');
-  await page.click('#toolCard .tb-btn[data-k="board"]');
+  await page.click('#sideRail .tb-btn[data-k="board"]');
   await page.waitForTimeout(400);
   await page.evaluate(function () {
     const cv = document.getElementById('bdCanvas');
@@ -379,7 +496,7 @@ async function launchBrowser() {
 
   /* ---------- E2. 公历口径也默认「古籍版式」+ 收起卦象表格 ---------- */
   say('E2. 公历口径的默认版式');
-  await page.click('#toolCard .tb-btn[data-k="board"]');   // 收起画板
+  await page.click('#sideRail .tb-btn[data-k="home"]');   // 回首页
   // 用程序化 click：模式按钮在卡片里，可能被滚动位置/浮层挡住导致真实点击落空
   await page.$eval('#btnModeDate', el => el.click());
   await page.waitForTimeout(400);
@@ -398,7 +515,7 @@ async function launchBrowser() {
   /* ---------- E. 古籍卦例库 → 装入排盘 ---------- */
   say('E. 古籍卦例库');
   ok('古籍卡片已挂载', await page.$('#gujiCard') !== null);
-  await page.click('#toolCard .tb-btn[data-k="guji"]');
+  await page.click('#sideRail .tb-btn[data-k="guji"]');
   await page.waitForTimeout(600);
   eq('古籍面板已展开', await page.$eval('.tb-pane[data-k="guji"]', e => e.hidden), false);
   const bookCount = (await page.$$eval('#gujiBook option', e => e.length));
@@ -434,8 +551,12 @@ async function launchBrowser() {
 
   await page.click('#btnGujiLoad');
   await page.waitForTimeout(800);
+  await page.click('#sideRail .tb-btn[data-k="home"]');   // 装入后会自动回首页，显式点一次更稳
+  await page.waitForTimeout(400);
   const afterLoad = await page.$eval('#gzPreview', e => e.innerText);
-  ok('装入后干支页刷新出卦名', /本卦/.test(afterLoad), afterLoad.replace(/\n/g, ' | ').slice(0, 100));
+  ok('装入后干支页刷新出卦名', /宫：/.test(afterLoad), afterLoad.replace(/\n/g, ' | ').slice(0, 100));
+  ok('装入后月建日辰用的是本例的（午月 甲子日）', /午月/.test(afterLoad) && /甲子日/.test(afterLoad),
+    afterLoad.split('\n')[0]);
   eq('装入后切到干支模式', await page.$eval('#gzCard', e => e.hidden), false);
 
   /* ---------- F. 古籍全文阅读 ---------- */
@@ -444,6 +565,8 @@ async function launchBrowser() {
   const textBook = textOpts.find(t => t.indexOf('原文') >= 0 && t.indexOf('章') >= 0);
   ok('存在全文类书籍', !!textBook, textOpts.join(' / ').slice(0, 160));
   if (textBook) {
+    await page.click('#sideRail .tb-btn[data-k="guji"]');   // 回古籍面板
+    await page.waitForTimeout(400);
     await page.selectOption('#gujiBook', { label: textBook });
     await page.waitForTimeout(1500);
     const chs = await page.$$('#gujiList .guji-item');
@@ -479,6 +602,19 @@ async function launchBrowser() {
     await page.waitForTimeout(200);
     const rdFs = await page.$eval('#readerOverlay .rd-text', e => parseFloat(getComputedStyle(e).fontSize));
     ok('浮层内也能改字号', rdFs < fs1, fs1 + ' → ' + rdFs);
+    // 目录：默认展开、有章节、点章节能换正文
+    eq('目录默认展开', await page.$eval('#readerOverlay #rdToc', e => e.hidden), false);
+    const tocN = await page.$$eval('#readerOverlay .rd-toc-item', e => e.length);
+    ok('目录里有章节', tocN > 1, 'toc=' + tocN);
+    const firstTitle = await page.$eval('#readerOverlay .rd-title', e => e.textContent);
+    await page.$eval('#readerOverlay .rd-toc-item:nth-child(5)', el => el.click());
+    await page.waitForTimeout(400);
+    const secondTitle = await page.$eval('#readerOverlay .rd-title', e => e.textContent);
+    ok('点目录换章', secondTitle !== firstTitle, firstTitle + ' → ' + secondTitle);
+    ok('阅读器有「干支排盘」按钮', await page.$('#readerOverlay #rdGz') !== null);
+    await page.click('#readerOverlay #rdTocBtn');
+    await page.waitForTimeout(250);
+    eq('目录可收起', await page.$eval('#readerOverlay #rdToc', e => e.hidden), true);
     await page.click('#readerOverlay .rd-close');
     await page.waitForTimeout(300);
     ok('关闭后浮层消失', await page.$('#readerOverlay') === null);

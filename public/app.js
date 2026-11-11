@@ -375,14 +375,25 @@
       '<div class="muted">月建 <b class="gz-hi">' + C.ZHI[pil.monthZhi] + '</b> ｜ 日辰 <b class="gz-hi">' + C.ZHI[pil.dayZhi] + '</b> ｜ 旬空 <b class="kong">' + pil.kongStr + '</b></div>';
   }
 
+  const CAST4_MODES = ['num', 'bao', 'time', 'rand'];
+  const CAST4_LABEL = { num: '数字卦', bao: '报数卦', time: '时间卦', rand: '电脑卦' };
+
   function setCastMode(mode) {
-    castMode = (mode === 'ganzhi') ? 'ganzhi' : 'date';
+    const m = String(mode || 'date');
+    const isC4 = CAST4_MODES.indexOf(m) >= 0;
+    castMode = isC4 ? m : (m === 'ganzhi' ? 'ganzhi' : 'date');
     const isGz = castMode === 'ganzhi';
     $('#gzCard').hidden = !isGz;
-    $('#castCard').hidden = isGz;
-    $('#dateRow').hidden = isGz;
-    $('#btnModeDate').className = 'btn ' + (isGz ? 'ghost' : 'primary');
+    $('#cast4Card').hidden = !isC4;
+    // 数字/报数/时间/电脑卦有自己的输入，摇卦卡与占时行都收起来
+    $('#castCard').hidden = isGz || isC4;
+    $('#dateRow').hidden = isGz || isC4;
+    $('#btnModeDate').className = 'btn ' + (castMode === 'date' ? 'primary' : 'ghost');
     $('#btnModeGz').className = 'btn ' + (isGz ? 'primary' : 'ghost');
+    $('#btnModeNum').className = 'btn ' + (castMode === 'num' ? 'primary' : 'ghost');
+    $('#btnModeBao').className = 'btn ' + (castMode === 'bao' ? 'primary' : 'ghost');
+    $('#btnModeTime').className = 'btn ' + (castMode === 'time' ? 'primary' : 'ghost');
+    $('#btnModeRand').className = 'btn ' + (castMode === 'rand' ? 'primary' : 'ghost');
     // 切口径即作废当前盘：两种占时口径的盘不能混着看
     records = []; pan = null; lastBullets = []; lastAnalysis = null;
     resetTossState();
@@ -394,6 +405,12 @@
     const st = $('#saveTip'); if (st) { st.hidden = true; st.textContent = ''; }
     const shh = $('#shareHint'); if (shh) shh.innerHTML = '';
     if (isGz) { gzRefresh(); }
+    if (isC4) {
+      // 这四种卦法最终都落到「六爻爻值 + 此刻四柱」，所以先把时刻定在此刻
+      if (timeMode !== 'live') { timeMode = 'live'; }
+      selectedDate = beijingNow();
+      renderCast4();
+    }
     renderTime(); renderCoins(); renderTossHint(); renderStack();
   }
 
@@ -641,6 +658,10 @@
   // ---------- 干支排盘交互 ----------
   $('#btnModeDate').onclick = function () { setCastMode('date'); };
   $('#btnModeGz').onclick = function () { setCastMode('ganzhi'); };
+  $('#btnModeNum').onclick = function () { setCastMode('num'); };
+  $('#btnModeBao').onclick = function () { setCastMode('bao'); };
+  $('#btnModeTime').onclick = function () { setCastMode('time'); };
+  $('#btnModeRand').onclick = function () { setCastMode('rand'); };
 
   // 四柱下拉：改了就刷新摘要（六爻由本卦/变卦决定，不受四柱影响）
   ['gzYear', 'gzMonth', 'gzDay', 'gzHour'].forEach(function (id) {
@@ -693,8 +714,23 @@
   window.__lyLoadGujiCase = function (c) {
     if (!c) return;
     setCastMode('ganzhi');
+    /* 月建可能是「戌」、日辰可能是「丁亥」这种文本（古籍数据就是这样），
+     * 原来只认 number，结果月日全部落空——装出来的盘是今天的月日。 */
+    const ZS = '子丑寅卯辰巳午未申酉戌亥';
     if (typeof c.monthZhi === 'number') gzState.monthZhi = c.monthZhi;
+    else if (c.monthZhi) {
+      const t = String(c.monthZhi);
+      for (let i = 0; i < t.length; i++) {
+        const k = ZS.indexOf(t.charAt(i));
+        if (k >= 0) { gzState.monthZhi = k; break; }
+      }
+    }
     if (typeof c.dayIdx === 'number') gzState.dayIdx = c.dayIdx;
+    else if (c.dayGZ) {
+      const t = String(c.dayGZ).replace(/日$/, '');
+      const di = (t.length >= 2) ? gzIndexOfGZ(t.slice(0, 2)) : null;
+      if (di != null) gzState.dayIdx = di;
+    }
     let ok = false;
     if (c.benGua && gzBitsFromName(c.benGua)) {
       ok = gzApplyNames(c.benGua, c.bianGua);
@@ -897,6 +933,155 @@
     const coins = [];
     for (let i = 0; i < 3; i++) coins.push(i < backs ? '背' : '字');
     return coins;
+  }
+
+  /* ============================================================
+   * 数字卦 / 报数卦 / 时间卦 / 电脑卦
+   *
+   * 四法殊途同归：先得「上卦 + 下卦 + 动爻」，再落成六爻爻值
+   * （动爻取老阳 9 / 老阴 6），四柱取此刻——与摇卦走同一个出口，
+   * 所以后面排盘、断卦、入库、画板全都自动通用。
+   * 先天数：乾1 兑2 离3 震4 巽5 坎6 艮7 坤8（除8取余，余0作8）。
+   * ============================================================ */
+  const XIANTIAN = ['乾', '兑', '离', '震', '巽', '坎', '艮', '坤'];
+
+  function trigramByNum(n) {
+    if (!isFinite(n)) throw new Error('取卦数字无效（' + n + '）');
+    let i = ((Math.round(n) % 8) + 8) % 8;
+    if (i === 0) i = 8;                 // 余 0 作 8 = 坤
+    return XIANTIAN[i - 1];
+  }
+  function bitsOfUpLo(upName, loName) {
+    return C.TRIG[loName].bits.concat(C.TRIG[upName].bits);   // 自下而上 初..上
+  }
+  function valsFromGua(upName, loName, moving) {              // moving: 1..6
+    return bitsOfUpLo(upName, loName).map(function (b, i) {
+      const mv = (i + 1) === moving;
+      return b ? (mv ? 9 : 1) : (mv ? 6 : 0);
+    });
+  }
+
+  // 爻值 → 落库并排盘（与摇卦、按卦名起卦同一套出口）
+  function applyCast4(vals, label) {
+    records = vals.map(function (v) {
+      return {
+        coins: coinsFromVal(v),
+        backs: v === 9 ? 3 : v === 1 ? 1 : (v === 0 ? 2 : 0),
+        val: v, mode: 'cast4'
+      };
+    });
+    resetTossState();
+    if (!timeLocked) { selectedDate = beijingNow(); timeLocked = true; lockedDate = selectedDate; }
+    applyQuestionText($('#c4Question') ? $('#c4Question').value : '');
+    computePan();
+    renderTime(); renderCoins(); renderTossHint(); renderStack();
+    const bits = vals.map(function (v) { return (v === 1 || v === 9) ? 1 : 0; });
+    const ben = C.hexName(bits);
+    const moving = vals.some(function (v) { return v === 9 || v === 6; });
+    let bian = '';
+    if (moving) {
+      bian = C.hexName(vals.map(function (v, i) { return (v === 9 || v === 6) ? 1 - bits[i] : bits[i]; }));
+    }
+    return { ben: ben, bian: bian, label: label || '' };
+  }
+
+  function renderCast4() {
+    const box = $('#c4Body');
+    if (!box) return;
+    const title = $('#c4Title');
+    if (title) title.textContent = CAST4_LABEL[castMode] || '起卦';
+    const q = '<label class="gz-f"><span>占问</span>' +
+      '<input type="text" id="c4Question" placeholder="如 占财" maxlength="40" style="width:200px"></label>';
+    let html = '';
+
+    if (castMode === 'num') {
+      html = '<div class="c4-row">' +
+        '<label class="gz-f"><span>数一</span><input type="number" id="c4a" min="1" step="1" value="7"></label>' +
+        '<label class="gz-f"><span>数二</span><input type="number" id="c4b" min="1" step="1" value="11"></label>' +
+        q + '<button class="btn primary" id="c4Go">起　卦</button></div>' +
+        '<div class="c4-tip">数一取上卦、数二取下卦（各除 8 取余，余 0 作 8 = 坤）；' +
+        '两数之和除 6 取余为动爻（余 0 作 6）。</div>';
+    } else if (castMode === 'bao') {
+      html = '<div class="c4-row">' +
+        '<label class="gz-f"><span>报数</span><input type="text" id="c4nums" placeholder="如 3 8　或　3 8 5" style="width:180px"></label>' +
+        q + '<button class="btn primary" id="c4Go">起　卦</button></div>' +
+        '<div class="c4-tip">报两数：前一数上卦、后一数下卦，合数除 6 定动爻；' +
+        '报三数：第三数直接除 6 定动爻（余 0 作 6）。空格、逗号、顿号都行。</div>';
+    } else if (castMode === 'time') {
+      const pil = C.fourPillars(selectedDate || beijingNow());
+      // fourPillars 只给 yearIdx（0..59），年支 = 索引 % 12
+      const y = (pil.yearIdx % 12) + 1, mo = pil.monthZhi + 1, d = pil.dayZhi + 1, h = pil.hourZhi + 1;
+      const up = trigramByNum(y + mo + d);
+      const lo = trigramByNum(y + mo + d + h);
+      const mv = ((y + mo + d + h) % 6) || 6;
+      html = '<div class="c4-row">' + q + '<button class="btn primary" id="c4Go">按此刻起卦</button></div>' +
+        '<div class="c4-tip">按四柱地支序数起卦（子1 丑2 … 亥12）：年 ' + y + '、月 ' + mo +
+        '、日 ' + d + '、时 ' + h + '<br>' +
+        '上卦 =（年+月+日）' + (y + mo + d) + ' 除 8 取余 → <b>' + up + '</b>　' +
+        '下卦 =（年+月+日+时）' + (y + mo + d + h) + ' 除 8 取余 → <b>' + lo + '</b>　' +
+        '动爻 = 总 ' + (y + mo + d + h) + ' 除 6 取余 → 第 <b>' + mv + '</b> 爻<br>' +
+        '<span class="muted">本机没有农历表，故按四柱地支起卦；同一时刻在任何机器上结果一致。</span></div>';
+    } else {
+      html = '<div class="c4-row">' + q +
+        '<button class="btn primary" id="c4Go">摇　卦</button>' +
+        '<span class="muted">随机六爻，与三枚铜钱同概率（老阳 1/8、少阴 3/8、少阳 3/8、老阴 1/8）</span></div>';
+    }
+    html += '<div class="c4-out" id="c4Out"></div>';
+    box.innerHTML = html;
+    const go = $('#c4Go');
+    if (go) go.onclick = runCast4;
+  }
+
+  function runCast4() {
+    const out = $('#c4Out');
+    const fail = function (m) { if (out) out.innerHTML = '<span style="color:#a83f39">' + m + '</span>'; };
+    let vals = null, msg = '';
+
+    if (castMode === 'num') {
+      const a = parseInt(($('#c4a') || {}).value, 10);
+      const b = parseInt(($('#c4b') || {}).value, 10);
+      if (!(a > 0) || !(b > 0)) return fail('两个数都要填正整数。');
+      const up = trigramByNum(a), lo = trigramByNum(b);
+      const mv = ((a + b) % 6) || 6;
+      vals = valsFromGua(up, lo, mv);
+      msg = '数一 ' + a + ' → 上卦 <b class="gz-hi">' + up + '</b>；数二 ' + b +
+        ' → 下卦 <b class="gz-hi">' + lo + '</b>；合数 ' + (a + b) + ' → 第 <b class="gz-hi">' + mv + '</b> 爻动';
+    } else if (castMode === 'bao') {
+      const raw = (($('#c4nums') || {}).value || '').trim();
+      const nums = raw.replace(/[，、,;;\s]+/g, ' ').split(' ').filter(Boolean);
+      if (nums.some(function (x) { return !/^\d+$/.test(x); })) return fail('只能填数字，用空格或逗号分隔。');
+      if (nums.length < 2) return fail('至少报两个数（前一数上卦、后一数下卦）。');
+      const a = parseInt(nums[0], 10), b = parseInt(nums[1], 10);
+      const up = trigramByNum(a), lo = trigramByNum(b);
+      const mv = (nums.length >= 3 ? ((parseInt(nums[2], 10) % 6) || 6) : (((a + b) % 6) || 6));
+      vals = valsFromGua(up, lo, mv);
+      msg = '报数 ' + nums.join('、') + ' → 上卦 <b class="gz-hi">' + up + '</b>、下卦 <b class="gz-hi">' + lo +
+        '</b>、第 <b class="gz-hi">' + mv + '</b> 爻动';
+    } else if (castMode === 'time') {
+      const pil = C.fourPillars(selectedDate || beijingNow());
+      // fourPillars 只给 yearIdx（0..59），年支 = 索引 % 12
+      const y = (pil.yearIdx % 12) + 1, mo = pil.monthZhi + 1, d = pil.dayZhi + 1, h = pil.hourZhi + 1;
+      const up = trigramByNum(y + mo + d), lo = trigramByNum(y + mo + d + h);
+      const mv = ((y + mo + d + h) % 6) || 6;
+      vals = valsFromGua(up, lo, mv);
+      msg = '此刻 ' + gzPillarText(pil) + ' → 上卦 <b class="gz-hi">' + up + '</b>、下卦 <b class="gz-hi">' + lo +
+        '</b>、第 <b class="gz-hi">' + mv + '</b> 爻动';
+    } else {
+      // 三枚铜钱独立掷六次：背数 3→老阳9、2→少阴0、1→少阳1、0→老阴6
+      vals = [];
+      for (let i = 0; i < 6; i++) {
+        let backs = 0;
+        for (let k = 0; k < 3; k++) if (Math.random() < 0.5) backs++;
+        vals.push(backs === 3 ? 9 : backs === 2 ? 0 : backs === 1 ? 1 : 6);
+      }
+      msg = '电脑摇卦（三枚铜钱同概率）';
+    }
+
+    const r = applyCast4(vals, msg);
+    if (out) {
+      out.innerHTML = msg + '<br>本卦：<b class="gz-hi">' + r.ben + '</b>' +
+        (r.bian ? '　之　<b class="gz-hi">' + r.bian + '</b>' : '（静卦）');
+    }
   }
 
   function castByName() {
@@ -3546,6 +3731,25 @@
   }
   window.__lyRestoreCast = restoreCastById;   // 供详情按钮/测试调用
 
+  /* 把一条古籍卦例（只有 toss + 月建/日辰）算成「古籍版式」文本，
+   * 供画板当底图用——不改当前排盘状态。 */
+  window.__lyClassicFromCase = function (c) {
+    try {
+      if (!c || !Array.isArray(c.toss) || c.toss.length !== 6) return '';
+      const ZHI = '子丑寅卯辰巳午未申酉戌亥';
+      const mz = (typeof c.monthZhi === 'number') ? c.monthZhi : ZHI.indexOf(String(c.monthZhi || '').charAt(0));
+      const di = c.dayGZ ? gzIndexOfGZ(String(c.dayGZ).replace(/日$/, '')) : null;
+      const pil = C.pillarsFromGanzhi({
+        yearIdx: null,
+        monthZhi: mz >= 0 ? mz : 2,
+        dayIdx: di != null ? di : 0,
+        hourZhi: null
+      });
+      const p = C.paipan(c.toss, null, { pillars: pil });
+      return panClassicText(p);
+    } catch (e) { return ''; }
+  };
+
   $('#btnLib').onclick = async function () {
     try {
       await loadLibPage(0, false);
@@ -3611,6 +3815,10 @@
       $('#libDetail').innerHTML = '<div class="ai-block"><b>' + esc(r.hex) + '</b>　<span class="muted">' +
         esc(r.datetime || '') + '　' + esc(r.pillars || '') + '</span>' +
         '<pre class="pan-text">' + esc(r.pan_text || '') + '</pre>' +
+        '<div class="btn-row" style="justify-content:flex-start;margin:6px 0 2px">' +
+        '<button class="btn ghost" id="btnLibBoard" title="把这张盘画到画板上圈点">导入画板</button>' +
+        '<button class="btn ghost" id="btnLibRestore" title="按这条记录还原成卦象">装入卦象</button>' +
+        '</div>' +
         '<div class="ai-cols">' + colHTML + '</div>' +
         cmpHTML +
         '<div class="oc-box"><b>结果回执</b>　<span class="muted" id="ocNow">' + esc(ocNow) + '</span>' +
@@ -3628,6 +3836,17 @@
         (oc ? '<button class="btn ghost" id="btnOcClear">清除回执</button>' : '') +
         '</div><div class="muted" id="ocMsg" style="margin-top:6px;font-size:12px"></div></div>' +
         '</div>';
+      // 导入画板 / 装入卦象：都按这条记录本身走，不依赖当前排盘状态
+      const bb = $('#btnLibBoard');
+      if (bb) bb.onclick = function () {
+        const txt = r.pan_text || '';
+        if (!txt) { restoreStatus('这条卦例没有存盘面文本，无法导入画板', false); return; }
+        if (typeof window.__lyOpenPane === 'function') window.__lyOpenPane('board');
+        if (typeof window.__lyBoardLoadText === 'function') window.__lyBoardLoadText(txt);
+      };
+      const br = $('#btnLibRestore');
+      if (br) br.onclick = function () { restoreCastById(r.id); };
+
       // 每条「断」挂一个复制按钮：DOM 顺序与 copyQueue 顺序一致
       const aiNodes = $('#libDetail').querySelectorAll('.msg.ai');
       for (let i = 0; i < aiNodes.length; i++) attachCopyBtn(aiNodes[i], copyQueue[i]);
