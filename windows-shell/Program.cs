@@ -118,6 +118,32 @@ static class Shell
                 core.Settings.AreDefaultContextMenusEnabled = true;
                 core.Settings.IsStatusBarEnabled = false;
                 core.Settings.AreBrowserAcceleratorKeysEnabled = true;
+                /* 下载（导出自建卦例库 / 导出整库）：
+                 * 无边框壳没有下载栏，默认行为会把文件丢到默认目录还不提示。
+                 * 这里直接落到「下载」文件夹并写日志，找不到时能查。 */
+                core.DownloadStarting += (a, b) =>
+                {
+                    try
+                    {
+                        var name = Path.GetFileName(b.ResultFilePath);
+                        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+                        Directory.CreateDirectory(dir);
+                        b.ResultFilePath = Path.Combine(dir, name);
+                        b.Handled = true;
+                        Log("Download→ " + b.ResultFilePath, null);
+                        var op = b.DownloadOperation;
+                        op.StateChanged += (o2, e2) =>
+                        {
+                            try
+                            {
+                                if (op.State != CoreWebView2DownloadState.InProgress)
+                                    Log("Download " + op.State + " " + op.ResultFilePath, null);
+                            }
+                            catch { }
+                        };
+                    }
+                    catch (Exception ex) { Log("DownloadStarting", ex); }
+                };
                 // 站内不再有真实网络：外链（古籍来源等）一律交给系统浏览器
                 core.NewWindowRequested += (a, b) =>
                 {

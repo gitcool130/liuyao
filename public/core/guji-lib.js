@@ -617,7 +617,11 @@
     const u = loadUser();
     const books = u.books || [];
     const cases = books.reduce(function (n, b) { return n + (b.cases || []).length; }, 0);
-    return books.length ? ('共 ' + books.length + ' 本、' + cases + ' 条') : '还没有自建内容';
+    const mine = books.length ? ('自建 ' + books.length + ' 本／' + cases + ' 条') : '自建 0 本';
+    // 内置那部分在 guji 文件夹里，随程序走，不需要导出——写出来省得误会
+    const builtin = (state.books || []).filter(function (b) { return b.kind !== 'user'; });
+    const bn = builtin.reduce(function (n, b) { return n + (b.count || 0); }, 0);
+    return mine + '　·　内置 ' + builtin.length + ' 本／' + bn + ' 条（在 guji 文件夹，随程序走）';
   }
 
   function bindUserBackup() {
@@ -625,19 +629,78 @@
     const paint = function () { if (cnt) cnt.textContent = userCountText(); };
     paint();
 
-    const exp = document.getElementById('btnGujiExport');
-    if (exp) exp.onclick = function () {
-      const u = loadUser();
-      if (!u.books || !u.books.length) { alert('还没有自建的书籍或卦例。'); return; }
+    const stamp = function () {
       const d = new Date();
       const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
-      const name = '古籍自建-' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '.json';
-      const blob = new Blob([JSON.stringify(u, null, 1)], { type: 'application/json' });
+      return d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes());
+    };
+    const saveJSON = function (obj, name) {
+      const blob = new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = name;
       a.click();
-      setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+    };
+
+    const exp = document.getElementById('btnGujiExport');
+    if (exp) exp.onclick = function () {
+      const u = loadUser();
+      const builtin = (state.books || []).filter(function (b) { return b.kind !== 'user'; })
+        .map(function (b) { return { key: b.key, name: b.name, kind: b.kind, count: b.count }; });
+      /* 空库也照导：给一个带内置书目清单的空壳，换机后能对得上账；
+       * 原来直接弹「没有内容」等于什么都没给。 */
+      saveJSON({
+        type: 'ly-guji-user',
+        version: 1,
+        exported_at: new Date().toISOString(),
+        books: u.books || [],
+        builtin: builtin
+      }, '古籍自建-' + stamp() + '.json');
+      alert((u.books && u.books.length)
+        ? ('已导出：自建 ' + u.books.length + ' 本。内置书库不在这里（在程序目录的 guji 文件夹，随程序走）。')
+        : '你的自建书籍与卦例是 0 条，已导出一个空备份（含内置书目清单）。\n内置的那些书在程序目录的 guji 文件夹里，换电脑时整个文件夹拷走就行，不需要导出。');
+      paint();
+    };
+
+    /* 导出整库：内置 + 自建打包成一个 JSON，留档/换机用。
+     * 内置数据是文件（guji/*.json），这里按 manifest 逐个取回来拼成一份。 */
+    const expAll = document.getElementById('btnGujiExportAll');
+    if (expAll) expAll.onclick = function () {
+      const btn = expAll;
+      const ori = btn.textContent;
+      btn.disabled = true; btn.textContent = '打包中…';
+      (async function () {
+        try {
+          let manifest = { books: [] };
+          try {
+            const r = await W.fetch('guji/manifest.json');
+            if (r.ok) manifest = await r.json();
+          } catch (e) { }
+          const files = {};
+          let i = 0;
+          for (const b of (manifest.books || [])) {
+            i++;
+            btn.textContent = '打包中 ' + i + '/' + (manifest.books || []).length;
+            try {
+              const r = await W.fetch(b.file);
+              if (r.ok) files[b.file] = await r.json();
+            } catch (e) { }
+          }
+          saveJSON({
+            type: 'ly-guji-full',
+            version: 1,
+            exported_at: new Date().toISOString(),
+            manifest: manifest,
+            files: files,
+            user: loadUser()
+          }, '古籍整库-' + stamp() + '.json');
+        } catch (e) {
+          alert('打包失败：' + (e && e.message || e));
+        } finally {
+          btn.disabled = false; btn.textContent = ori;
+        }
+      })();
     };
 
     const imp = document.getElementById('btnGujiImport');
@@ -651,6 +714,9 @@
         fr.onload = function () {
           let data;
           try { data = JSON.parse(String(fr.result)); } catch (e) { alert('这个文件不是有效的 JSON'); return; }
+          // 兼容三种：{books}（自建备份）/ 整库备份 {type:'ly-guji-full', user:{books}} / 直接是数组
+          if (Array.isArray(data)) data = { books: data };
+          if (data && data.type === 'ly-guji-full' && data.user) data = data.user;
           if (!data || !Array.isArray(data.books)) { alert('文件里没有 books 列表，可能不是本程序导出的。'); return; }
           const cur = loadUser();
           let addedBooks = 0, addedCases = 0, skipped = 0;
@@ -688,8 +754,8 @@
     const wipe = document.getElementById('btnGujiWipe');
     if (wipe) wipe.onclick = function () {
       const u = loadUser();
-      if (!u.books || !u.books.length) { alert('没有自建内容可清。'); return; }
-      if (!confirm('清空所有自建书籍与卦例？不可恢复（建议先导出备份）。')) return;
+      if (!u.books || !u.books.length) { alert('自建内容已经是空的（内置书库不在「我的」里，清不掉也不该清）。'); return; }
+      if (!confirm('清空所有自建书籍与卦例？不可恢复（建议先「导出自建」备份）。')) return;
       if (!saveUser({ books: [] })) return;
       paint();
       loadManifest().then(function () { renderBookSelect(); renderBookTools(); renderList(); });
@@ -751,10 +817,11 @@
       '<div id="gujiDetail" class="guji-detail" hidden></div>' +
       '<div id="gujiAdd" class="guji-add" hidden></div>' +
       '<div class="guji-backup">' +
-      '<span class="muted">我的卦例库（自建书籍与卦例，存本机）：</span>' +
-      '<button class="btn ghost" id="btnGujiExport">导出</button>' +
-      '<button class="btn ghost" id="btnGujiImport">导入</button>' +
-      '<button class="btn ghost" id="btnGujiWipe">清空我的</button>' +
+      '<span class="muted">我的卦例库（你自建的书籍与卦例，存本机）：</span>' +
+      '<button class="btn ghost" id="btnGujiExport">导出自建</button>' +
+      '<button class="btn ghost" id="btnGujiImport">导入自建</button>' +
+      '<button class="btn ghost" id="btnGujiWipe">清空自建</button>' +
+      '<button class="btn ghost" id="btnGujiExportAll" title="把内置书库与自建内容打包成一个 JSON（约 6MB），留档或换机时用">导出整库</button>' +
       '<span class="muted" id="gujiUserCount"></span>' +
       '<input type="file" id="gujiUserFile" accept=".json,application/json" hidden>' +
       '</div>';
@@ -779,6 +846,7 @@
 
     loadManifest().then(function () {
       renderBookSelect(); renderBookTools(); renderList();
+      bindUserBackup();     // 书目载入后重画一次计数（内置本数要看 state.books）
       ensureBook(state.cur).then(function () { renderList(); });
     });
   }

@@ -92,12 +92,11 @@ async function launchBrowser() {
   // 自建书籍/卦例的备份入口（存在 ly_guji_user_v1，换机必丢）
   await page.click('#sideRail .tb-btn[data-k="guji"]');
   await page.waitForTimeout(500);
-  ok('古籍面板有「导出」', await page.$('#btnGujiExport') !== null);
-  ok('古籍面板有「导入」', await page.$('#btnGujiImport') !== null);
-  ok('古籍面板有「清空我的」', await page.$('#btnGujiWipe') !== null);
+  eq('备份按钮四个', await page.$$eval('.guji-backup button', e => e.map(x => x.textContent.trim())),
+    ['导出自建', '导入自建', '清空自建', '导出整库']);
   ok('有隐藏的文件选择框', await page.$('#gujiUserFile') !== null);
-  ok('显示自建内容计数', /自建|共 \d+ 本|还没有/.test(await page.$eval('#gujiUserCount', e => e.textContent)),
-    await page.$eval('#gujiUserCount', e => e.textContent));
+  const cText = await page.$eval('#gujiUserCount', e => e.textContent);
+  ok('计数把自建与内建分开写清楚', /自建/.test(cText) && /内置/.test(cText), cText);
   await page.click('#sideRail .tb-btn[data-k="home"]');
   await page.waitForTimeout(300);
 
