@@ -429,6 +429,47 @@ async function launchBrowser() {
   ok('古籍版式标出世应', /世|应/.test(classic));
   ok('古籍版式含旬空', /旬空/.test(classic));
 
+  /* 变卦爻画：**动爻才变阴阳，静爻不变**。
+   * 原来一律画成本爻的反面，乾为天四爻动变地泽临，初二两爻被印成阴（王哥 11-12 指出）。 */
+  async function bianPolarity() {
+    return page.evaluate(function () {
+      const rows = document.getElementById('classicText').textContent.split('\n')
+        .filter(function (l) { return /^(青龙|朱雀|勾陈|腾蛇|白虎|玄武)/.test(l.trim()); });
+      return rows.map(function (ln) {
+        const syms = ln.match(/━　━|━━━/g) || [];
+        return {
+          ben: syms[0], bian: syms[1],
+          moving: /[○×]/.test(ln)
+        };
+      });
+    });
+  }
+  let pol = await bianPolarity();
+  eq('六爻行齐全', pol.length, 6);
+  ok('静爻的变爻与本爻同阴阳（乾为天 之 天风姤：只初爻动）',
+    pol.every(function (r) { return r.moving ? r.ben !== r.bian : r.ben === r.bian; })
+      && pol.filter(function (r) { return r.moving; }).length === 1,
+    JSON.stringify(pol));
+
+  // 多爻动：乾为天 之 地泽临（三四五上动，初二应仍为阳）
+  await page.selectOption('#gzBian', '地泽临');
+  await page.waitForTimeout(250);
+  await page.click('#btnGzPaipan');
+  await page.waitForTimeout(700);
+  pol = await bianPolarity();
+  ok('多爻动时静爻仍不变（乾为天 之 地泽临）',
+    pol.every(function (r) { return r.moving ? r.ben !== r.bian : r.ben === r.bian; })
+      && pol.filter(function (r) { return r.moving; }).length === 4
+      && pol[4].ben === '━━━' && pol[4].bian === '━━━'
+      && pol[5].ben === '━━━' && pol[5].bian === '━━━',
+    JSON.stringify(pol));
+
+  // 复原成天风姤，后面 D2 的用例照旧
+  await page.selectOption('#gzBian', '天风姤');
+  await page.waitForTimeout(250);
+  await page.click('#btnGzPaipan');
+  await page.waitForTimeout(700);
+
   /* 切到卦象表格 */
   await page.click('#btnClassic');
   await page.waitForTimeout(350);

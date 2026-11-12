@@ -818,8 +818,14 @@
         pad(fu, 6) + '　' +
         L.lq + L.gan + L.zhi + L.wx + sym + '　' + mark + dong;
       if (p.hasBian && L.bian) {
-        // 变爻阴阳与本爻相反；静爻的变爻照样给（古籍右半也印）
-        const bSym = L.yang ? '━　━' : '━━━';
+        /* 变卦的爻画：**动爻才变阴阳，静爻保持不变**。
+         * 原来一律取本爻的反面（L.yang ? 阴 : 阳），于是所有静爻的变爻都画反了——
+         * 乾为天四爻动变地泽临，初、二两爻本该还是阳，却印成了阴（王哥 11-12 指出）。
+         * 直接取 bianBits（引擎算好的变卦六位阴阳）最稳。 */
+        const bianYang = (p.bianBits && p.bianBits.length === 6)
+          ? (p.bianBits[i] === 1)
+          : (L.moving ? !L.yang : L.yang);
+        const bSym = bianYang ? '━━━' : '━　━';
         line += '　　' + L.bian.lq + L.bian.gan + L.bian.zhi + L.bian.wx + bSym;
       }
       out.push(line.replace(/\s+$/, ''));
