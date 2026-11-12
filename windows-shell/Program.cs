@@ -126,9 +126,8 @@ static class Shell
                     try
                     {
                         var name = Path.GetFileName(b.ResultFilePath);
-                        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-                        Directory.CreateDirectory(dir);
-                        b.ResultFilePath = Path.Combine(dir, name);
+                        var dir = ExportDir();
+                        b.ResultFilePath = UniquePath(dir, name);
                         b.Handled = true;
                         Log("Download→ " + b.ResultFilePath, null);
                         var op = b.DownloadOperation;
@@ -199,6 +198,14 @@ static class Shell
                                 try { System.Diagnostics.Process.Start("explorer.exe", "\"" + d + "\""); } catch { }
                                 body = d;
                                 break;
+                            case "exportdir":
+                                body = ExportDir();
+                                break;
+                            case "openexport":
+                                var ed = ExportDir();
+                                try { System.Diagnostics.Process.Start("explorer.exe", "\"" + ed + "\""); } catch { }
+                                body = ed;
+                                break;
                             default:
                                 status = "err"; body = "未知操作 " + op;
                                 break;
@@ -267,6 +274,32 @@ static class Shell
         _dataDir = Root;
         try { Directory.CreateDirectory(_dataDir); } catch { }
         return _dataDir;
+    }
+
+    /* 导出（卦例库 JSON / 古籍整库 / 画板截图）统一落到 <exe>\导出\，
+     * 与数据放在同一棵树里——王哥要的是「整个文件夹拷走就是全部」。 */
+    static string ExportDir()
+    {
+        var baseDir = Path.GetDirectoryName(DataDir());
+        if (string.IsNullOrEmpty(baseDir)) baseDir = DataDir();
+        var dir = Path.Combine(baseDir, "导出");
+        try { Directory.CreateDirectory(dir); } catch { }
+        return dir;
+    }
+
+    // 同名不覆盖：xxx.json → xxx (2).json
+    static string UniquePath(string dir, string name)
+    {
+        var target = Path.Combine(dir, name);
+        if (!File.Exists(target)) return target;
+        var stem = Path.GetFileNameWithoutExtension(name);
+        var ext = Path.GetExtension(name);
+        for (var i = 2; i < 1000; i++)
+        {
+            var t = Path.Combine(dir, stem + " (" + i + ")" + ext);
+            if (!File.Exists(t)) return t;
+        }
+        return Path.Combine(dir, stem + "-" + DateTime.Now.ToString("HHmmss") + ext);
     }
 
     // 只允许简单的文件名，禁止目录穿越

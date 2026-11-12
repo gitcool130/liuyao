@@ -65,6 +65,8 @@
     read: function (name) { return call('read', name); },
     write: function (name, text) { return call('write', name, text, 30000); },
     list: function () { return call('list'); },
-    open: function () { return call('open'); }
+    open: function () { return call('open'); },
+    exportDir: function () { return call('exportdir'); },
+    openExport: function () { return call('openexport'); }
   };
 })(typeof window !== 'undefined' ? window : globalThis);

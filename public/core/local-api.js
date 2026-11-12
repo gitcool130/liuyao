@@ -270,6 +270,12 @@
     return { mode: 'file', path: joined, dir: dir, count: arr.length };
   };
   W.__lyOpenDataDir = function () { if (FILE_MODE) FS.open().catch(function () { }); };
+  /* 导出的文件落哪：桌面壳里是 <exe>\\导出，浏览器里只能进下载目录 */
+  W.__lyExportDir = function () {
+    if (!FS || !FS.available) return Promise.resolve('浏览器默认下载目录');
+    return FS.exportDir().catch(function () { return '（取不到）'; });
+  };
+  W.__lyOpenExportDir = function () { if (FS && FS.available) FS.openExport().catch(function () { }); };
   function nowISO() { return new Date().toISOString(); }
 
   async function handleRecords(req, url) {
@@ -467,6 +473,11 @@
             ? '存储位置：<b>' + String(info.path).replace(/&/g, '&amp;') + '</b>（' + info.count + ' 条）'
             : '存储位置：' + info.path + '（' + info.count + ' 条，浏览器模式）';
         }).catch(function () { });
+        if (typeof W.__lyExportDir === 'function') {
+          W.__lyExportDir().then(function (d) {
+            locEl.innerHTML += '<br>导出的文件落在：<b>' + String(d).replace(/&/g, '&amp;') + '</b>';
+          }).catch(function () { });
+        }
       }
     }
     const openDir = sec.querySelector('#btnOpenDataDir');
@@ -486,7 +497,7 @@
       a.download = '六爻卦例库-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '.json';
       document.body.appendChild(a); a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-      sec.querySelector('#libLocalTip').textContent = '已导出 ' + arr.length + ' 条';
+      sec.querySelector('#libLocalTip').textContent = '已导出 ' + arr.length + ' 条（程序目录的「导出」文件夹）';
     };
     sec.querySelector('#btnLibImport').onclick = function () {
       const inp = document.createElement('input');

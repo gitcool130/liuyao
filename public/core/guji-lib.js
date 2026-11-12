@@ -683,6 +683,11 @@
           ? '存储位置：<b>' + String(info.path).replace(/&/g, '&amp;') + '</b>'
           : '存储位置：' + info.path + '（浏览器模式）';
       }).catch(function () { });
+      if (typeof W.__lyExportDir === 'function') {
+        W.__lyExportDir().then(function (d) {
+          pathEl.innerHTML += '　·　导出到：<b>' + String(d).replace(/&/g, '&amp;') + '</b>';
+        }).catch(function () { });
+      }
     }
   }
 
@@ -719,8 +724,8 @@
         builtin: builtin
       }, '古籍自建-' + stamp() + '.json');
       alert((u.books && u.books.length)
-        ? ('已导出：自建 ' + u.books.length + ' 本。内置书库不在这里（在程序目录的 guji 文件夹，随程序走）。')
-        : '你的自建书籍与卦例是 0 条，已导出一个空备份（含内置书目清单）。\n内置的那些书在程序目录的 guji 文件夹里，换电脑时整个文件夹拷走就行，不需要导出。');
+        ? ('已导出：自建 ' + u.books.length + ' 本，文件在程序目录的「导出」文件夹里。\n内置书库不在这里（在程序目录的 guji 文件夹，随程序走）。')
+        : '你的自建书籍与卦例是 0 条，已导出一个空备份（含内置书目清单），在程序目录的「导出」文件夹里。\n内置的那些书在程序目录的 guji 文件夹里，换电脑时整个文件夹拷走就行，不需要导出。');
       paint();
     };
 
