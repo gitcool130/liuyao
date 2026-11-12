@@ -1896,6 +1896,19 @@
     });
   }
 
+  /* 结果区空态：说明这里会出什么、下一步该点哪。
+   * 原来 #aiReply 是空的，面板打开只有两颗按钮，王哥以为「没有断卦界面」。 */
+  function renderAIEmpty(msg) {
+    const box = $('#aiReply');
+    if (!box) return;
+    const hint = $('#aiResultHint');
+    if (hint) hint.textContent = '';
+    box.innerHTML = '<div class="ai-empty">' +
+      (msg || ('点上面的 <b>开始断卦</b> 后，这里逐字显示所选模型的断语；勾选多个模型会并排对比。<br>' +
+        '首次使用请先在右侧 <b>接口设置</b> 填好 API Key（Key 只存本机）。')) +
+      '</div>';
+  }
+
   function resetAIState() {
     // 中断在途 AI 请求并递增代数：旧请求回调随后凭 aiGen 比对被丢弃。
     // 无此机制时，断卦在途点[重新起卦]会让旧卦断语写入新卦栏目，
@@ -1905,7 +1918,7 @@
     if (aiAbort) { try { aiAbort.abort(); } catch (e) { /* 已 abort 则忽略 */ } }
     aiAbort = null;
     aiStates = {}; concl = {}; castId = null;
-    $('#aiReply').innerHTML = '';
+    renderAIEmpty();
     const cs = $('#aiConsensus'); if (cs) { cs.hidden = true; cs.innerHTML = ''; }
     const box = $('#chatBox'); if (box) box.hidden = true;
     const btn = $('#btnSave'); if (btn) btn.textContent = '存入卦例库';
@@ -2819,6 +2832,10 @@
         const dup = !!first && first.className === 'warn' && first.textContent === warnTxt;
         if (!dup) box.insertAdjacentHTML('afterbegin', '<li class="warn">' + warnTxt + '</li>');
       }
+      // 同一句也要显示在「断卦结果」里——用户是在这个面板点的按钮，
+      // 提示只写到「分析」卡片里，等于点了没反应（王哥 11-12 反馈）
+      renderAIEmpty('⚠ 还没有断卦：请先选定<b>所测之事</b>（回「首页排盘」，在卦象下方选事类或自填事由），再点【开始断卦】。<br>' +
+        '未定用神时，盘面不带旺衰粗判与应期窗口，各模型会各自取用神，两份断语必然互相矛盾。');
       const sel = $('#useSelect');
       if (sel) { try { sel.focus(); sel.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { sel.focus(); } }
       return;
@@ -3983,5 +4000,6 @@
   renderCoins();
   renderTossHint();
   renderStack();
+  renderAIEmpty();      // 一进来「断卦结果」就要有说明，不能是空白 div
   restoreFromShare();
 })();

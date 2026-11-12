@@ -269,6 +269,17 @@
     padding: 8px 10px; border-bottom: 1px dashed #eee7d8; cursor: pointer;
     display: flex; justify-content: space-between; gap: 8px; font-size: 14px;
   }
+  /* 断卦结果区：标题 + 空态 */
+  .ai-result-head {
+    display: flex; align-items: baseline; gap: 10px; margin: 16px 0 8px;
+    padding-top: 12px; border-top: 1px dashed var(--line); font-size: 14px; letter-spacing: 1px;
+  }
+  .ai-result-head .muted { font-size: 12px; letter-spacing: 0; }
+  .ai-empty {
+    border: 1px dashed var(--line); border-radius: 8px; background: #fdfaf2;
+    padding: 14px 16px; font-size: 13px; line-height: 1.9; color: var(--ink-light);
+  }
+  .ai-empty b { color: var(--ink); }
   .lib-item:hover { background: #faf5e9; }
   .lib-side { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .lib-del {
@@ -566,7 +577,12 @@
       <button class="btn" id="btnVote" title="同一张盘让三个免费模型各投一票，只看分歧落在哪一格">三模型对账</button>
     </div>
     <div id="aiConsensus" class="verdict" style="margin-top:12px;font-size:13px;line-height:1.7" hidden></div>
-    <div id="aiReply" class="ai-cols" style="margin-top:14px"></div>
+    <!-- 断卦结果区：没有结果时要有空态说明，否则只看到两颗按钮，像「没有界面」 -->
+    <div class="ai-result-head">
+      <span>断卦结果</span>
+      <span class="muted" id="aiResultHint"></span>
+    </div>
+    <div id="aiReply" class="ai-cols"></div>
     <div id="chatBox" hidden>
       <div class="muted" style="margin-top:16px">进阶探讨（各模型上下文独立保留，可连续追问）</div>
       <div class="chat-row">
@@ -616,7 +632,7 @@
 <script src="core/guji-lib.js?v=20261112e"></script>
 <script src="core/board.js?v=20261112c"></script>
 <script src="core/toolbar.js?v=20261111c"></script>
-<script src="app.js?v=20261112a"></script>
+<script src="app.js?v=20261112b"></script>
 <script src="bgm.js?v=20261110a"></script>
 </body>
 </html>

@@ -89,6 +89,12 @@ async function launchBrowser() {
   await page.waitForTimeout(300);
   eq('排盘前断卦面板给提示', await page.$eval('.tb-pane[data-k="ai"]', e => e.getAttribute('data-empty')), '1');
 
+  // 断卦面板必须有「结果区」：空的 div 会让用户以为没有界面（王哥 11-12 反馈）
+  ok('断卦面板有「断卦结果」标题', await page.$('.ai-result-head') !== null);
+  // 用 textContent：此刻卡片是 display:none（未排盘），innerText 会返回空
+  const aiEmpty = await page.$eval('#aiReply', e => e.textContent);
+  ok('结果区有空态说明（不是空白）', /开始断卦/.test(aiEmpty) && aiEmpty.length > 20, aiEmpty.slice(0, 60));
+
   // 自建书籍/卦例的备份入口（存在 ly_guji_user_v1，换机必丢）
   await page.click('#sideRail .tb-btn[data-k="guji"]');
   await page.waitForTimeout(500);
