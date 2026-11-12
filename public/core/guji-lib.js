@@ -700,14 +700,26 @@
       const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
       return d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes());
     };
+    /* 保存 JSON：有壳就直写 <exe>\导出\（返回完整路径），否则退回浏览器下载（返回 null） */
     const saveJSON = function (obj, name) {
-      const blob = new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' });
+      const txt = JSON.stringify(obj, null, 1);
+      if (W.LY_FS && W.LY_FS.available && W.LY_FS.saveExport) {
+        return W.LY_FS.saveExport(name, txt).then(function (p) { return p; }).catch(function (e) {
+          console.warn('[guji] 直写导出失败，改用下载', e);
+          anchorSave(txt, name); return null;
+        });
+      }
+      anchorSave(txt, name);
+      return Promise.resolve(null);
+    };
+    function anchorSave(txt, name) {
+      const blob = new Blob([txt], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = name;
-      a.click();
-      setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
-    };
+      document.body.appendChild(a); a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+    }
 
     const exp = document.getElementById('btnGujiExport');
     if (exp) exp.onclick = function () {
@@ -722,11 +734,15 @@
         exported_at: new Date().toISOString(),
         books: u.books || [],
         builtin: builtin
-      }, '古籍自建-' + stamp() + '.json');
-      alert((u.books && u.books.length)
-        ? ('已导出：自建 ' + u.books.length + ' 本，文件在程序目录的「导出」文件夹里。\n内置书库不在这里（在程序目录的 guji 文件夹，随程序走）。')
-        : '你的自建书籍与卦例是 0 条，已导出一个空备份（含内置书目清单），在程序目录的「导出」文件夹里。\n内置的那些书在程序目录的 guji 文件夹里，换电脑时整个文件夹拷走就行，不需要导出。');
-      paint();
+      }, '古籍自建-' + stamp() + '.json').then(function (full) {
+        const where = full ? ('\n文件：' + full) : '（已放进浏览器下载目录）';
+        alert((u.books && u.books.length)
+          ? ('已导出：自建 ' + u.books.length + ' 本。' + where +
+             '\n提示：内置书库不在导出范围内——它在程序目录的 guji 文件夹，随程序走。')
+          : ('你的自建书籍与卦例是 0 条，已导出一个空备份（含内置书目清单）。' + where +
+             '\n提示：内置那 19 本在程序目录的 guji 文件夹里，换电脑时整个文件夹拷走就行。'));
+        paint();
+      });
     };
 
     /* 导出整库：内置 + 自建打包成一个 JSON，留档/换机用。
@@ -753,7 +769,7 @@
               if (r.ok) files[b.file] = await r.json();
             } catch (e) { }
           }
-          saveJSON({
+          const full = await saveJSON({
             type: 'ly-guji-full',
             version: 1,
             exported_at: new Date().toISOString(),
@@ -761,6 +777,10 @@
             files: files,
             user: loadUser()
           }, '古籍整库-' + stamp() + '.json');
+          btn.textContent = full ? '已导出' : '已下载';
+          alert(full
+            ? ('整库已导出到：\n' + full + '\n（内置 ' + (manifest.books || []).length + ' 本 + 你的自建内容）')
+            : '整库备份已放进浏览器下载目录。');
         } catch (e) {
           alert('打包失败：' + (e && e.message || e));
         } finally {

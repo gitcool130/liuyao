@@ -400,18 +400,30 @@
     };
 
     sec.querySelector('#bdSave').onclick = function () {
+      const d = new Date(), p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+      let gua = '';
+      try {
+        const el = document.getElementById('gzBen');
+        if (el && el.value) gua = '-' + el.value;   // 文件名带本卦名，事后好找
+      } catch (err) { }
+      const name = '画板' + gua + '-' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) +
+        '-' + p2(d.getHours()) + p2(d.getMinutes()) + '.png';
+
+      /* 有壳就直写 <exe>\导出\（无边框壳里浏览器下载不可靠，也看不见落在哪） */
+      if (W.LY_FS && W.LY_FS.available && W.LY_FS.saveExportB64) {
+        const b64 = cv.toDataURL('image/png').split(',')[1];
+        W.LY_FS.saveExportB64(name, b64).then(function (full) {
+          tip('已截图 → ' + full);
+        }).catch(function (e) {
+          tip('截图保存失败：' + (e && e.message || e));
+        });
+        return;
+      }
       cv.toBlob(function (blob) {
         if (!blob) { tip('导出失败'); return; }
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        const d = new Date(), p2 = function (n) { return (n < 10 ? '0' : '') + n; };
-        let gua = '';
-        try {
-          const el = document.getElementById('gzBen');
-          if (el && el.value) gua = '-' + el.value;   // 文件名带本卦名，事后好找
-        } catch (err) { }
-        a.download = '画板' + gua + '-' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) +
-          '-' + p2(d.getHours()) + p2(d.getMinutes()) + '.png';
+        a.download = name;
         document.body.appendChild(a); a.click();
         setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 800);
         tip('已截图保存（浏览器下载目录）');

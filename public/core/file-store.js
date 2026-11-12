@@ -67,6 +67,9 @@
     list: function () { return call('list'); },
     open: function () { return call('open'); },
     exportDir: function () { return call('exportdir'); },
-    openExport: function () { return call('openexport'); }
+    openExport: function () { return call('openexport'); },
+    // 直接落到 <exe>\导出\，返回完整路径
+    saveExport: function (name, text) { return call('saveexport', name, text, 60000); },
+    saveExportB64: function (name, b64) { return call('saveexportb64', name, b64, 60000); }
   };
 })(typeof window !== 'undefined' ? window : globalThis);

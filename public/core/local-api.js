@@ -489,15 +489,28 @@
     // ---- 卦例库备份 ----
     sec.querySelector('#btnLibExport').onclick = async function () {
       const arr = await readRecs();
-      const blob = new Blob([JSON.stringify(arr, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
       const d = new Date();
       const pad = function (n) { return (n < 10 ? '0' : '') + n; };
-      a.download = '六爻卦例库-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '.json';
+      const name = '六爻卦例库-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '.json';
+      const txt = JSON.stringify(arr, null, 2);
+      const tip2 = sec.querySelector('#libLocalTip');
+      // 有壳就直写 <exe>\导出\（浏览器下载在无边框壳里不可靠，且用户找不到文件）
+      if (FS && FS.available && FS.saveExport) {
+        try {
+          const full = await FS.saveExport(name, txt);
+          tip2.textContent = '已导出 ' + arr.length + ' 条 → ' + full;
+          return;
+        } catch (e) {
+          tip2.textContent = '写入失败，改用浏览器下载：' + (e && e.message || e);
+        }
+      }
+      const blob = new Blob([txt], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
       document.body.appendChild(a); a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-      sec.querySelector('#libLocalTip').textContent = '已导出 ' + arr.length + ' 条（程序目录的「导出」文件夹）';
+      if (!FS || !FS.available) tip2.textContent = '已导出 ' + arr.length + ' 条（浏览器下载）';
     };
     sec.querySelector('#btnLibImport').onclick = function () {
       const inp = document.createElement('input');

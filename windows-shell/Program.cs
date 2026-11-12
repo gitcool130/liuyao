@@ -201,6 +201,21 @@ static class Shell
                             case "exportdir":
                                 body = ExportDir();
                                 break;
+                            /* 直接写文件到 导出\ —— 比走浏览器下载可靠：
+                             * WebView2 的下载在无边框壳里没有 UI，还会被各种策略拦。
+                             * JS 传文本（JSON）或 base64（PNG），壳负责落盘并回传完整路径。 */
+                            case "saveexport":
+                                var st = UniquePath(ExportDir(), name);
+                                File.WriteAllText(st, payload, new UTF8Encoding(false));
+                                body = st;
+                                Log("Export→ " + st, null);
+                                break;
+                            case "saveexportb64":
+                                var sb2 = UniquePath(ExportDir(), name);
+                                File.WriteAllBytes(sb2, Convert.FromBase64String(payload));
+                                body = sb2;
+                                Log("Export→ " + sb2, null);
+                                break;
                             case "openexport":
                                 var ed = ExportDir();
                                 try { System.Diagnostics.Process.Start("explorer.exe", "\"" + ed + "\""); } catch { }
