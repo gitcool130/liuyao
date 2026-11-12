@@ -678,16 +678,20 @@
     if (cnt) cnt.textContent = userCountText();
     const pathEl = document.getElementById('gujiStorePath');
     if (pathEl && typeof W.__lyGujiUserInfo === 'function') {
-      W.__lyGujiUserInfo().then(function (info) {
-        pathEl.innerHTML = info.mode === 'file'
-          ? '存储位置：<b>' + String(info.path).replace(/&/g, '&amp;') + '</b>'
-          : '存储位置：' + info.path + '（浏览器模式）';
-      }).catch(function () { });
-      if (typeof W.__lyExportDir === 'function') {
-        W.__lyExportDir().then(function (d) {
-          pathEl.innerHTML += '　·　导出到：<b>' + String(d).replace(/&/g, '&amp;') + '</b>';
-        }).catch(function () { });
-      }
+      Promise.all([
+        W.__lyGujiUserInfo().catch(function () { return null; }),
+        (typeof W.__lyExportDir === 'function' ? W.__lyExportDir() : Promise.resolve('')).catch(function () { return ''; })
+      ]).then(function (r) {
+        const info = r[0], d = r[1];
+        let html = '';
+        if (info) {
+          html = info.mode === 'file'
+            ? '存储位置：<b>' + String(info.path).replace(/&/g, '&amp;') + '</b>'
+            : '存储位置：' + info.path + '（浏览器模式）';
+        }
+        if (d) html += '　·　导出到：<b>' + String(d).replace(/&/g, '&amp;') + '</b>';
+        pathEl.innerHTML = html;
+      });
     }
   }
 

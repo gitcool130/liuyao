@@ -468,16 +468,21 @@
     const locEl = sec.querySelector('#libStorePath');
     if (locEl) {
       if (typeof W.__lyRecordsInfo === 'function') {
-        W.__lyRecordsInfo().then(function (info) {
-          locEl.innerHTML = info.mode === 'file'
-            ? '存储位置：<b>' + String(info.path).replace(/&/g, '&amp;') + '</b>（' + info.count + ' 条）'
-            : '存储位置：' + info.path + '（' + info.count + ' 条，浏览器模式）';
-        }).catch(function () { });
-        if (typeof W.__lyExportDir === 'function') {
-          W.__lyExportDir().then(function (d) {
-            locEl.innerHTML += '<br>导出的文件落在：<b>' + String(d).replace(/&/g, '&amp;') + '</b>';
-          }).catch(function () { });
-        }
+        // 两段异步必须拿到一起再写，否则谁后到谁把对方盖掉（踩过一次）
+        Promise.all([
+          W.__lyRecordsInfo().catch(function () { return null; }),
+          (typeof W.__lyExportDir === 'function' ? W.__lyExportDir() : Promise.resolve('')).catch(function () { return ''; })
+        ]).then(function (r) {
+          const info = r[0], dir = r[1];
+          let html = '';
+          if (info) {
+            html = info.mode === 'file'
+              ? '存储位置：<b>' + String(info.path).replace(/&/g, '&amp;') + '</b>（' + info.count + ' 条）'
+              : '存储位置：' + info.path + '（' + info.count + ' 条，浏览器模式）';
+          }
+          if (dir) html += '<br>导出的文件落在：<b>' + String(dir).replace(/&/g, '&amp;') + '</b>';
+          locEl.innerHTML = html;
+        });
       }
     }
     const openDir = sec.querySelector('#btnOpenDataDir');
