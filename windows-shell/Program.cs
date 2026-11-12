@@ -150,6 +150,68 @@ static class Shell
                     b.Handled = true;
                     try { System.Diagnostics.Process.Start(b.Uri); } catch { }
                 };
+                /* 页面 ↔ 壳的文件通道：personal 卦例库落成软件目录下的 JSON 文件，
+                 * 不再只躺在 WebView2 的 localStorage（那个 leveldb 谁也看不懂、也没法拷走）。
+                 * 协议用「换行分段」而不是 JSON：.NET Framework 4.x 没有内置 JSON 解析，
+                 * 手搓解析容易出错；三段文本足够表达 读/写/列目录/打开目录。
+                 *   页面→壳： op \n id \n name \n payload
+                 *   壳→页面： id \n ok|err \n payload */
+                core.WebMessageReceived += (a, b) =>
+                {
+                    string raw = null;
+                    try { raw = b.TryGetWebMessageAsString(); } catch { }
+                    if (string.IsNullOrEmpty(raw)) return;
+                    var parts = raw.Split(new[] { '\n' }, 4);
+                    if (parts.Length < 2) return;
+                    var op = parts[0];
+                    var id = parts[1];
+                    var name = parts.Length > 2 ? parts[2] : "";
+                    var payload = parts.Length > 3 ? parts[3] : "";
+                    string status = "ok", body = "";
+                    try
+                    {
+                        switch (op)
+                        {
+                            case "info":
+                                body = DataDir();
+                                break;
+                            case "list":
+                                var sb = new StringBuilder();
+                                foreach (var f in Directory.GetFiles(DataDir(), "*.json"))
+                                {
+                                    var fi = new FileInfo(f);
+                                    if (sb.Length > 0) sb.Append('\u0001');
+                                    sb.Append(fi.Name).Append('\u0002').Append(fi.Length).Append('\u0002')
+                                      .Append(fi.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"));
+                                }
+                                body = sb.ToString();
+                                break;
+                            case "read":
+                                var rp = DataPath(name);
+                                body = File.Exists(rp) ? File.ReadAllText(rp, Encoding.UTF8) : "";
+                                break;
+                            case "write":
+                                File.WriteAllText(DataPath(name), payload, new UTF8Encoding(false));
+                                body = DataPath(name);
+                                break;
+                            case "open":
+                                var d = DataDir();
+                                try { System.Diagnostics.Process.Start("explorer.exe", "\"" + d + "\""); } catch { }
+                                body = d;
+                                break;
+                            default:
+                                status = "err"; body = "未知操作 " + op;
+                                break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        status = "err"; body = ex.Message;
+                        Log("FileBridge:" + op, ex);
+                    }
+                    try { core.PostWebMessageAsString(id + "\n" + status + "\n" + body); } catch { }
+                };
+
                 core.Navigate("https://" + Host + "/index.html");
                 core.ProcessFailed += (a, b) => Log("WebViewProcessFailed:" + b.ProcessFailedKind, null);
             }
@@ -175,6 +237,50 @@ static class Shell
         };
 
         Application.Run(form);
+    }
+
+    /* ---------- 数据目录（卦例库 JSON 落在这里） ----------
+     * 优先 <exe 所在目录>\data —— 绿色版就该「整个文件夹拷走就是全部」。
+     * 放 Program Files 之类不可写的位置时，退回 %LOCALAPPDATA%\LianZhaiLiuYao\data。 */
+    static string _dataDir;
+    static string DataDir()
+    {
+        if (_dataDir != null) return _dataDir;
+        string exeDir = null;
+        try { exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location); } catch { }
+        var candidates = new List<string>();
+        if (!string.IsNullOrEmpty(exeDir)) candidates.Add(Path.Combine(exeDir, "data"));
+        candidates.Add(Path.Combine(Root, "data"));
+        foreach (var dir in candidates)
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                var probe = Path.Combine(dir, ".writable");
+                File.WriteAllText(probe, "1");
+                File.Delete(probe);
+                _dataDir = dir;
+                return dir;
+            }
+            catch { }
+        }
+        _dataDir = Root;
+        try { Directory.CreateDirectory(_dataDir); } catch { }
+        return _dataDir;
+    }
+
+    // 只允许简单的文件名，禁止目录穿越
+    static string DataPath(string name)
+    {
+        var safe = new StringBuilder();
+        foreach (var ch in (name ?? ""))
+        {
+            if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.' || ch == ' ') safe.Append(ch);
+        }
+        var n = safe.ToString().Trim();
+        if (n.Length == 0) n = "unnamed.json";
+        if (!n.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) n += ".json";
+        return Path.Combine(DataDir(), n);
     }
 
     /* ---------- 崩溃日志 ---------- */

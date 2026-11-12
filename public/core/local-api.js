@@ -201,30 +201,81 @@
     });
   }
 
-  /* ---------- 卦例库（本机） ---------- */
+  /* ---------- 卦例库（本机） ----------
+   * 桌面壳里有文件通道（core/file-store.js）→ 存成软件目录下的 JSON：
+   *     <exe 目录>\data\卦例库.json
+   * 浏览器里没有壳 → 退回 localStorage。
+   * 首次升级：文件不存在但 localStorage 有数据时，自动搬过去，不丢一条。 */
+  const REC_FILE = '卦例库.json';
+  const FS = W.LY_FS || null;
+  const FILE_MODE = !!(FS && FS.available);
+  let recCache = null;
 
-  function loadRecs() {
+  function localRecs() {
     try {
       const raw = localStorage.getItem(REC_KEY);
       const a = raw ? JSON.parse(raw) : [];
       return Array.isArray(a) ? a : [];
     } catch (e) { return []; }
   }
-  function saveRecs(arr) {
+
+  async function readRecs() {
+    if (!FILE_MODE) return localRecs();
+    if (recCache) return recCache;
     try {
-      localStorage.setItem(REC_KEY, JSON.stringify(arr));
+      const txt = await FS.read(REC_FILE);
+      if (txt && txt.trim()) {
+        const a = JSON.parse(txt);
+        recCache = Array.isArray(a) ? a : ((a && Array.isArray(a.records)) ? a.records : []);
+      } else {
+        // 首次：把 localStorage 里的存量搬到文件，一条不丢
+        recCache = localRecs();
+        if (recCache.length) await FS.write(REC_FILE, JSON.stringify(recCache, null, 1));
+        else await FS.write(REC_FILE, '[]');
+      }
+    } catch (e) {
+      console.warn('[records] 读文件失败，退回 localStorage', e);
+      recCache = localRecs();
+    }
+    return recCache;
+  }
+
+  async function writeRecs(arr) {
+    recCache = arr;
+    if (!FILE_MODE) {
+      try { localStorage.setItem(REC_KEY, JSON.stringify(arr)); return true; }
+      catch (e) {
+        alert('本机存储写入失败（可能已满）。请先导出备份再清理旧卦例。');
+        return false;
+      }
+    }
+    try {
+      await FS.write(REC_FILE, JSON.stringify(arr, null, 1));
+      // 同时更新 localStorage 那份，作为第二道保险（文件坏了还能救）
+      try { localStorage.setItem(REC_KEY, JSON.stringify(arr)); } catch (e) { }
       return true;
     } catch (e) {
-      alert('本机存储写入失败（可能已满）。请在「AI 接口设置」里导出备份后清理旧卦例。');
-      return false;
+      alert('写入卦例库文件失败：' + (e && e.message || e) + '\n已退回存在浏览器存储里，请尽快导出备份。');
+      try { localStorage.setItem(REC_KEY, JSON.stringify(arr)); return true; } catch (e2) { return false; }
     }
   }
+
+  /* 供「AI 接口设置」里的存储位置一行使用 */
+  W.__lyRecordsInfo = async function () {
+    if (!FILE_MODE) return { mode: 'localStorage', path: '浏览器 localStorage（' + REC_KEY + '）', count: localRecs().length };
+    let dir = '';
+    try { dir = await FS.info(); } catch (e) { }
+    const arr = await readRecs();
+    const joined = dir ? (String(dir).replace(/[\\/]+$/, '') + '\\' + REC_FILE) : REC_FILE;
+    return { mode: 'file', path: joined, dir: dir, count: arr.length };
+  };
+  W.__lyOpenDataDir = function () { if (FILE_MODE) FS.open().catch(function () { }); };
   function nowISO() { return new Date().toISOString(); }
 
-  function handleRecords(req, url) {
+  async function handleRecords(req, url) {
     const q = url.searchParams;
     const method = req.method.toUpperCase();
-    let recs = loadRecs();
+    let recs = await readRecs();
 
     if (q.get('verify')) return json({ ok: true, local: true });
 
@@ -236,7 +287,7 @@
         if (i < 0) return json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
         recs[i].outcome = b.outcome || null;
         recs[i].outcome_at = nowISO();
-        saveRecs(recs);
+        await writeRecs(recs);
         return json({ ok: true, outcome: recs[i].outcome });
       })();
     }
@@ -246,7 +297,7 @@
       const hit = recs.filter(function (r) { return r.id === id; })[0];
       if (method === 'DELETE') {
         if (!hit) return json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
-        saveRecs(recs.filter(function (r) { return r.id !== id; }));
+        await writeRecs(recs.filter(function (r) { return r.id !== id; }));
         return json({ ok: true });
       }
       return hit ? json({ record: hit }) : json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
@@ -268,7 +319,7 @@
         // 回执不被后续保存冲掉（与服务端同一条约束）
         if (base.outcome && !p.outcome) merged.outcome = base.outcome;
         if (i >= 0) recs[i] = merged; else recs.unshift(merged);
-        if (!saveRecs(recs)) return json({ error: 'STORAGE_FULL', message: '本机存储已满' }, 507);
+        if (!(await writeRecs(recs))) return json({ error: 'STORAGE_FULL', message: '本机存储写入失败' }, 507);
         return json({ ok: true, id: merged.id, created_at: merged.created_at });
       })();
     }
@@ -336,10 +387,12 @@
       '<span class="muted" id="localApiTip" style="margin-left:8px"></span>' +
       '</div>' +
       '<details style="margin-top:10px"><summary class="muted" style="cursor:pointer">本机卦例库（备份 / 还原 / 清空）</summary>' +
+      '<div class="muted" id="libStorePath" style="margin-top:6px;font-size:12px;line-height:1.7"></div>' +
       '<div class="btn-row" style="margin-top:8px">' +
       '<button class="btn ghost" id="btnLibExport">导出 JSON</button>' +
       '<button class="btn ghost" id="btnLibImport">导入 JSON</button>' +
       '<button class="btn ghost" id="btnLibClear">清空卦例库</button>' +
+      '<button class="btn ghost" id="btnOpenDataDir" title="在资源管理器里打开数据目录">打开数据目录</button>' +
       '<span class="muted" id="libLocalTip" style="margin-left:8px"></span>' +
       '</div>' +
       '<div class="muted" style="margin-top:6px;font-size:12px">卦例库存本机 localStorage。导出后请自行保存到别处——换电脑、清缓存都会丢。</div>' +
@@ -404,9 +457,27 @@
       }).catch(function (e) { tip.textContent = '连接失败：' + (e.message || e); });
     };
 
+    /* 存储位置：桌面壳里是软件目录下 data\卦例库.json；浏览器里是 localStorage。
+     * 换电脑只要拷 data 目录（或整个程序文件夹），比 leveldb 好懂多了。 */
+    const locEl = sec.querySelector('#libStorePath');
+    if (locEl) {
+      if (typeof W.__lyRecordsInfo === 'function') {
+        W.__lyRecordsInfo().then(function (info) {
+          locEl.innerHTML = info.mode === 'file'
+            ? '存储位置：<b>' + String(info.path).replace(/&/g, '&amp;') + '</b>（' + info.count + ' 条）'
+            : '存储位置：' + info.path + '（' + info.count + ' 条，浏览器模式）';
+        }).catch(function () { });
+      }
+    }
+    const openDir = sec.querySelector('#btnOpenDataDir');
+    if (openDir) openDir.onclick = function () {
+      if (typeof W.__lyOpenDataDir === 'function') W.__lyOpenDataDir();
+      else sec.querySelector('#libLocalTip').textContent = '浏览器模式没有数据目录';
+    };
+
     // ---- 卦例库备份 ----
-    sec.querySelector('#btnLibExport').onclick = function () {
-      const arr = loadRecs();
+    sec.querySelector('#btnLibExport').onclick = async function () {
+      const arr = await readRecs();
       const blob = new Blob([JSON.stringify(arr, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -424,16 +495,16 @@
         const f = inp.files && inp.files[0];
         if (!f) return;
         const fr = new FileReader();
-        fr.onload = function () {
+        fr.onload = async function () {
           try {
             const arr = JSON.parse(String(fr.result));
             if (!Array.isArray(arr)) throw new Error('不是数组');
-            const cur = loadRecs();
+            const cur = await readRecs();
             const byId = {};
             cur.forEach(function (r) { byId[r.id] = r; });
             let add = 0;
             arr.forEach(function (r) { if (r && r.id && !byId[r.id]) { cur.unshift(r); add++; } });
-            saveRecs(cur);
+            await writeRecs(cur);
             sec.querySelector('#libLocalTip').textContent = '导入 ' + add + ' 条（重复 id 已跳过），共 ' + cur.length + ' 条';
             if (typeof W.__lyReloadModels === 'function') setTimeout(function () { location.reload(); }, 900);
           } catch (e) { alert('导入失败：' + e.message); }
@@ -442,11 +513,13 @@
       };
       inp.click();
     };
-    sec.querySelector('#btnLibClear').onclick = function () {
-      const n = loadRecs().length;
+    sec.querySelector('#btnLibClear').onclick = async function () {
+      const cur = await readRecs();
+      const n = cur.length;
       if (!n) { sec.querySelector('#libLocalTip').textContent = '卦例库已经是空的'; return; }
       if (!confirm('清空本机卦例库（' + n + ' 条）？不可恢复，建议先导出备份。')) return;
-      localStorage.removeItem(REC_KEY);
+      await writeRecs([]);
+      try { localStorage.removeItem(REC_KEY); } catch (e) { }
       sec.querySelector('#libLocalTip').textContent = '已清空';
       setTimeout(function () { location.reload(); }, 600);
     };
@@ -479,7 +552,7 @@
 
   // 对外暴露，便于排障与将来加「书籍/卦例」导入
   W.LY_LOCAL = {
-    loadCfg: loadCfg, saveCfg: saveCfg, loadRecs: loadRecs, saveRecs: saveRecs,
+    loadCfg: loadCfg, saveCfg: saveCfg, loadRecs: readRecs, saveRecs: writeRecs,
     REC_KEY: REC_KEY, CFG_KEY: CFG_KEY
   };
 })(typeof window !== 'undefined' ? window : globalThis);
