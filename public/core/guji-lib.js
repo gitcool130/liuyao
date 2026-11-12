@@ -213,7 +213,13 @@
 
   /* ---------- 用户自建 ---------- */
 
-  function loadUser() {
+  /* 自建书籍与卦例：桌面壳里落成软件目录下的 JSON（data\我的古籍.json），
+   * 浏览器里退回 localStorage。首次升级把 localStorage 的存量搬进文件。 */
+  const USER_FILE = '我的古籍.json';
+  const US = (W.LY_FS && W.LY_FS.available) ? W.LY_FS : null;
+  let userCache = null;
+
+  function loadUserLocal() {
     try {
       const raw = localStorage.getItem(USER_KEY);
       const o = raw ? JSON.parse(raw) : null;
@@ -221,14 +227,57 @@
     } catch (e) { }
     return { books: [] };
   }
-  function saveUser(o) {
-    try { localStorage.setItem(USER_KEY, JSON.stringify(o)); return true; }
-    catch (e) { alert('本机存储写入失败：' + e.message); return false; }
+
+  // 启动时读一次（文件优先），之后 loadUser() 走内存副本
+  function ensureUser() {
+    if (userCache) return Promise.resolve(userCache);
+    if (!US) { userCache = loadUserLocal(); return Promise.resolve(userCache); }
+    return US.read(USER_FILE).then(function (txt) {
+      if (txt && txt.trim()) {
+        const o = JSON.parse(txt);
+        userCache = (o && Array.isArray(o.books)) ? o : { books: [] };
+      } else {
+        userCache = loadUserLocal();
+        return US.write(USER_FILE, JSON.stringify(userCache, null, 1));
+      }
+      return null;
+    }).catch(function (e) {
+      console.warn('[guji] 读自建库文件失败，退回 localStorage', e);
+      userCache = loadUserLocal();
+    }).then(function () { return userCache; });
   }
+
+  function loadUser() {
+    return userCache || loadUserLocal();
+  }
+  function saveUser(o) {
+    userCache = o;
+    try { localStorage.setItem(USER_KEY, JSON.stringify(o)); } catch (e) { }
+    // 存完立刻刷新「自建 N 本」那行，不然新建书籍后数字还是 0
+    setTimeout(function () { try { refreshUserBackupUI(); } catch (e) { } }, 0);
+    if (US) {
+      US.write(USER_FILE, JSON.stringify(o, null, 1)).catch(function (e) {
+        alert('写自建库文件失败：' + (e && e.message || e) + '\n已先存在浏览器存储里，请尽快导出备份。');
+      });
+    }
+    return true;
+  }
+
+  /* 供备份区显示存储位置 */
+  W.__lyGujiUserInfo = function () {
+    if (!US) return Promise.resolve({ mode: 'localStorage', path: '浏览器 localStorage（' + USER_KEY + '）', count: loadUser().books.length });
+    return US.info().then(function (dir) {
+      const base = String(dir || '').replace(/[\\/]+$/, '');
+      return { mode: 'file', dir: base, path: (base ? base + '\\' : '') + USER_FILE, count: loadUser().books.length };
+    }).catch(function () {
+      return { mode: 'file', path: USER_FILE, count: loadUser().books.length };
+    });
+  };
 
   /* ---------- 装载 ---------- */
 
   async function loadManifest() {
+    await ensureUser();
     state.user = loadUser();
     let list = [];
     try {
@@ -624,9 +673,21 @@
     return mine + '　·　内置 ' + builtin.length + ' 本／' + bn + ' 条（在 guji 文件夹，随程序走）';
   }
 
-  function bindUserBackup() {
+  function refreshUserBackupUI() {
     const cnt = document.getElementById('gujiUserCount');
-    const paint = function () { if (cnt) cnt.textContent = userCountText(); };
+    if (cnt) cnt.textContent = userCountText();
+    const pathEl = document.getElementById('gujiStorePath');
+    if (pathEl && typeof W.__lyGujiUserInfo === 'function') {
+      W.__lyGujiUserInfo().then(function (info) {
+        pathEl.innerHTML = info.mode === 'file'
+          ? '存储位置：<b>' + String(info.path).replace(/&/g, '&amp;') + '</b>'
+          : '存储位置：' + info.path + '（浏览器模式）';
+      }).catch(function () { });
+    }
+  }
+
+  function bindUserBackup() {
+    const paint = refreshUserBackupUI;
     paint();
 
     const stamp = function () {
@@ -823,6 +884,7 @@
       '<button class="btn ghost" id="btnGujiWipe">清空自建</button>' +
       '<button class="btn ghost" id="btnGujiExportAll" title="把内置书库与自建内容打包成一个 JSON（约 6MB），留档或换机时用">导出整库</button>' +
       '<span class="muted" id="gujiUserCount"></span>' +
+      '<div class="muted" id="gujiStorePath" style="flex-basis:100%;font-size:12px"></div>' +
       '<input type="file" id="gujiUserFile" accept=".json,application/json" hidden>' +
       '</div>';
     if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(sec, anchor);
