@@ -809,6 +809,30 @@
   const GZC_KONG = 'gzc-kong';   // 旬空：支在旬空里
   const GZC_PO = 'gzc-po';       // 月破：支冲月建
 
+  /* 八纯卦（本宫首卦）：伏神一律从它的同位爻取——这是伏神的来源，不是另一套算法。 */
+  const PURE_HEX = {
+    乾: '乾为天', 坎: '坎为水', 艮: '艮为山', 震: '震为雷',
+    巽: '巽为风', 离: '离为火', 坤: '坤为地', 兑: '兑为泽'
+  };
+  const pureLineCache = {};
+  /* 本宫首卦的六爻（六亲/干支）。用途：本卦某爻没有真伏神时，把「首卦同位」用暗色
+   * 列出来当参照——王哥要的「除八纯卦外卦卦都显示伏神」就是这个位置表。
+   * 注意：真伏神由引擎按「本卦缺哪一亲」算出（L.fu），这里只补参照，不改引擎。 */
+  function pureLinesOf(p) {
+    const name = PURE_HEX[p.palace];
+    if (!name) return null;
+    if (pureLineCache[name]) return pureLineCache[name];
+    const bits = (typeof guaBitsByName === 'function') ? guaBitsByName(name) : null;
+    if (!bits) return null;
+    try {
+      const pp = C.paipan(bits.map(function (b) { return b ? 1 : 0; }), new Date());
+      pureLineCache[name] = pp.lines.map(function (L) {
+        return { lq: L.lq, gan: L.gan, zhi: L.zhi };
+      });
+      return pureLineCache[name];
+    } catch (e) { return null; }
+  }
+
   function panClassicRows(p) {
     const pil = p.pillars;
     const pad = function (str, w) {
@@ -838,17 +862,36 @@
     flat('六神　伏　　神　　【本　　卦】' + (p.hasBian ? '　　　　【变　　　卦】' : ''));
 
     // 4) 六爻（上 → 初）
+    const pure = pureLinesOf(p);
+    const isPureGua = !!(pure && p.benName === PURE_HEX[p.palace]);
     for (let i = 5; i >= 0; i--) {
       const L = p.lines[i];
       const sym = L.yang ? '━━━' : '━　━';
-      const fu = L.fu ? (L.fu.lq + L.fu.zhi) : '';
       const mark = L.shi ? '世' : (L.ying ? '应' : '　');
       const dong = L.moving ? (L.yang ? '○' : '×') : '　';
       // 旬空/月破只标「本卦这一爻」的干支；变卦那一列不标（古籍版式里它是参照）
       const isKong = pil.kong.indexOf(L.zhiIdx) >= 0;
       const isPo = (typeof C.chong === 'function') ? C.chong(L.zhiIdx, pil.monthZhi) : false;
+      /* 伏神三段式：
+       *   ① 真伏神（本卦缺这一亲）→ 亮色，这是要「标注」的那个；
+       *   ② 本卦六亲齐全，但非八纯卦 → 把首卦同位之爻用暗色列出，当位置参照；
+       *   ③ 八纯卦 → 伏神列留白（自己伏自己没有意义）。
+       * ②只出现在显示层：纯文本（复制/画板/分享）仍是干净的盘面，不留参照。 */
+      let fuSeg;
+      if (L.fu) {
+        fuSeg = { t: pad(L.fu.lq + L.fu.zhi, 6), cls: 'gzc-fu' };
+      } else if (pure && !isPureGua && pure[i]) {
+        fuSeg = {
+          t: pad('', 6),
+          html: '<span class="gzc-fu-ref">' + esc(pad(pure[i].lq + pure[i].zhi, 6)) + '</span>'
+        };
+      } else {
+        fuSeg = { t: pad('', 6) };
+      }
       const segs = [
-        { t: pad(L.beast === '勾陈' ? '勾陈' : L.beast, 3) + '　' + pad(fu, 6) + '　' + L.lq },
+        { t: pad(L.beast === '勾陈' ? '勾陈' : L.beast, 3) + '　' },
+        fuSeg,
+        { t: '　' + L.lq },
         // 月破优先：既旬空又月破时按月破画（与卦象表格的 gzp-po 口径一致）
         { t: L.gan + L.zhi, cls: isPo ? GZC_PO : (isKong ? GZC_KONG : '') },
         { t: L.wx + sym + '　' + mark + dong }
@@ -881,7 +924,7 @@
   function panClassicHTML(p) {
     return panClassicRows(p).map(function (segs) {
       return segs.map(function (s) {
-        const t = esc(s.t);
+        const t = (s.html != null) ? s.html : esc(s.t);
         return s.cls ? '<span class="' + s.cls + '">' + t + '</span>' : t;
       }).join('').replace(/\s+$/, '');
     }).join('\n');
@@ -994,8 +1037,15 @@
     const title = '<b>' + pan.benName + '</b>（' + pan.palace + '宫 · ' + pan.palaceWx + '）' +
       (pan.hasBian ? ' 之 <b>' + pan.bianName + '</b>（' + pan.bianPalace + '宫）' : '（静卦）');
     let rows = '';
+    const pure = pureLinesOf(pan);
+    const isPureGua = !!(pure && pan.benName === PURE_HEX[pan.palace]);
     for (let i = 5; i >= 0; i--) {
       const L = pan.lines[i];
+      // 伏神：真伏（本卦缺亲）用亮色；非八纯卦的其他爻，首卦同位用暗色当参照
+      const fuRef = (!L.fu && pure && !isPureGua && pure[i]) ? pure[i] : null;
+      const fuHtml = L.fu
+        ? '<span class="fu-real">' + L.fu.lq + '<br>' + L.fu.zhi + '</span>'
+        : (fuRef ? '<span class="fu-ref">' + fuRef.lq + '<br>' + fuRef.zhi + '</span>' : '');
       // 旬空：值旬空的爻支；月破：爻支冲月建。两者都标红，月破再加虚线以便区分。
       const isKong = pil.kong.indexOf(L.zhiIdx) >= 0;
       const isPo = (typeof C.chong === 'function') ? C.chong(L.zhiIdx, pil.monthZhi) : false;
@@ -1012,7 +1062,7 @@
       }
       rows += '<tr>' +
         '<td>' + L.beast + '</td>' +
-        '<td class="fu-cell">' + (L.fu ? L.fu.lq + '<br>' + L.fu.zhi : '') + '</td>' +
+        '<td class="fu-cell">' + fuHtml + '</td>' +
         '<td>' + L.lq + ' ' + gzHtml + '<br>' + yaoSymHTML(L.yang, L.moving, L.old) + '</td>' +
         '<td>' + (L.shi ? '<span class="badge-shi">世</span>' : L.ying ? '<span class="badge-ying">应</span>' : '') + '</td>' +
         '<td class="bian-cell">' + bianHtml + '</td>' +
@@ -1038,7 +1088,11 @@
         '<div class="meta-line">占时 ' + fmtDT(selectedDate) + ' ｜ ' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时 ｜ 旬空 <span class="kong">' + pil.kongStr + '</span></div>';
     }
     $('#panBody').innerHTML = headHtml +
-      '<table class="pan"><thead><tr><th>六神</th><th>伏神</th><th>本卦</th><th>世应</th><th>变爻</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      '<table class="pan"><thead><tr><th>六神</th>' +
+      '<th title="亮色＝本卦所缺之亲，伏于本宫首卦同位；暗色＝本宫首卦同位（参照，非真伏）">伏神</th>' +
+      '<th>本卦</th><th>世应</th><th>变爻</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<div class="muted" style="font-size:12px;margin-top:6px">伏神：<b class="fu-real-tip">亮色</b>＝本卦所缺、伏于本宫首卦同位；' +
+      '<span class="fu-ref-tip">暗色</span>＝本宫首卦同位（参照，非真伏）；八纯卦六亲自足，不列伏神。</div>';
     renderWxBlock();
     renderClassic();
   }

@@ -663,6 +663,35 @@ async function launchBrowser() {
   eq('古籍版式把月破的干支标出', marks.po, ['甲辰']);
   ok('标色不改文本内容（对齐与复制不变）', marks.same);
 
+  // 伏神：真伏（本卦缺亲）亮色、本宫首卦同位暗色、八纯卦不列；纯文本只留真伏
+  await page.selectOption('#gzBen', '山地剥');   // 乾宫五世，缺兄弟 → 真伏兄弟申
+  await page.waitForTimeout(200);
+  await page.click('#btnGzPaipan');
+  await page.waitForTimeout(800);
+  const fu = await page.evaluate(() => {
+    const pre = document.getElementById('classicText');
+    return {
+      real: pre.querySelectorAll('.gzc-fu').length,
+      ref: pre.querySelectorAll('.gzc-fu-ref').length,
+      plain: window.__lyPanClassic(),
+      tableReal: document.querySelectorAll('#panBody .fu-real').length,
+      tableRef: document.querySelectorAll('#panBody .fu-ref').length
+    };
+  });
+  eq('剥卦真伏神只 1 个（兄弟申）', fu.real, 1);
+  eq('剥卦首卦同位参照 5 个', fu.ref, 5);
+  eq('表格同样标出（真伏 1＋参照 5）', [fu.tableReal, fu.tableRef], [1, 5]);
+  ok('纯文本只有真伏、不含参照', fu.plain.indexOf('兄弟申') >= 0 && fu.plain.indexOf('父母戌') < 0,
+    (fu.plain.split(String.fromCharCode(10))[3] || '').slice(0, 60));
+  await page.selectOption('#gzBen', '乾为天');   // 八纯卦：六亲自足
+  await page.waitForTimeout(200);
+  await page.click('#btnGzPaipan');
+  await page.waitForTimeout(700);
+  eq('八纯卦不列伏神（真伏与参照都为 0）', await page.evaluate(() => [
+    document.querySelectorAll('#classicText .gzc-fu, #classicText .gzc-fu-ref').length,
+    document.querySelectorAll('#panBody .fu-real, #panBody .fu-ref').length
+  ]), [0, 0]);
+
   /* ---------- F. 古籍全文阅读 ---------- */
   say('F. 古籍全文');
   const textOpts = await page.$$eval('#gujiBook option', e => e.map(x => x.textContent));
