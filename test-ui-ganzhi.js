@@ -616,6 +616,25 @@ async function launchBrowser() {
     afterLoad.split('\n')[0]);
   eq('装入后切到干支模式', await page.$eval('#gzCard', e => e.hidden), false);
 
+  /* ---------- H. 断语栏（凡排出卦象的界面都有；载入卦象也带出断语） ---------- */
+  say('H. 断语栏');
+  eq('结果页有断语栏', await page.$eval('#duanBox', e => e.hidden), false);
+  const duanLoaded = await page.$eval('#duanText', e => e.value);
+  ok('装入古籍后断语自动带出', duanLoaded.length > 10, 'len=' + duanLoaded.length);
+  const duanSrc = await page.$eval('#duanSrc', e => e.textContent);
+  ok('断语标明来源', /^来源：/.test(duanSrc), duanSrc.slice(0, 40));
+  eq('干支排盘预览里是同一份断语', await page.$eval('#gzDuanText', e => e.value), duanLoaded);
+  await page.$eval('#btnClassic', el => el.click());       // 切卦象表格
+  await page.waitForTimeout(300);
+  eq('切到卦象表格后断语栏还在', await page.$eval('#duanBox', e => e.hidden), false);
+  await page.fill('#gzDuanText', '冒烟：在干支预览里改的断语');
+  await page.waitForTimeout(200);
+  eq('预览改动同步到结果页', await page.$eval('#duanText', e => e.value), '冒烟：在干支预览里改的断语');
+  await page.$eval('#btnReset', el => el.click());
+  await page.waitForTimeout(400);
+  eq('重新起卦后断语栏收起', await page.$eval('#duanBox', e => e.hidden), true);
+  eq('重新起卦后断语清空', await page.$eval('#duanText', e => e.value), '');
+
   /* ---------- F. 古籍全文阅读 ---------- */
   say('F. 古籍全文');
   const textOpts = await page.$$eval('#gujiBook option', e => e.map(x => x.textContent));

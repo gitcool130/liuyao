@@ -378,6 +378,9 @@
   const CAST4_MODES = ['num', 'bao', 'time', 'rand'];
   const CAST4_LABEL = { num: '数字卦', bao: '报数卦', time: '时间卦', rand: '电脑卦' };
 
+  // 断语（排盘下方那一栏）的内容与来源；setCastMode 与「重新起卦」会清空
+  const duan = { text: '', src: '' };
+
   function setCastMode(mode) {
     const m = String(mode || 'date');
     const isC4 = CAST4_MODES.indexOf(m) >= 0;
@@ -396,6 +399,7 @@
     $('#btnModeRand').className = 'btn ' + (castMode === 'rand' ? 'primary' : 'ghost');
     // 切口径即作废当前盘：两种占时口径的盘不能混着看
     records = []; pan = null; lastBullets = []; lastAnalysis = null;
+    setDuan('', '');          // 断语跟着盘一起作废，别把上一卦的断语带过来
     resetTossState();
     timeLocked = false; lockedDate = null;
     if (!isGz && timeMode === 'live') selectedDate = beijingNow();
@@ -531,7 +535,8 @@
       resetTossState();
     }
     renderCoins(); renderTossHint(); renderStack();
-    if (records.length === 6) computePan();
+    // 六爻齐了就是一卦之始：断语跟着换（上一卦写过什么不能带到新卦上）
+    if (records.length === 6) { setDuan('', ''); computePan(); }
   };
 
   // 撤销（M6 修复）：撤销必须彻底重置当前爻状态（含 curCoins 与盲摆内定值），
@@ -544,6 +549,7 @@
     resetAIState();
     if (!records.length) { resetTossState(); renderCoins(); renderTossHint(); renderStack(); return; }
     records.pop(); pan = null; lastBullets = []; lastAnalysis = null;
+    setDuan('', '');      // 撤销后盘面没了，断语跟着清（再落一爻是新的一卦）
     resetTossState(); // ★ 关键修复：清掉 curCoins / pendingToss
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
     renderCoins(); renderTossHint(); renderStack();
@@ -575,6 +581,7 @@
     // 顺带复位 #btnAI 文案（P2 前端-7：旧版残留「重新断卦」）。
     resetAIState();
     records = []; pan = null; lastBullets = []; lastAnalysis = null;
+    setDuan('', '');
     resetTossState();
     timeLocked = false;           // 重新起卦解锁时间，等待新的首摇
     lockedDate = null;
@@ -638,6 +645,7 @@
     // 需要看表格式的六神/伏神/变爻配色时再点按钮收起
     showClassic = true;
     renderPan();
+    renderDuan();
     resetAIState();
     $('#panCard').hidden = false;
     $('#analysisCard').hidden = false;
@@ -749,6 +757,10 @@
     if (c.question && typeof applyQuestionText === 'function') applyQuestionText(c.question);
     gzRefresh();
     computePan();
+    /* 古籍卦例的价值一半在断语：装进来就填到盘面下方那一栏，省得来回翻。
+     * 没有 conclusion 的用例退一步显示 quote（原文摘句），两者都空就留空。 */
+    const duanTxt = String(c.conclusion || c.quote || '').trim();
+    setDuan(duanTxt, duanTxt ? ('《' + (c.book || '古籍卦例') + '》' + (c.title || '')) : '');
     const card = $('#gzCard');
     if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
@@ -856,6 +868,68 @@
     pre.textContent = panClassicText(pan);
     box.hidden = false;
   }
+
+  /* ---------- 断语栏（凡排出卦象的界面都有） ----------
+   * 结果页（古籍版式 / 卦象表格）、干支排盘右侧预览、画板，三处共用同一份断语：
+   * 任一处改动，其它几处跟着变；装入古籍卦例、从卦例库还原时一并带出原文断语；
+   * 手写的断语随「存入卦例库」落进记录（recordPayload.conclusion），下次还原再填回。 */
+  const duanEditors = [];        // 所有可输入断语的文本框
+
+  function syncDuanEditors(skip) {
+    duanEditors.forEach(function (el) {
+      if (!el || el === skip) return;
+      if (document.activeElement === el) return;      // 正在打字的那一处不动
+      if (el.value !== duan.text) el.value = duan.text;
+    });
+  }
+
+  // 画板等外部模块也用它把自带的断语框接进来
+  function bindDuanEditor(el) {
+    if (!el || el.__duanBound) return;
+    el.__duanBound = true;
+    duanEditors.push(el);
+    if (el.value !== duan.text) el.value = duan.text;
+    el.addEventListener('input', function () {
+      duan.text = this.value;
+      syncDuanEditors(this);
+    });
+  }
+
+  function renderDuan() {
+    const box = $('#duanBox');
+    if (box) box.hidden = !pan;
+    const src = $('#duanSrc');
+    if (src) src.textContent = duan.src ? ('来源：' + duan.src) : '';
+    syncDuanEditors(null);
+  }
+
+  // 装入卦例／还原记录统一从这里灌入；src 是「《书名》标题」这种来源说明
+  function setDuan(text, src) {
+    duan.text = String(text == null ? '' : text).replace(/\s+$/, '');
+    duan.src = src ? String(src) : '';
+    renderDuan();
+  }
+
+  bindDuanEditor($('#duanText'));
+  bindDuanEditor($('#gzDuanText'));
+
+  (function bindDuanBtns() {
+    const clr = $('#btnDuanClear');
+    if (clr) clr.onclick = function () { setDuan('', ''); };
+    const cp = $('#btnDuanCopy');
+    if (cp) cp.onclick = function () {
+      const t = (duan.text || '').trim();
+      if (!t) return;
+      if (navigator.clipboard) navigator.clipboard.writeText(t).catch(function () { });
+    };
+  })();
+
+  // 给画板（core/board.js）用：取/存同一份断语，并把它自带的文本框接进来
+  window.__lyDuan = {
+    get: function () { return { text: duan.text, src: duan.src }; },
+    set: setDuan,
+    bind: bindDuanEditor
+  };
 
   function renderPan() {
     const pil = pan.pillars;
@@ -985,6 +1059,7 @@
     resetTossState();
     if (!timeLocked) { selectedDate = beijingNow(); timeLocked = true; lockedDate = selectedDate; }
     applyQuestionText($('#c4Question') ? $('#c4Question').value : '');
+    setDuan('', '');
     computePan();
     renderTime(); renderCoins(); renderTossHint(); renderStack();
     const bits = vals.map(function (v) { return (v === 1 || v === 9) ? 1 : 0; });
@@ -1133,6 +1208,7 @@
     // 铜钱残留上一爻的揭晓样式、提示文字陈旧。旧版只调 computePan()，
     // 用户看到的是「排盘表新、爻栈旧」的自相矛盾盘面。
     applyQuestionText($('#castQuestion') ? $('#castQuestion').value : '');
+    setDuan('', '');
     computePan();
     renderCoins();
     renderTossHint();
@@ -3240,6 +3316,8 @@
       hex: pan.benName + (pan.hasBian ? ' 之 ' + pan.bianName : '（静卦）'),
       tosses: tossArr,
       panText: buildPanText(true),
+      // 断语栏：自己写的随记录走（古籍卦例装入时带出的原文断语也算这一卦的断语）
+      conclusion: (duan.text || '').trim(),
       baseline: baselineSnapshot(),
       messages: aiStates   // { modelId: [{role, content}] }
     };
@@ -3718,6 +3796,8 @@
 
     if (r.question) applyQuestionText(r.question);
     computePan();
+    // 还原记录的断语（旧记录没有这个字段就清空，别把上一卦的留在盘下）
+    setDuan(r.conclusion || '', r.conclusion ? ('卦例库 · ' + (r.question || r.hex || '')) : '');
     const pc = $('#panCard');
     if (pc) pc.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -3848,6 +3928,9 @@
         '<button class="btn ghost" id="btnLibBoard" title="把这张盘画到画板上圈点">导入画板</button>' +
         '<button class="btn ghost" id="btnLibRestore" title="按这条记录还原成卦象">装入卦象</button>' +
         '</div>' +
+        // 断语（排盘页下方那一栏存下来的原文），有就照原样显示，方便对旧卦复盘
+        (r.conclusion ? '<div class="ai-block" style="margin-top:8px"><b>断语</b>' +
+          '<div class="muted" style="white-space:pre-wrap;line-height:1.95;margin-top:4px">' + esc(r.conclusion) + '</div></div>' : '') +
         '<div class="ai-cols">' + colHTML + '</div>' +
         cmpHTML +
         '<div class="oc-box"><b>结果回执</b>　<span class="muted" id="ocNow">' + esc(ocNow) + '</span>' +
@@ -3870,6 +3953,10 @@
       if (bb) bb.onclick = function () {
         const txt = r.pan_text || '';
         if (!txt) { restoreStatus('这条卦例没有存盘面文本，无法导入画板', false); return; }
+        // 载入卦象的同时把断语也带过去（画板与排盘页共用同一份断语）
+        if (window.__lyDuan && typeof window.__lyDuan.set === 'function') {
+          window.__lyDuan.set(r.conclusion || '', r.conclusion ? ('卦例库 · ' + (r.question || r.hex || '')) : '');
+        }
         if (typeof window.__lyOpenPane === 'function') window.__lyOpenPane('board');
         if (typeof window.__lyBoardLoadText === 'function') window.__lyBoardLoadText(txt);
       };
@@ -3985,6 +4072,7 @@
     const uc = $('#useCustom');
     if (d.question && uc) { uc.value = d.question; uc.hidden = false; }
     renderTime(); renderCoins(); renderTossHint(); renderStack();
+    setDuan('', '');      // 分享链接不带断语（提示里也写了「需重新断卦」）
     computePan();
     if (hint) {
       hint.innerHTML = '已按分享链接还原盘面（' + esc(pan ? pan.benName : '') +

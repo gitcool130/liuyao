@@ -75,6 +75,11 @@
       '<button class="bd-mini bd-green" id="bdDrawText">按文本画出</button>' +
       '<button class="bd-mini" id="bdCopyText" title="把文本框内容复制走">复制文本</button>' +
       '</span></div>' +
+      // 断语：与排盘页共用同一份，载入卦象/装入卦例时自动带出，改这里也会同步回去
+      '<div class="bd-duanrow">' +
+      '<span class="bd-duanlabel">断语</span>' +
+      '<textarea id="bdDuan" placeholder="这一卦的断语（与排盘页同一份）：装入/还原卦例时自动带出；这里改了排盘页也跟着变。"></textarea>' +
+      '</div>' +
       '<div class="bd-wrap"><canvas id="bdCanvas"></canvas></div>';
     if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(sec, anchor);
     else document.querySelector('.wrap').appendChild(sec);
@@ -363,6 +368,11 @@
       } else { tip('此环境不能写剪贴板，请手动选中复制'); }
     };
 
+    // 断语框接进全局那一份（排盘页 / 画板 改哪头都同步）
+    if (window.__lyDuan && typeof window.__lyDuan.bind === 'function') {
+      window.__lyDuan.bind(sec.querySelector('#bdDuan'));
+    }
+
     // 截屏批注：读剪贴板里的图片（Win+Shift+S 之后再点）
     function pasteFromClipboard() {
       if (!navigator.clipboard || !navigator.clipboard.read) {
@@ -498,6 +508,10 @@
     '#bdPanText{flex:1;min-height:52px;max-height:120px;resize:vertical;font-family:inherit;font-size:12.5px;' +
     'line-height:1.6;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}' +
     '.bd-textbtns{display:flex;flex-direction:column;gap:6px;justify-content:center}' +
+    '.bd-duanrow{display:flex;gap:8px;align-items:flex-start;margin-top:8px}' +
+    '.bd-duanlabel{flex:0 0 auto;font-size:12.5px;letter-spacing:2px;color:var(--ink-light);padding-top:6px}' +
+    '#bdDuan{flex:1;min-height:56px;max-height:180px;resize:vertical;font-family:inherit;font-size:12.5px;' +
+    'line-height:1.7;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fffdf8;color:var(--ink)}' +
     '.bd-mini.bd-red{color:#a5352c;border-color:#e6bdb7}' +
     '.bd-mini.bd-red:hover{background:#fdf1ef}' +
     '.bd-wrap{border:1px solid var(--line);border-radius:8px;background:' + PAPER + ';overflow:hidden;line-height:0;margin-top:8px}' +

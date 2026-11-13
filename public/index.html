@@ -319,6 +319,29 @@
     background: #fff; border: 1px solid var(--line); border-radius: 6px;
     padding: 10px; margin: 10px 0; line-height: 1.6;
   }
+  /* ---- 断语栏（排盘之下一栏，古籍版式/卦象表格共用） ----
+     古籍卦例只记「某卦之某卦＋断语」，装入时把断语带进来；
+     与上方排盘同一张卡：白底、细边，中间一道虚线，看着像同一框的下半截 */
+  .duan-box { margin-top: 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; padding: 10px 12px; }
+  .duan-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .duan-title { font-size: 14px; font-weight: 600; color: var(--cinnabar-dark); letter-spacing: 4px; }
+  .duan-acts { margin-left: auto; display: flex; gap: 8px; }
+  .duan-acts .btn { padding: 2px 10px; font-size: 12px; }
+  #duanText {
+    width: 100%; box-sizing: border-box; min-height: 148px; resize: vertical;
+    font-family: inherit; font-size: 14px; line-height: 1.95; color: var(--ink);
+    padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fffdf8;
+  }
+  #duanText:focus { outline: none; border-color: var(--cinnabar); }
+  /* 干支排盘右侧预览下方的断语（与结果页同一份内容） */
+  .gz-duan { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); }
+  .gz-duan .duan-title { display: block; margin-bottom: 4px; }
+  #gzDuanText {
+    width: 100%; box-sizing: border-box; min-height: 82px; resize: vertical;
+    font-family: inherit; font-size: 13px; line-height: 1.85; color: var(--ink);
+    padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fffdf8;
+  }
+  #gzDuanText:focus { outline: none; border-color: var(--cinnabar); }
   /* ---- 干支排盘表单（本卦/变卦/占问 + 年/月建/日辰/时辰，贴参考图） ---- */
   .gz-form { display: flex; flex-direction: column; gap: 12px; }
   .gz-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
@@ -470,6 +493,12 @@
       </div>
       <div class="gz-prev-col">
         <div id="gzPreview" class="gz-preview"></div>
+        <!-- 干支排盘的卦象下面也留断语栏：与结果页、画板共用同一份 -->
+        <div id="gzDuan" class="gz-duan">
+          <span class="duan-title" style="font-size:12.5px">断　语</span>
+          <textarea id="gzDuanText" rows="3" autocomplete="off"
+            placeholder="这一卦的断语（可留空）：装入古籍卦例会自动带出原文断语，自己写的随「存入卦例库」一起存。"></textarea>
+        </div>
       </div>
     </div>
   </section>
@@ -518,6 +547,20 @@
       <pre id="classicText" class="pan-text" style="white-space:pre;overflow-x:auto"></pre>
     </div>
     <div id="panBody"></div>
+    <!-- 断语：排盘之下一栏。两种版式都留这一栏；从古籍卦例装入时自动带出原文断语，
+         自己写的断语随「存入卦例库」一起保存 -->
+    <div id="duanBox" class="duan-box" hidden>
+      <div class="duan-head">
+        <span class="duan-title">断　语</span>
+        <span class="muted" id="duanSrc" style="font-size:12px"></span>
+        <span class="duan-acts">
+          <button class="btn ghost" id="btnDuanCopy" title="复制这一栏的断语">复制断语</button>
+          <button class="btn ghost" id="btnDuanClear" title="清空断语（不影响盘面）">清空</button>
+        </span>
+      </div>
+      <textarea id="duanText" rows="6" autocomplete="off"
+        placeholder="这一卦的断语（可留空）：从古籍卦例装入会自动带出原文断语；自己写的会随「存入卦例库」一起存。"></textarea>
+    </div>
     <div id="wxBlock"></div>
     <div class="btn-row">
       <button class="btn ghost" id="btnClassic">古籍版式</button>
@@ -629,10 +672,10 @@
 <script src="core/prompt.js?v=20261110a"></script>
 <script src="core/file-store.js?v=20261112c"></script>
 <script src="core/local-api.js?v=20261112d"></script>
-<script src="core/guji-lib.js?v=20261112e"></script>
-<script src="core/board.js?v=20261112c"></script>
+<script src="core/guji-lib.js?v=20261113a"></script>
+<script src="core/board.js?v=20261113a"></script>
 <script src="core/toolbar.js?v=20261111c"></script>
-<script src="app.js?v=20261112b"></script>
+<script src="app.js?v=20261113a"></script>
 <script src="bgm.js?v=20261110a"></script>
 </body>
 </html>

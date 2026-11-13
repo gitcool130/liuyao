@@ -597,6 +597,11 @@
         question: c.question || '',
         benGua: c.benGua || '',
         bianGua: c.bianGua || '',
+        // 断语一并送进排盘页下方那一栏（古籍卦例的价值一半在断语）
+        book: c.book || '',
+        title: c.title || '',
+        conclusion: c.conclusion || '',
+        quote: c.quote || '',
         toss: c.toss
       });
       box.hidden = true;
@@ -609,6 +614,11 @@
     if (boardBtn) boardBtn.onclick = function () {
       const txt = (typeof W.__lyClassicFromCase === 'function') ? W.__lyClassicFromCase(c) : '';
       if (!txt) { alert('这一例没有可还原的六爻'); return; }
+      // 导入画板同样把这一例的断语带过去（与排盘页共用同一份）
+      const duanTxt = String(c.conclusion || c.quote || '').trim();
+      if (W.__lyDuan && typeof W.__lyDuan.set === 'function') {
+        W.__lyDuan.set(duanTxt, duanTxt ? ('《' + (c.book || '古籍卦例') + '》' + (c.title || '')) : '');
+      }
       if (typeof W.__lyOpenPane === 'function') W.__lyOpenPane('board');
       if (typeof W.__lyBoardLoadText === 'function') W.__lyBoardLoadText(txt);
     };
