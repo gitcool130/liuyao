@@ -298,6 +298,21 @@
       })();
     }
 
+    if (q.get('conclusion')) {
+      return (async function () {
+        let b; try { b = await req.json(); } catch (e) { return json({ ok: false }, 400); }
+        const id = b && b.id;
+        const i = recs.findIndex(function (r) { return r.id === id; });
+        if (i < 0) return json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
+        if (typeof b.conclusion !== 'string') return json({ error: 'BAD_FIELD', message: 'conclusion 须为字符串' }, 400);
+        // 断语单独一路：只改这一条记录的断语，不动盘面与对话历史（旧卦例补断语用）
+        recs[i].conclusion = b.conclusion;
+        recs[i].updated_at = nowISO();
+        if (!(await writeRecs(recs))) return json({ error: 'STORAGE_FULL', message: '本机存储写入失败' }, 507);
+        return json({ ok: true, conclusion: recs[i].conclusion });
+      })();
+    }
+
     if (q.get('id')) {
       const id = q.get('id');
       const hit = recs.filter(function (r) { return r.id === id; })[0];
@@ -324,6 +339,12 @@
         const merged = Object.assign({}, base, p, { id: id, updated_at: nowISO() });
         // 回执不被后续保存冲掉（与服务端同一条约束）
         if (base.outcome && !p.outcome) merged.outcome = base.outcome;
+        /* 空对话不覆盖已有对话：从卦例库「装入」后点「更新卦例库」，本轮没断过卦，
+         * messages 是 {}——旧版直接覆盖，会把这条记录原来的 AI 断卦历史抹掉。 */
+        const msgEmpty = !p.messages ||
+          (typeof p.messages === 'object' && !Array.isArray(p.messages) && !Object.keys(p.messages).length) ||
+          (typeof p.messages === 'string' && (p.messages === '' || p.messages === '{}' || p.messages === '[]'));
+        if (base.messages && msgEmpty) merged.messages = base.messages;
         if (i >= 0) recs[i] = merged; else recs.unshift(merged);
         if (!(await writeRecs(recs))) return json({ error: 'STORAGE_FULL', message: '本机存储写入失败' }, 507);
         return json({ ok: true, id: merged.id, created_at: merged.created_at });

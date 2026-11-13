@@ -319,6 +319,36 @@ function flagOn(url, name) {
   return v === '1' || v === 'true';
 }
 
+// 断语回填（2026-11-13）：只写 conclusion 一列——排盘页下方「断语」那一栏的正文。
+// 与主 POST 的 ON CONFLICT 更新清单互不包含：断卦后的自动保存会带着 conclusion 一起
+// 走主路径；这里单独一路是给「早年入库、没写过断语的旧卦例」补写用，不动盘面与对话。
+// 旧库没有该列时 UPDATE 会抛错——此时回 501 并在 message 里给出迁移语句，
+// 不让它伪装成通用 500，也不悄悄吞掉用户的断语。
+async function handleConclusion(request, env) {
+  const read = await readJsonLimited(request, MAX_JSON_BODY);
+  if (read.error === 'TOO_LARGE') return payloadTooLarge();
+  if (read.error) return json({ error: 'BAD_JSON' }, 400);
+  const b = read.value;
+  const id = (b && typeof b.id === 'string') ? b.id : '';
+  if (!ID_RE.test(id)) return json({ error: 'BAD_ID', message: '非法 id' }, 400);
+  if (typeof b.conclusion !== 'string') {
+    return json({ error: 'BAD_FIELD', message: 'conclusion 须为字符串' }, 400);
+  }
+  const txt = b.conclusion.slice(0, 8000);
+  try {
+    const r = await env.LIUYAO_DB.prepare('UPDATE casts SET conclusion = ? WHERE id = ?')
+      .bind(txt, id).run();
+    const changes = r && r.meta && typeof r.meta.changes === 'number' ? r.meta.changes : 0;
+    if (!changes) return json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
+    return json({ ok: true, conclusion: txt });
+  } catch (e) {
+    return json({
+      error: 'NO_COLUMN',
+      message: '本库缺 conclusion 列，先执行：npx wrangler d1 execute liuyao-db --remote --command="ALTER TABLE casts ADD COLUMN conclusion TEXT;"'
+    }, 501);
+  }
+}
+
 export async function onRequestPost(context) {
   const { request, env } = context;
   // 跨站守卫：Content-Type 必须 JSON、Origin（若带）必须同源——挡掉「借访客浏览器写库」
@@ -332,6 +362,8 @@ export async function onRequestPost(context) {
   if (bodyTooLarge(request)) return payloadTooLarge();
   // 结果回执回填（M16）：独立分支，只写 outcome 列
   if (flagOn(url, 'outcome')) return handleOutcome(request, env);
+  // 断语回填（2026-11-13）：独立分支，只写 conclusion 列
+  if (flagOn(url, 'conclusion')) return handleConclusion(request, env);
 
   let b;
   const read = await readJsonLimited(request, MAX_JSON_BODY);

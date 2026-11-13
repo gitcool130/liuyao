@@ -519,11 +519,15 @@ async function launchBrowser() {
   say('D2. 存入卦例库');
   ok('存入按钮在结果页', await page.$('#panCard #btnSave') !== null);
   ok('断卦面板里不再有存入按钮', await page.$('#aiCard #btnSave') === null);
+  // 断语随「存入卦例库」一起落库（排盘页下方那一栏）
+  await page.fill('#duanText', '冒烟断语：存入卦例库时一起存');
+  await page.waitForTimeout(200);
   await page.click('#btnSave');
   await page.waitForTimeout(1000);
   const saved = await page.evaluate(function () {
     const a = JSON.parse(localStorage.getItem('ly_records_v1') || '[]');
-    return { n: a.length, hex: a[0] && a[0].hex, hasPan: !!(a[0] && a[0].panText), dt: a[0] && a[0].datetime };
+    return { n: a.length, hex: a[0] && a[0].hex, hasPan: !!(a[0] && a[0].panText), dt: a[0] && a[0].datetime,
+      cons: a[0] && a[0].conclusion };
   });
   // 不锁死条数：E3 会先造一条记录做还原测试，顺序不保证
   ok('本机库有记录', saved.n >= 1, 'n=' + saved.n);
@@ -531,6 +535,7 @@ async function launchBrowser() {
   ok('记录带排盘文本', saved.hasPan);
   ok('干支盘的占时写干支', /干支/.test(saved.dt || ''), saved.dt);
   ok('按钮回执变「已入卦例库」', /已入卦例库/.test(await page.$eval('#btnSave', e => e.textContent)));
+  eq('记录带断语', saved.cons, '冒烟断语：存入卦例库时一起存');
 
   /* ---------- D3. 画板载入卦象 ---------- */
   say('D3. 画板载入卦象');
@@ -542,6 +547,8 @@ async function launchBrowser() {
   });
   await page.click('#bdPan');
   await page.waitForTimeout(500);
+  eq('画板也有断语栏且与排盘页同一份',
+    await page.$eval('#bdDuan', e => e.value), '冒烟断语：存入卦例库时一起存');
   const panInk = await page.evaluate(function () {
     const cv = document.getElementById('bdCanvas');
     const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;

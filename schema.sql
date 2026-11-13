@@ -19,8 +19,15 @@ CREATE TABLE IF NOT EXISTS casts (
   pan_text   TEXT,   -- 排盘文本
   messages   TEXT,   -- JSON：AI 断卦与进阶探讨对话历史
   baseline   TEXT,   -- JSON：断卦时刻判据快照（M17-A），见下方口径；未快照为 NULL
-  outcome    TEXT    -- JSON：结果回执（M16/M17）{result, yingqi, window, note, updated_at}，未回填为 NULL
+  outcome    TEXT,   -- JSON：结果回执（M16/M17）{result, yingqi, window, note, updated_at}，未回填为 NULL
+  conclusion TEXT    -- 排盘页下方「断语」栏的正文（2026-11-13）；只由断语一路维护
 );
+
+-- 既有库补加 conclusion 列（2026-11-13，排盘页「断语」栏落库用）：
+--   npx wrangler d1 execute liuyao-db --remote --command="ALTER TABLE casts ADD COLUMN conclusion TEXT;"
+-- 说明：主 POST 的 INSERT 清单刻意不含 conclusion——没迁移过的旧库照常存卦例，
+--   断语走独立的 POST /api/records?conclusion=1（只 UPDATE 这一列），
+--   列不存在时回 501 并给出上面这条迁移语句，不伪装成 500、不吞数据。
 
 -- 既有库补加 outcome 列（SQLite 支持 ALTER TABLE ADD COLUMN，无需重建表）：
 --   npx wrangler d1 execute liuyao-db --remote --command="ALTER TABLE casts ADD COLUMN outcome TEXT;"

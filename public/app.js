@@ -761,6 +761,8 @@
      * 没有 conclusion 的用例退一步显示 quote（原文摘句），两者都空就留空。 */
     const duanTxt = String(c.conclusion || c.quote || '').trim();
     setDuan(duanTxt, duanTxt ? ('《' + (c.book || '古籍卦例') + '》' + (c.title || '')) : '');
+    // 从古籍面板点的「装入排盘」：先切回首页排盘，否则盘在另一页、看着像没反应
+    if (typeof window.__lyOpenPane === 'function') window.__lyOpenPane('home');
     const card = $('#gzCard');
     if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
@@ -900,6 +902,9 @@
     if (box) box.hidden = !pan;
     const src = $('#duanSrc');
     if (src) src.textContent = duan.src ? ('来源：' + duan.src) : '';
+    // 「保存断语」只在盘面已对应库里某条记录时可点（castId 是那条记录的 id）
+    const sv = $('#btnDuanSave');
+    if (sv) sv.disabled = !castId;
     syncDuanEditors(null);
   }
 
@@ -921,6 +926,24 @@
       const t = (duan.text || '').trim();
       if (!t) return;
       if (navigator.clipboard) navigator.clipboard.writeText(t).catch(function () { });
+    };
+    // 只存断语：不动盘面、不动断卦对话。给「从卦例库装入的老卦例补断语」用。
+    const sv = $('#btnDuanSave');
+    if (sv) sv.onclick = async function () {
+      if (!castId) return;
+      const msg = $('#duanMsg');
+      sv.disabled = true;
+      if (msg) msg.textContent = '保存中…';
+      try {
+        const res = await apiFetch('/api/records?conclusion=1', {
+          method: 'POST', body: JSON.stringify({ id: castId, conclusion: (duan.text || '').trim() })
+        });
+        const d = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error(d.message || ('HTTP ' + res.status));
+        if (msg) msg.textContent = '断语已存回这条卦例';
+      } catch (e) {
+        if (msg) msg.textContent = '保存失败：' + ((e && e.message) || e);
+      } finally { sv.disabled = false; }
     };
   })();
 
@@ -3760,6 +3783,12 @@
       .filter(function (v) { return v === 1 || v === 0 || v === 9 || v === 6; });
     if (toss.length !== 6) throw new Error('这条卦例没有完整的六爻数据（旧记录可能只存了卦名）');
 
+    /* 还原的是库里已有的那一条：castId 必须跟着指向它。
+     * 旧版没接上，于是「装入 → 补断语 → 存入卦例库」会 POST 一个 id=null 的新记录，
+     * 老卦例的断语永远存不回去（表现为「加了断语保存不了」）。
+     * 注意赋值要放在 computePan 之后——applyPan 里的 resetAIState 会把 castId 清空。 */
+    const keepId = (typeof r.id === 'string' && r.id) ? r.id : null;
+
     const dtText = String(r.datetime || '');
     const m = dtText.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
     const pilText = String(r.pillars || '');
@@ -3796,8 +3825,19 @@
 
     if (r.question) applyQuestionText(r.question);
     computePan();
+    // 排完盘再接管 castId：本条记录的后续保存都改成「更新这一条」，不再新建
+    castId = keepId;
+    const bs = $('#btnSave');
+    if (bs) { bs.textContent = castId ? '更新卦例库' : '存入卦例库'; bs.disabled = false; }
     // 还原记录的断语（旧记录没有这个字段就清空，别把上一卦的留在盘下）
     setDuan(r.conclusion || '', r.conclusion ? ('卦例库 · ' + (r.question || r.hex || '')) : '');
+    // 首页给一行可见回执（面板切回排盘后 #libRestoreMsg 已经看不见了）
+    const st = $('#saveTip');
+    if (st) {
+      st.hidden = false;
+      st.textContent = '已装入卦例：' + (r.question || '（未注明所测）') + ' · ' + (r.hex || '') +
+        '　—— 断语可在下方那一栏补写，写完点「更新卦例库」存回这一条。';
+    }
     const pc = $('#panCard');
     if (pc) pc.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -3831,6 +3871,10 @@
       if (!res.ok) throw new Error(data.message || ('HTTP ' + res.status));
       if (!data.record) throw new Error('接口没返回 record（可能未登录口令）');
       restoreRecord(data.record);
+      /* 「装入」是从个人卦例面板里点的：把视图切回首页排盘。
+       * 旧版只 scrollIntoView(#panCard)，而 #panCard 在 mainView 里、此时被面板盖着，
+       * 看起来就是「点了没反应」。 */
+      if (typeof window.__lyOpenPane === 'function') window.__lyOpenPane('home');
       restoreStatus('已还原：' + (data.record.question || '（未注明所测）') + ' · ' + (data.record.hex || ''), true);
     } catch (e) {
       restoreStatus('还原失败：' + (e && e.message ? e.message : e), false);
@@ -3928,9 +3972,15 @@
         '<button class="btn ghost" id="btnLibBoard" title="把这张盘画到画板上圈点">导入画板</button>' +
         '<button class="btn ghost" id="btnLibRestore" title="按这条记录还原成卦象">装入卦象</button>' +
         '</div>' +
-        // 断语（排盘页下方那一栏存下来的原文），有就照原样显示，方便对旧卦复盘
-        (r.conclusion ? '<div class="ai-block" style="margin-top:8px"><b>断语</b>' +
-          '<div class="muted" style="white-space:pre-wrap;line-height:1.95;margin-top:4px">' + esc(r.conclusion) + '</div></div>' : '') +
+        // 断语：老卦例多半没写过，这里就地补写并单独保存（只改这一条记录的断语，
+        // 不动盘面与对话历史）；也能当复盘笔记用
+        '<div class="ai-block" style="margin-top:8px"><b>断语</b>' +
+        '<textarea id="libDuan" class="lib-duan" rows="4" autocomplete="off" ' +
+        'placeholder="这一卦的断语（可留空）：写完点「保存断语」，只存进这一条记录">' + esc(r.conclusion || '') + '</textarea>' +
+        '<div class="btn-row" style="justify-content:flex-start;margin-top:6px">' +
+        '<button class="btn ghost" id="btnLibDuanSave">保存断语</button>' +
+        '<span class="muted" id="libDuanMsg" style="font-size:12px"></span>' +
+        '</div></div>' +
         '<div class="ai-cols">' + colHTML + '</div>' +
         cmpHTML +
         '<div class="oc-box"><b>结果回执</b>　<span class="muted" id="ocNow">' + esc(ocNow) + '</span>' +
@@ -3962,6 +4012,26 @@
       };
       const br = $('#btnLibRestore');
       if (br) br.onclick = function () { restoreCastById(r.id); };
+
+      // 断语就地保存：老卦例（早年没这个字段）补写断语的主路径
+      const dSave = $('#btnLibDuanSave');
+      if (dSave) dSave.onclick = async function () {
+        const msg = $('#libDuanMsg'), ta = $('#libDuan');
+        const txt = (ta && ta.value || '').trim();
+        dSave.disabled = true;
+        if (msg) msg.textContent = '保存中…';
+        try {
+          const res = await apiFetch('/api/records?conclusion=1', {
+            method: 'POST', body: JSON.stringify({ id: r.id, conclusion: txt })
+          });
+          const d = await res.json().catch(function () { return {}; });
+          if (!res.ok) throw new Error(d.message || ('HTTP ' + res.status));
+          r.conclusion = txt;
+          if (msg) msg.textContent = txt ? '断语已保存（只改了这条记录）' : '断语已清空';
+        } catch (e) {
+          if (msg) msg.textContent = '保存失败：' + ((e && e.message) || e);
+        } finally { dSave.disabled = false; }
+      };
 
       // 每条「断」挂一个复制按钮：DOM 顺序与 copyQueue 顺序一致
       const aiNodes = $('#libDetail').querySelectorAll('.msg.ai');

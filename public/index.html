@@ -319,6 +319,14 @@
     background: #fff; border: 1px solid var(--line); border-radius: 6px;
     padding: 10px; margin: 10px 0; line-height: 1.6;
   }
+  /* 个人卦例详情里的断语框：给老卦例补断语用，单独保存 */
+  .lib-duan {
+    width: 100%; box-sizing: border-box; min-height: 96px; resize: vertical; margin-top: 4px;
+    font-family: inherit; font-size: 13.5px; line-height: 1.9; color: var(--ink);
+    padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: #fffdf8;
+  }
+  .lib-duan:focus { outline: none; border-color: var(--cinnabar); }
+
   /* ---- 断语栏（排盘之下一栏，古籍版式/卦象表格共用） ----
      古籍卦例只记「某卦之某卦＋断语」，装入时把断语带进来；
      与上方排盘同一张卡：白底、细边，中间一道虚线，看着像同一框的下半截 */
@@ -553,7 +561,9 @@
       <div class="duan-head">
         <span class="duan-title">断　语</span>
         <span class="muted" id="duanSrc" style="font-size:12px"></span>
+        <span class="muted" id="duanMsg" style="font-size:12px"></span>
         <span class="duan-acts">
+          <button class="btn ghost" id="btnDuanSave" title="只把断语存回这一条卦例（不动盘面与断卦对话）">保存断语</button>
           <button class="btn ghost" id="btnDuanCopy" title="复制这一栏的断语">复制断语</button>
           <button class="btn ghost" id="btnDuanClear" title="清空断语（不影响盘面）">清空</button>
         </span>
@@ -671,11 +681,11 @@
 <!-- 离线/桌面版：提示词（构建时从 functions/api/interpret.js 抽取）+ 本地接口层 -->
 <script src="core/prompt.js?v=20261110a"></script>
 <script src="core/file-store.js?v=20261112c"></script>
-<script src="core/local-api.js?v=20261112d"></script>
+<script src="core/local-api.js?v=20261113a"></script>
 <script src="core/guji-lib.js?v=20261113a"></script>
 <script src="core/board.js?v=20261113a"></script>
 <script src="core/toolbar.js?v=20261111c"></script>
-<script src="app.js?v=20261113a"></script>
+<script src="app.js?v=20261113b"></script>
 <script src="bgm.js?v=20261110a"></script>
 </body>
 </html>
