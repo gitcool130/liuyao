@@ -731,6 +731,11 @@
       const di = (t.length >= 2) ? gzIndexOfGZ(t.slice(0, 2)) : null;
       if (di != null) gzState.dayIdx = di;
     }
+    // 自建卦例还记了年与时辰（可为空），有就一起还原
+    if (typeof c.yearIdx === 'number' && c.yearIdx >= 0) gzState.yearIdx = c.yearIdx;
+    else if (c.yearIdx === null) gzState.yearIdx = GZ_NONE;
+    if (typeof c.hourZhi === 'number' && c.hourZhi >= 0) gzState.hourZhi = c.hourZhi;
+    else if (c.hourZhi === null) gzState.hourZhi = GZ_NONE;
     let ok = false;
     if (c.benGua && gzBitsFromName(c.benGua)) {
       ok = gzApplyNames(c.benGua, c.bianGua);
@@ -741,6 +746,7 @@
       ok = true;
     }
     if (!ok) return;
+    if (c.question && typeof applyQuestionText === 'function') applyQuestionText(c.question);
     gzRefresh();
     computePan();
     const card = $('#gzCard');

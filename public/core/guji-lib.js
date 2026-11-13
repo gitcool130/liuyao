@@ -293,7 +293,7 @@
     state.user.books.forEach(function (b) {
       list.push({
         key: 'user:' + b.name, name: b.name, kind: 'user', count: (b.cases || []).length,
-        loaded: true, cases: (b.cases || []).map(function (c) { return normCase(c, b.name); })
+        loaded: true, cases: (b.cases || []).map(function (c) { return normCase(c, b.name, 'user'); })
       });
     });
     state.books = list;
@@ -357,9 +357,11 @@
       book: bookName || '',
       title: title,
       chapter: c.chapter || '',
+      yearIdx: (typeof c.yearIdx === 'number') ? c.yearIdx : null,
       monthZhi: monthZhi,
       dayIdx: (dayIdx != null && dayIdx >= 0) ? dayIdx : null,
       dayGZ: dayGZ,
+      hourZhi: (typeof c.hourZhi === 'number') ? c.hourZhi : null,
       toss: (toss && toss.length === 6) ? toss : null,
       benGua: c.benGua || c.gua || '',
       bianGua: c.bianGua || '',
@@ -381,6 +383,17 @@
 
   function yaoSym(t) {
     return t === 1 ? '━━━' : t === 9 ? '━━━ ○' : t === 6 ? '━ ━ ✕' : '━ ━';
+  }
+
+  /* 一例的干支行：年 月建 日辰 时辰，缺哪柱就省哪柱 */
+  function gzText(c) {
+    let s = '';
+    if (typeof c.yearIdx === 'number' && c.yearIdx >= 0) s += GAN[c.yearIdx % 10] + ZHI[c.yearIdx % 12] + '年 ';
+    if (typeof c.monthZhi === 'number') s += ZHI[c.monthZhi] + '月 ';
+    if (c.dayGZ) s += c.dayGZ + '日';
+    else if (typeof c.dayIdx === 'number') s += GAN[c.dayIdx % 10] + ZHI[c.dayIdx % 12] + '日';
+    if (typeof c.hourZhi === 'number' && c.hourZhi >= 0) s += ' ' + ZHI[c.hourZhi] + '时';
+    return s.replace(/\s+$/, '');
   }
 
   function renderBookSelect() {
@@ -433,18 +446,28 @@
     }
     if (!state.shown) state.shown = PAGE;
     const slice = cases.slice(0, state.shown);
+    const mine = b.kind === 'user';
     list.innerHTML = slice.map(function (c, i) {
-      const gz = (c.monthZhi != null ? ZHI[c.monthZhi] + '月 ' : '') + (c.dayGZ ? c.dayGZ + '日' : '');
+      const gz = gzText(c);
       const hex = c.benGua ? '　' + c.benGua + (c.bianGua ? ' 之 ' + c.bianGua : '') : '';
       return '<div class="guji-item" data-k="' + i + '">' +
-        '<div class="guji-it-title">' + esc(c.title).slice(0, 96) + '</div>' +
+        '<div class="guji-it-title">' + esc(c.title).slice(0, 96) +
+        (mine ? '<button class="gu-edit" data-edit="' + i + '" title="改这一例的书名/干支/卦名/原文">编辑</button>' : '') +
+        '</div>' +
         '<div class="guji-it-meta">' + (gz ? esc(gz) : '') + esc(hex) +
+        (c.question ? '　占问：' + esc(c.question) : '') +
         (c.chapter ? '　' + esc(c.chapter) : '') +
         (c.toss ? '　<span class="muted">' + c.toss.map(yaoSym).join(' ') + '</span>' : '') + '</div>' +
         '</div>';
     }).join('');
     Array.prototype.forEach.call(list.querySelectorAll('.guji-item'), function (el) {
       el.onclick = function () { showCase(slice[parseInt(el.getAttribute('data-k'), 10)]); };
+    });
+    Array.prototype.forEach.call(list.querySelectorAll('.gu-edit'), function (el) {
+      el.onclick = function (e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        openAddForm(slice[parseInt(el.getAttribute('data-edit'), 10)]);
+      };
     });
     if (moreRow) moreRow.hidden = (state.shown >= cases.length);
   }
@@ -508,7 +531,7 @@
   function showCase(c) {
     const box = document.getElementById('gujiDetail');
     if (!box || !c) return;
-    const gz = (c.monthZhi != null ? ZHI[c.monthZhi] + '月 ' : '') + (c.dayGZ ? c.dayGZ + '日' : '');
+    const gz = gzText(c);
     const raw = (c.raw6 && c.raw6.length)
       ? '<pre class="guji-raw">' + c.raw6.map(function (l) { return esc(String(l).replace(/\t/g, '  ')); }).join('\n') + '</pre>'
       : '';
@@ -520,6 +543,7 @@
     box.innerHTML =
       '<div class="guji-d-title">' + esc(c.title) + '</div>' +
       '<div class="muted">' + esc(c.book) + (c.chapter ? '　·　' + esc(c.chapter) : '') + (gz ? '　·　' + esc(gz) : '') + '</div>' +
+      (c.question ? '<div class="muted">占问：' + esc(c.question) + '</div>' : '') +
       hexLine + raw +
       (c.quote ? '<div class="guji-quote">原文：' + esc(c.quote) + '</div>' : '') +
       (c.conclusion && c.kind !== 'duanyu' ? '<div class="guji-concl">' + esc(c.conclusion) + '</div>' : '') +
@@ -533,6 +557,7 @@
       '<button class="btn primary" id="btnGujiLoad"' + (c.toss ? '' : ' disabled') + '>装入排盘</button>' +
       '<button class="btn ghost" id="btnGujiBoard"' + (c.toss ? '' : ' disabled') + ' title="把这一卦画到画板上圈点">导入画板</button>' +
       '<button class="btn ghost" id="btnGujiCopy">复制原文</button>' +
+      (c.kind === 'user' ? '<button class="btn ghost" id="btnGujiEdit" title="改这一例的书名/年月日时/占问/卦名/原文">编辑</button>' : '') +
       '<button class="btn ghost" id="btnGujiClose">收起</button>' +
       (c.monthZhi == null ? '<span class="muted" style="margin-left:8px">本例未记月建，装入后请自行补选</span>' : '') +
       (c.toss ? '' : '<span class="muted" style="margin-left:8px">本例无可还原的六爻</span>') +
@@ -565,12 +590,20 @@
     if (loadBtn) loadBtn.onclick = function () {
       if (typeof W.__lyLoadGujiCase !== 'function') { alert('排盘模块未就绪'); return; }
       W.__lyLoadGujiCase({
+        yearIdx: (typeof c.yearIdx === 'number' && c.yearIdx >= 0) ? c.yearIdx : null,
         monthZhi: caseMonthIdx(c.monthZhi),
         dayIdx: caseDayIdx(c.dayGZ),
+        hourZhi: (typeof c.hourZhi === 'number' && c.hourZhi >= 0) ? c.hourZhi : null,
+        question: c.question || '',
+        benGua: c.benGua || '',
+        bianGua: c.bianGua || '',
         toss: c.toss
       });
       box.hidden = true;
     };
+
+    const editBtn = document.getElementById('btnGujiEdit');
+    if (editBtn) editBtn.onclick = function () { openAddForm(c); box.hidden = true; };
 
     const boardBtn = document.getElementById('btnGujiBoard');
     if (boardBtn) boardBtn.onclick = function () {
@@ -586,73 +619,253 @@
     };
   }
 
-  /* ---------- 添加卦例 / 新建书籍 ---------- */
+  /* ---------- 添加／编辑卦例 ----------
+   * 版式借「干支排盘」那一套：年／月建／日辰／时辰／占问 一行，本卦／变卦 一行
+   * （卦名就是六爻的来源），再往下左边「按爻」、右边「原文／断语」。
+   * 卦名与爻象双向联动：改卦名 → 反推六爻；点爻画／勾「动」 → 卦名跟着变。
+   * openAddForm(rec) 传了记录就是「编辑」：按 id 原地替换，不再新增一条。 */
+  const GU_POS = ['初', '二', '三', '四', '五', '上'];
 
-  function openAddForm() {
+  // 64 卦按八宫分组（本卦／变卦下拉用，与干支排盘同序）
+  function hexOptionsHTML(withNone) {
+    const byPalace = {};
+    if (C && typeof C.hexName === 'function') {
+      for (let i = 0; i < 64; i++) {
+        const bits = [i & 1, (i >> 1) & 1, (i >> 2) & 1, (i >> 3) & 1, (i >> 4) & 1, (i >> 5) & 1];
+        const info = (C.PALACE && C.PALACE[bits.join('')]) || null;
+        const pal = info ? info.palace : '乾';
+        (byPalace[pal] = byPalace[pal] || []).push(C.hexName(bits));
+      }
+    }
+    let html = withNone ? '<option value="">（无·静卦）</option>' : '';
+    Object.keys(byPalace).forEach(function (pal) {
+      html += '<optgroup label="' + pal + '宫">' + byPalace[pal].map(function (n) {
+        return '<option value="' + n + '">' + n + '</option>';
+      }).join('') + '</optgroup>';
+    });
+    return html;
+  }
+  function hexNameOf(yang) {
+    try { return C.hexName(yang.map(function (y) { return y ? 1 : 0; })); } catch (e) { return ''; }
+  }
+  function bianNameOf(yang, moving) {
+    if (!moving.some(Boolean)) return '';
+    return hexNameOf(yang.map(function (y, i) { return moving[i] ? !y : y; }));
+  }
+
+  function openAddForm(existing) {
     const box = document.getElementById('gujiAdd');
     if (!box) return;
+    const edit = existing || null;
     const b = curBook();
     const cur = (typeof W.__lyGzState === 'function') ? W.__lyGzState() : null;
-    let monthOpts = ZHI.map(function (z, i) {
-      return '<option value="' + i + '"' + (cur && cur.monthZhi === i ? ' selected' : '') + '>' + z + '月</option>';
-    }).join('');
+    const num = function (v, dflt) { return (typeof v === 'number' && v >= 0) ? v : dflt; };
+
+    // 初值：编辑用记录本身；新建沿用干支排盘当前的年月建日辰（年／时辰多半留空）
+    const st = {
+      yearIdx: edit ? num(edit.yearIdx, null) : (cur ? num(cur.yearIdx, null) : null),
+      monthZhi: edit ? num(edit.monthZhi, cur ? cur.monthZhi : 2) : (cur ? cur.monthZhi : 2),
+      dayIdx: edit ? num(edit.dayIdx, cur ? cur.dayIdx : 0) : (cur ? cur.dayIdx : 0),
+      hourZhi: edit ? num(edit.hourZhi, null) : (cur ? num(cur.hourZhi, null) : null),
+      yang: [true, true, true, true, true, true],
+      moving: [false, false, false, false, false, false]
+    };
+    // 六爻初值：老记录只有爻值（旧表单没存卦名），新记录卦名与爻值同源——
+    // 有卦名就按卦名推（用户看到的就是卦名，不能两处不一致）
+    const nb = (edit && edit.benGua) ? bitsFromName(edit.benGua) : null;
+    if (nb) {
+      const nx = (edit && edit.bianGua) ? bitsFromName(edit.bianGua) : null;
+      st.yang = nb.map(function (v) { return v === 1; });
+      st.moving = nb.map(function (v, i) { return nx ? nx[i] !== v : false; });
+    } else {
+      const toss = (edit && Array.isArray(edit.toss) && edit.toss.length === 6) ? edit.toss : null;
+      if (toss) {
+        st.yang = toss.map(function (v) { return v === 1 || v === 9; });
+        st.moving = toss.map(function (v) { return v === 9 || v === 6; });
+      }
+    }
+
+    let yearOpts = '<option value="">（不填）</option>';
     let dayOpts = '';
     for (let i = 0; i < 60; i++) {
-      dayOpts += '<option value="' + i + '"' + (cur && cur.dayIdx === i ? ' selected' : '') + '>' + GAN[i % 10] + ZHI[i % 12] + '日</option>';
+      const gz = GAN[i % 10] + ZHI[i % 12];
+      yearOpts += '<option value="' + i + '"' + (st.yearIdx === i ? ' selected' : '') + '>' + gz + '</option>';
+      dayOpts += '<option value="' + i + '"' + (st.dayIdx === i ? ' selected' : '') + '>' + gz + '日</option>';
     }
-    const TOSS = [['1', '少阳（静）'], ['0', '少阴（静）'], ['9', '老阳（动）'], ['6', '老阴（动）']];
-    let yaoRows = '';
-    for (let i = 5; i >= 0; i--) {
-      yaoRows += '<label class="guji-yao">' + LINE_NAMES[i] + '<select class="gu-toss" data-i="' + i + '">' +
-        TOSS.map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === '1' ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') +
-        '</select></label>';
-    }
+    const monthOpts = ZHI.map(function (z, i) {
+      return '<option value="' + i + '"' + (st.monthZhi === i ? ' selected' : '') + '>' + z + '月</option>';
+    }).join('');
+    let hourOpts = '<option value="">（不填）</option>';
+    ZHI.forEach(function (z, i) {
+      hourOpts += '<option value="' + i + '"' + (st.hourZhi === i ? ' selected' : '') + '>' + z + '时</option>';
+    });
+
     box.innerHTML =
       '<div class="guji-add-grid">' +
-      '<label>书名<input id="guBook" value="' + esc(b && b.kind === 'user' ? b.name : '我的卦例') + '"></label>' +
-      '<label>标题<input id="guTitle" placeholder="如：占乡试（申月癸卯日）"></label>' +
-      '<label>章节<input id="guChapter" placeholder="可留空"></label>' +
+      '<label>书名<input id="guBook" autocomplete="off" value="' + esc(edit ? edit.book : (b && b.kind === 'user' ? b.name : '我的卦例')) + '"></label>' +
+      '<label>标题<input id="guTitle" autocomplete="off" placeholder="如：占乡试（申月癸卯日）" value="' + esc(edit ? edit.title : '') + '"></label>' +
+      '<label>章节<input id="guChapter" autocomplete="off" placeholder="可留空" value="' + esc(edit ? edit.chapter : '') + '"></label>' +
+      '</div>' +
+      '<div class="guji-add-grid guji-add-g5">' +
+      '<label>年<select id="guYear">' + yearOpts + '</select></label>' +
       '<label>月建<select id="guMonth">' + monthOpts + '</select></label>' +
       '<label>日辰<select id="guDay">' + dayOpts + '</select></label>' +
+      '<label>时辰<select id="guHour">' + hourOpts + '</select></label>' +
+      '<label>占问<input id="guQuestion" autocomplete="off" placeholder="如 占财" maxlength="40" value="' + esc(edit ? (edit.question || '') : '') + '"></label>' +
       '</div>' +
-      '<div class="guji-yaos">' + yaoRows + '</div>' +
-      '<label class="guji-yao" style="margin-top:8px">原文／断语<textarea id="guText" rows="4" placeholder="粘贴原文断语，可留空"></textarea></label>' +
-      '<div class="btn-row" style="margin-top:8px">' +
-      '<button class="btn primary" id="btnGuSave">保存卦例</button>' +
+      '<div class="guji-add-grid guji-add-g5">' +
+      '<label>本卦<select id="guBen">' + hexOptionsHTML(false) + '</select></label>' +
+      '<label>变卦<select id="guBian">' + hexOptionsHTML(true) + '</select></label>' +
+      '<span class="muted" id="guHexTip" style="grid-column:span 3;align-self:end;padding-bottom:6px;font-size:12.5px"></span>' +
+      '</div>' +
+      '<div class="gu-split">' +
+      '<div class="gu-yao-col"><div class="gu-yao-head">按爻</div><div id="guYao"></div>' +
+      '<div class="muted" style="font-size:11.5px;line-height:1.8;margin-top:6px">点上爻画换阴阳，勾「动」加动爻——卦名自动跟变。</div></div>' +
+      '<div class="gu-text-col"><label class="guji-yao" style="height:100%">原文／断语' +
+      '<textarea id="guText" rows="9" autocomplete="off" placeholder="粘贴原文断语，可留空">' + esc(edit ? edit.conclusion : '') + '</textarea></label></div>' +
+      '</div>' +
+      '<div class="btn-row" style="margin-top:10px">' +
+      '<button class="btn primary" id="btnGuSave">' + (edit ? '保存修改' : '保存卦例') + '</button>' +
       '<button class="btn ghost" id="btnGuCancel">取消</button>' +
-      '<span class="muted" id="guTip" style="margin-left:8px"></span></div>';
+      '<span class="muted" id="guTip" style="margin-left:8px">' + (edit ? '正在修改这一例' : '') + '</span></div>';
     box.hidden = false;
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    document.getElementById('btnGuCancel').onclick = function () { box.hidden = true; };
-    document.getElementById('btnGuSave').onclick = function () {
-      const name = document.getElementById('guBook').value.trim() || '我的卦例';
-      const title = document.getElementById('guTitle').value.trim();
-      if (!title) { document.getElementById('guTip').textContent = '标题必填'; return; }
-      const toss = [];
-      Array.prototype.forEach.call(box.querySelectorAll('.gu-toss'), function (s) {
-        toss[parseInt(s.getAttribute('data-i'), 10)] = parseInt(s.value, 10);
+
+    const $ = function (id) { return document.getElementById(id); };
+
+    function tipText() {
+      const bn = hexNameOf(st.yang), xb = bianNameOf(st.yang, st.moving);
+      if ($('guHexTip')) $('guHexTip').textContent =
+        bn ? ('本卦 ' + bn + (xb && xb !== bn ? '　之　' + xb : '（静卦）')) : '';
+    }
+    function renderYao() {
+      const wrap = $('guYao');
+      if (!wrap) return;
+      let html = '';
+      for (let i = 5; i >= 0; i--) {
+        const yang = st.yang[i], dong = st.moving[i];
+        const bar = yang
+          ? '<i style="width:60px"></i>'
+          : '<i style="width:26px"></i><i style="width:26px"></i>';
+        const lab = dong ? (yang ? '老阳（动）' : '老阴（动）') : (yang ? '少阳（静）' : '少阴（静）');
+        html += '<div class="gz-yrow" data-i="' + i + '">' +
+          '<span class="gz-ypos">' + GU_POS[i] + '</span>' +
+          '<div class="gz-ybar' + (dong ? ' dong' : '') + '" data-act="yang" title="点一下换阴阳">' + bar + '</div>' +
+          '<label><input type="checkbox" class="gu-move" data-act="dong"' + (dong ? ' checked' : '') + '>动</label>' +
+          '<span class="gu-yao-val">' + lab + '</span>' +
+          '</div>';
+      }
+      wrap.innerHTML = html;
+    }
+    function syncNames() {
+      const bn = hexNameOf(st.yang);
+      const xb = bianNameOf(st.yang, st.moving);
+      if ($('guBen')) $('guBen').value = bn;
+      if ($('guBian')) $('guBian').value = (xb && xb !== bn) ? xb : '';
+      tipText();
+    }
+    function refresh() { syncNames(); renderYao(); }
+
+    // 年／月建／日辰／时辰：只影响干支，不动六爻
+    ['guYear', 'guMonth', 'guDay', 'guHour'].forEach(function (id) {
+      const el = $(id);
+      if (!el) return;
+      el.onchange = function () {
+        const v = this.value === '' ? null : parseInt(this.value, 10);
+        if (id === 'guYear') st.yearIdx = v;
+        else if (id === 'guMonth') st.monthZhi = v;
+        else if (id === 'guDay') st.dayIdx = v;
+        else st.hourZhi = v;
+      };
+    });
+    // 卦名 → 反推爻象（下拉改动的入口）
+    function applyNames(benName, bianName) {
+      const bb = bitsFromName(benName);
+      if (!bb) return false;
+      const xx = bitsFromName(bianName);
+      st.yang = bb.map(function (v) { return v === 1; });
+      st.moving = bb.map(function (v, i) { return xx ? xx[i] !== v : false; });
+      return true;
+    }
+    $('guBen').onchange = function () { if (applyNames(this.value, $('guBian').value)) refresh(); };
+    $('guBian').onchange = function () { if (applyNames($('guBen').value, this.value)) refresh(); };
+    // 按爻：点爻画换阴阳、勾「动」加动爻（改完卦名自动跟变）
+    $('guYao').addEventListener('click', function (e) {
+      const row = e.target.closest ? e.target.closest('.gz-yrow') : null;
+      if (!row) return;
+      if (e.target.classList && e.target.classList.contains('gu-move')) return;   // 交给 change
+      if (e.target.closest('.gz-ybar')) {
+        const i = parseInt(row.getAttribute('data-i'), 10);
+        st.yang[i] = !st.yang[i];
+        refresh();
+      }
+    });
+    $('guYao').addEventListener('change', function (e) {
+      const cb = e.target;
+      if (!cb.classList || !cb.classList.contains('gu-move')) return;
+      const row = cb.closest('.gz-yrow');
+      if (!row) return;
+      st.moving[parseInt(row.getAttribute('data-i'), 10)] = !!cb.checked;
+      refresh();
+    });
+    refresh();
+
+    $('btnGuCancel').onclick = function () { box.hidden = true; };
+    $('btnGuSave').onclick = function () {
+      const name = $('guBook').value.trim() || '我的卦例';
+      const title = $('guTitle').value.trim();
+      if (!title) { $('guTip').textContent = '标题必填'; return; }
+      const dayIdx = parseInt($('guDay').value, 10);
+      const vals = st.yang.map(function (y, i) {
+        if (!st.moving[i]) return y ? 1 : 0;
+        return y ? 9 : 6;
       });
-      const dayIdx = parseInt(document.getElementById('guDay').value, 10);
       const rec = {
-        id: 'gu' + Date.now().toString(36),
+        id: (edit && edit.id) ? edit.id : ('gu' + Date.now().toString(36)),
         title: title,
-        chapter: document.getElementById('guChapter').value.trim(),
-        monthZhi: parseInt(document.getElementById('guMonth').value, 10),
+        chapter: $('guChapter').value.trim(),
+        yearIdx: st.yearIdx,
+        monthZhi: st.monthZhi,
         dayIdx: dayIdx,
         dayGZ: GAN[dayIdx % 10] + ZHI[dayIdx % 12],
-        toss: toss,
-        conclusion: document.getElementById('guText').value.trim(),
-        raw6: []
+        hourZhi: st.hourZhi,
+        question: $('guQuestion').value.trim(),
+        toss: vals,
+        benGua: hexNameOf(st.yang),
+        bianGua: bianNameOf(st.yang, st.moving),
+        conclusion: $('guText').value.trim(),
+        raw6: (edit && Array.isArray(edit.raw6)) ? edit.raw6 : []
       };
+
       const store = loadUser();
+      let src = null, srcIdx = -1;
+      if (edit) {
+        src = store.books.filter(function (x) { return x.name === (edit.book || ''); })[0] || null;
+        if (src) srcIdx = (src.cases || []).findIndex(function (c) { return c && c.id === edit.id; });
+      }
+      // 编辑：先从原书里摘掉（书名改了也不会留两份），再按原位插回
+      const old = (src && srcIdx >= 0) ? src.cases.splice(srcIdx, 1)[0] : null;
       let bk = store.books.filter(function (x) { return x.name === name; })[0];
       if (!bk) { bk = { name: name, cases: [] }; store.books.push(bk); }
-      bk.cases.unshift(rec);
+      const at = (old && src === bk) ? srcIdx : 0;
+      bk.cases.splice(Math.min(at, bk.cases.length), 0, rec);
       if (!saveUser(store)) return;
-      document.getElementById('gujiSearch').value = '';
-      state.keyword = '';
+
+      const detail = document.getElementById('gujiDetail');
+      if (detail) {
+        detail.hidden = false;
+        detail.innerHTML = '<div class="muted">' + (edit ? '已保存修改' : '已新增卦例') + '：' +
+          esc(title) + '　·　《' + esc(name) + '》' +
+          (rec.benGua ? '　·　' + esc(rec.benGua) + (rec.bianGua ? ' 之 ' + esc(rec.bianGua) : '（静卦）') : '') +
+          '　·　' + esc(gzText(rec)) + '</div>' +
+          '<div class="muted" style="font-size:12px;margin-top:4px">列表里点条目可再看原文，点「编辑」可再改。</div>';
+        detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+      const s = document.getElementById('gujiSearch');
+      if (s) s.value = '';
+      state.keyword = ''; state.shown = PAGE;
       loadManifest().then(function () {
-        state.cur = 'user:' + name; state.shown = PAGE;
+        state.cur = 'user:' + name;
         renderBookSelect(); renderList(); renderBookTools();
       });
       box.hidden = true;
@@ -931,7 +1144,7 @@
       state.keyword = this.value; state.shown = 0; renderList();
     };
     document.getElementById('btnGujiNewBook').onclick = newBook;
-    document.getElementById('btnGujiNewCase').onclick = openAddForm;
+    document.getElementById('btnGujiNewCase').onclick = function () { openAddForm(); };
     document.getElementById('btnGujiMore').onclick = function () { state.shown += PAGE; renderList(); };
     bindUserBackup();
 
@@ -992,7 +1205,20 @@
     '.guji-add-grid label,.guji-yao{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--ink-light)}' +
     '.guji-add-grid input,.guji-add-grid select,.guji-yao select,.guji-yao textarea{font-family:inherit;font-size:13px;padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}' +
     '.guji-yaos{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:8px}' +
-    '@media(max-width:640px){.guji-add-grid{grid-template-columns:1fr}.guji-yaos{grid-template-columns:repeat(3,1fr)}}';
+    '.guji-add-g5{grid-template-columns:repeat(5,1fr)}' +
+    '.guji-add-g2{grid-template-columns:repeat(2,1fr)}' +
+    '.gu-split{display:grid;grid-template-columns:300px minmax(0,1fr);gap:14px;margin-top:12px}' +
+    '.gu-yao-col{border-right:1px dashed var(--line);padding-right:14px}' +
+    '.gu-yao-head{font-size:12px;color:var(--ink-light);letter-spacing:4px;margin-bottom:6px}' +
+    '.gu-yao-val{font-size:12px;color:var(--ink-light)}' +
+    '.gu-text-col{min-width:0}' +
+    '.gu-text-col .guji-yao{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink-light)}' +
+    '.gu-text-col textarea{flex:1;min-height:200px;resize:vertical;font-family:inherit;font-size:13px;line-height:1.8;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}' +
+    '.gu-edit{float:right;font-family:inherit;font-size:11.5px;padding:1px 8px;margin-left:8px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink-light);cursor:pointer}' +
+    '.gu-edit:hover{border-color:var(--cinnabar);color:var(--cinnabar)}' +
+    '@media(max-width:640px){.guji-add-grid{grid-template-columns:1fr}.guji-yaos{grid-template-columns:repeat(3,1fr)}' +
+    '.guji-add-g5,.guji-add-g2{grid-template-columns:repeat(2,1fr)}.gu-split{grid-template-columns:1fr}' +
+    '.gu-yao-col{border-right:0;padding-right:0}}';
   document.head.appendChild(css);
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', build);
