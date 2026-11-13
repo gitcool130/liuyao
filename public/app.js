@@ -315,14 +315,14 @@
   function renderGzPreview() {
     const box = $('#gzPreview');
     if (!box) return;
-    let txt = '';
+    let html = '';
     try {
       const p = C.paipan(gzVals(), null, { pillars: gzPillars() });
-      txt = panClassicText(p);
+      html = panClassicHTML(p);   // 预览与结果页同口径：旬空/月破一样标出来
     } catch (e) {
-      txt = '（' + (e.message || e) + '）';
+      html = esc('（' + (e.message || e) + '）');
     }
-    box.innerHTML = '<pre class="pan-text" style="margin:0">' + esc(txt) + '</pre>';
+    box.innerHTML = '<pre class="pan-text" style="margin:0">' + html + '</pre>';
   }
 
   // 任何一处改动后的统一刷新
@@ -800,14 +800,24 @@
     return t.length ? '(' + t.join('·') + ')' : '';
   }
 
-  function panClassicText(p) {
+  /* 古籍版式：按「段」拼，段可带样式。
+   * 为什么分段而不是直接拼字符串：旬空／月破要在**等宽版式里**标色，又不能影响
+   * 复制、画板画图、分享用的纯文本。同一份结构出两种结果——
+   *   panClassicText() 纯文本（复制／画板／分享）
+   *   panClassicHTML() 带 <span> 的富文本（页面显示）
+   * 这样标红只在显示层，对齐用的全角空格一个字都不动。 */
+  const GZC_KONG = 'gzc-kong';   // 旬空：支在旬空里
+  const GZC_PO = 'gzc-po';       // 月破：支冲月建
+
+  function panClassicRows(p) {
     const pil = p.pillars;
     const pad = function (str, w) {
       str = str || '';
       const n = Array.from(str).length;
       return n >= w ? str : str + new Array(w - n + 1).join('　');
     };
-    const out = [];
+    const rows = [];                       // 每行是「段数组」：{t: 文本, cls: 样式名}
+    const flat = function (txt) { rows.push([{ t: txt }]); };
 
     // 1) 干支 + 旬空 + 占问
     let head = '干支：';
@@ -817,15 +827,15 @@
     head += '　(旬空：' + pil.kongStr + ')';
     const q = (typeof currentQuestion === 'function') ? currentQuestion() : '';
     if (q) head += '　占问：' + q;
-    out.push(head);
+    flat(head);
 
     // 2) 宫名 + 卦名（含卦型），有变卦则并列
     let gong = p.palace + '宫：' + p.benName + hexTag(p);
     if (p.hasBian) gong += '　之　' + p.bianPalace + '宫：' + p.bianName + hexTag(p);
-    out.push(gong);
+    flat(gong);
 
     // 3) 表头
-    out.push('六神　伏　　神　　【本　　卦】' + (p.hasBian ? '　　　　【变　　　卦】' : ''));
+    flat('六神　伏　　神　　【本　　卦】' + (p.hasBian ? '　　　　【变　　　卦】' : ''));
 
     // 4) 六爻（上 → 初）
     for (let i = 5; i >= 0; i--) {
@@ -834,9 +844,15 @@
       const fu = L.fu ? (L.fu.lq + L.fu.zhi) : '';
       const mark = L.shi ? '世' : (L.ying ? '应' : '　');
       const dong = L.moving ? (L.yang ? '○' : '×') : '　';
-      let line = pad(L.beast === '勾陈' ? '勾陈' : L.beast, 3) + '　' +
-        pad(fu, 6) + '　' +
-        L.lq + L.gan + L.zhi + L.wx + sym + '　' + mark + dong;
+      // 旬空/月破只标「本卦这一爻」的干支；变卦那一列不标（古籍版式里它是参照）
+      const isKong = pil.kong.indexOf(L.zhiIdx) >= 0;
+      const isPo = (typeof C.chong === 'function') ? C.chong(L.zhiIdx, pil.monthZhi) : false;
+      const segs = [
+        { t: pad(L.beast === '勾陈' ? '勾陈' : L.beast, 3) + '　' + pad(fu, 6) + '　' + L.lq },
+        // 月破优先：既旬空又月破时按月破画（与卦象表格的 gzp-po 口径一致）
+        { t: L.gan + L.zhi, cls: isPo ? GZC_PO : (isKong ? GZC_KONG : '') },
+        { t: L.wx + sym + '　' + mark + dong }
+      ];
       if (p.hasBian && L.bian) {
         /* 变卦的爻画：**动爻才变阴阳，静爻保持不变**。
          * 原来一律取本爻的反面（L.yang ? 阴 : 阳），于是所有静爻的变爻都画反了——
@@ -846,11 +862,29 @@
           ? (p.bianBits[i] === 1)
           : (L.moving ? !L.yang : L.yang);
         const bSym = bianYang ? '━━━' : '━　━';
-        line += '　　' + L.bian.lq + L.bian.gan + L.bian.zhi + L.bian.wx + bSym;
+        segs.push({ t: '　　' + L.bian.lq + L.bian.gan + L.bian.zhi + L.bian.wx + bSym });
       }
-      out.push(line.replace(/\s+$/, ''));
+      rows.push(segs);
     }
-    return out.join('\n');
+    return rows;
+  }
+
+  // 纯文本：复制、画板画图、分享链接都用它（绝不能带标签）
+  function panClassicText(p) {
+    return panClassicRows(p).map(function (segs) {
+      return segs.map(function (s) { return s.t; }).join('').replace(/\s+$/, '');
+    }).join('\n');
+  }
+
+  // 富文本：只给页面显示用；段内全角空格原样保留（对齐靠它），只把行尾多余空格剪掉，
+  // 剪多少与 panClassicText 一致——两份文本除了 <span> 之外逐字相同，便于对勘
+  function panClassicHTML(p) {
+    return panClassicRows(p).map(function (segs) {
+      return segs.map(function (s) {
+        const t = esc(s.t);
+        return s.cls ? '<span class="' + s.cls + '">' + t + '</span>' : t;
+      }).join('').replace(/\s+$/, '');
+    }).join('\n');
   }
 
   /* 两种版式二选一：古籍版式（默认）↔ 卦象表格。
@@ -867,7 +901,8 @@
     }
     if (body) body.hidden = showClassic;      // 古籍版式展开时，表格收起
     if (!pan || !showClassic) { box.hidden = true; return; }
-    pre.textContent = panClassicText(pan);
+    // 富文本只为标出旬空/月破；对齐靠全角空格，标色不影响列宽
+    pre.innerHTML = panClassicHTML(pan);
     box.hidden = false;
   }
 

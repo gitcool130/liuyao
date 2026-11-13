@@ -327,6 +327,13 @@
   }
   .lib-duan:focus { outline: none; border-color: var(--cinnabar); }
 
+  /* 古籍版式里的旬空/月破：与卦象表格同口径（旬空=朱红，月破=朱红+虚线下划线）。
+     不靠加粗区分——等宽版式里加粗会让某些中文字体撑宽，四列立刻错位。 */
+  .pan-text .gzc-kong { color: var(--cinnabar); font-weight: 600; }
+  /* 与卦象表格 .gzp-po 同色同线型（#b3261e + 点线），两版对看时规则一致；
+     加粗实测不改列宽（pre 的 scrollWidth 前后都是 1014px），四列不会因此错位 */
+  .pan-text .gzc-po { color: #b3261e; font-weight: 600; text-decoration: underline dotted; text-underline-offset: 3px; }
+
   /* ---- 断语栏（排盘之下一栏，古籍版式/卦象表格共用） ----
      古籍卦例只记「某卦之某卦＋断语」，装入时把断语带进来；
      与上方排盘同一张卡：白底、细边，中间一道虚线，看着像同一框的下半截 */

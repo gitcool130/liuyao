@@ -642,6 +642,27 @@ async function launchBrowser() {
   eq('重新起卦后断语栏收起', await page.$eval('#duanBox', e => e.hidden), true);
   eq('重新起卦后断语清空', await page.$eval('#duanText', e => e.value), '');
 
+  // 旬空/月破在古籍版式里标色：造一张确定盘（戌月 丁亥日 乾为天 → 午旬空、辰月破）
+  await page.click('#btnModeGz');
+  await page.waitForTimeout(300);
+  await page.selectOption('#gzMonth', '10');
+  await page.selectOption('#gzDay', '23');
+  await page.selectOption('#gzBen', '乾为天');
+  await page.waitForTimeout(200);
+  await page.click('#btnGzPaipan');
+  await page.waitForTimeout(900);
+  const marks = await page.evaluate(() => {
+    const pre = document.getElementById('classicText');
+    return {
+      kong: Array.from(pre.querySelectorAll('.gzc-kong')).map(e => e.textContent),
+      po: Array.from(pre.querySelectorAll('.gzc-po')).map(e => e.textContent),
+      same: pre.textContent === window.__lyPanClassic()
+    };
+  });
+  eq('古籍版式把旬空的干支标出', marks.kong, ['壬午']);
+  eq('古籍版式把月破的干支标出', marks.po, ['甲辰']);
+  ok('标色不改文本内容（对齐与复制不变）', marks.same);
+
   /* ---------- F. 古籍全文阅读 ---------- */
   say('F. 古籍全文');
   const textOpts = await page.$$eval('#gujiBook option', e => e.map(x => x.textContent));
