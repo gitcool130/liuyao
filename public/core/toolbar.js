@@ -28,7 +28,8 @@
     { key: 'lib', sel: '#libCard', label: '个人卦例' },
     { key: 'board', sel: '#boardCard', label: '画板涂鸦' },
     { key: 'ai', sel: '#aiCard', label: '模型试断', needPan: true },
-    { key: 'api', sel: '#localApiCard', label: '接口设置' }
+    { key: 'api', sel: '#localApiCard', label: '接口设置' },
+    { key: 'lunar', sel: '#lunarCard', label: '中国农历' }
   ];
   let cur = 'home';
 

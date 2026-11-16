@@ -4382,6 +4382,12 @@
       return;
     }
     lnFillPickers();
+    /* 卡片已搬到右侧导航的独立一页：点进来就该看到整月，不必再点一次「展开」。
+     * 收起按钮保留（想只看顶部那行时用）。 */
+    const body0 = $('#lunarBody');
+    if (body0) body0.hidden = false;
+    const tgl0 = $('#btnLunarToggle');
+    if (tgl0) { tgl0.textContent = '收起月历'; tgl0.setAttribute('aria-expanded', 'true'); }
     const tgl = $('#btnLunarToggle');
     if (tgl) tgl.onclick = function () {
       const body = $('#lunarBody');
