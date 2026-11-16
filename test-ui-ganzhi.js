@@ -752,6 +752,33 @@ async function launchBrowser() {
   await page.waitForTimeout(300);
   eq('首页不再内嵌农历卡', await page.evaluate(() => !!document.querySelector('#mainView #lunarCard')), false);
 
+  /* ---------- J. 排盘字号（古籍版式 / 表格 / 断语 共用） ---------- */
+  say('J. 排盘字号');
+  await page.click('#sideRail .tb-btn[data-k="home"]');
+  await page.waitForTimeout(300);
+  // H 段把口径切到了干支（起卦卡被藏起来），先切回公历，按卦名起卦才可用
+  await page.$eval('#btnModeDate', el => el.click());
+  await page.waitForTimeout(300);
+  await page.fill('#guaNameInput', '水雷屯');
+  await page.fill('#guaDongInput', '3');
+  await page.click('#btnByName');
+  await page.waitForTimeout(1000);
+  ok('排盘卡片有字号滑条', await page.$('#panFs') !== null);
+  const panTxtBefore = await page.$eval('#classicText', e => e.textContent);
+  const pfBefore = await page.$eval('#classicText', e => parseFloat(getComputedStyle(e).fontSize));
+  await page.evaluate(() => {
+    const r = document.getElementById('panFs');
+    r.value = '19';
+    r.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(250);
+  const pfAfter = await page.$eval('#classicText', e => parseFloat(getComputedStyle(e).fontSize));
+  ok('滑条放大古籍版式字号', pfAfter > pfBefore, pfBefore + ' → ' + pfAfter);
+  const tblFs = await page.$eval('table.pan', e => parseFloat(getComputedStyle(e).fontSize));
+  ok('卦象表格跟着放大', tblFs >= pfAfter, 'table=' + tblFs + ' classic=' + pfAfter);
+  eq('改字号不改版式文本（复制/对齐仍一致）', await page.$eval('#classicText', e => e.textContent), panTxtBefore);
+  eq('字号记在本机', await page.evaluate(() => localStorage.getItem('ly_pan_font')), '19');
+
   /* ---------- F. 古籍全文阅读 ---------- */
   say('F. 古籍全文');
   const textOpts = await page.$$eval('#gujiBook option', e => e.map(x => x.textContent));

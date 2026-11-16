@@ -27,6 +27,7 @@
     --cinnabar: #a83f39;
     --cinnabar-dark: #8c302b;
     --gold: #9a7b3f;
+    --pan-fs: 13px;   /* 排盘区基准字号：古籍版式 13、表格 +2、爻画 +3、断语 +1 */
     --ok: #3d7a4f;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -196,13 +197,13 @@
   .hex-title { text-align: center; font-size: 20px; letter-spacing: 3px; margin-bottom: 6px; }
   .hex-title b { color: var(--cinnabar); }
   .meta-line { text-align: center; color: var(--ink-light); font-size: 13px; margin-bottom: 14px; }
-  table.pan { width: 100%; border-collapse: collapse; font-size: 15px; }
+  table.pan { width: 100%; border-collapse: collapse; font-size: calc(var(--pan-fs) + 2px); }
   table.pan th {
-    font-weight: 600; color: var(--ink-light); font-size: 13px;
+    font-weight: 600; color: var(--ink-light); font-size: var(--pan-fs);
     border-bottom: 1.5px solid var(--gold); padding: 6px 4px; letter-spacing: 3px;
   }
   table.pan td { border-bottom: 1px solid var(--line); padding: 8px 4px; text-align: center; }
-  .yao-sym { font-family: monospace; font-size: 16px; letter-spacing: 0; white-space: nowrap; }
+  .yao-sym { font-family: monospace; font-size: calc(var(--pan-fs) + 3px); letter-spacing: 0; white-space: nowrap; }
   .yao-sym.moving { color: var(--cinnabar); font-weight: 700; }
   .badge-shi, .badge-ying {
     display: inline-block; width: 22px; height: 22px; line-height: 22px;
@@ -210,7 +211,7 @@
   }
   .badge-shi { background: var(--cinnabar); }
   .badge-ying { background: var(--gold); }
-  .fu-cell { color: var(--ink-light); font-size: 13px; }
+  .fu-cell { color: var(--ink-light); font-size: var(--pan-fs); }
   .kong { color: var(--cinnabar); }     /* 旬空标记 */
   .gz-hi { color: var(--cinnabar); }    /* 月建/日辰干支高亮（原名 .kong，与旬空语义冲突，已拆分） */
   /* 干支口径的头部：干支一行（等宽感）+ 宫名卦名一行 */
@@ -373,7 +374,7 @@
   .cmp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; margin-top: 6px; }
   #libStats { font-size: 13px; line-height: 1.8; }
   .pan-text {
-    white-space: pre-wrap; font-family: "Courier New", monospace; font-size: 13px;
+    white-space: pre-wrap; font-family: "Courier New", monospace; font-size: var(--pan-fs);
     background: #fff; border: 1px solid var(--line); border-radius: 6px;
     padding: 10px; margin: 10px 0; line-height: 1.6;
   }
@@ -387,6 +388,12 @@
 
   /* 古籍版式里的旬空/月破：与卦象表格同口径（旬空=朱红，月破=朱红+虚线下划线）。
      不靠加粗区分——等宽版式里加粗会让某些中文字体撑宽，四列立刻错位。 */
+  .pan-fsbar {
+    display: flex; align-items: center; gap: 8px; justify-content: flex-end;
+    margin: -8px 0 10px; font-size: 12.5px; color: var(--ink-light);
+  }
+  .pan-fsbar input[type=range] { width: 110px; accent-color: var(--cinnabar); }
+  .pan-fsbar b { color: var(--ink); font-weight: 600; min-width: 2.2em; text-align: right; }
   .pan-text .gzc-kong { color: var(--cinnabar); font-weight: 600; }
   /* 与卦象表格 .gzp-po 同色同线型（#b3261e + 点线），两版对看时规则一致；
      加粗实测不改列宽（pre 的 scrollWidth 前后都是 1014px），四列不会因此错位 */
@@ -409,7 +416,7 @@
   .duan-acts .btn { padding: 2px 10px; font-size: 12px; }
   #duanText {
     width: 100%; box-sizing: border-box; min-height: 148px; resize: vertical;
-    font-family: inherit; font-size: 14px; line-height: 1.95; color: var(--ink);
+    font-family: inherit; font-size: calc(var(--pan-fs) + 1px); line-height: 1.95; color: var(--ink);
     padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fffdf8;
   }
   #duanText:focus { outline: none; border-color: var(--cinnabar); }
@@ -466,7 +473,7 @@
   /* 古籍版式是等宽四列，绝不能折行——折了就完全对不齐。
      宽度不够时横向滚动（原来用 pre-wrap，一窄就把每行拆成几段）。 */
   .gz-preview { font-size: 14px; }
-  .gz-preview .pan-text { white-space: pre; overflow-x: auto; margin: 0; font-size: 13px; line-height: 1.75; }
+  .gz-preview .pan-text { white-space: pre; overflow-x: auto; margin: 0; font-size: var(--pan-fs); line-height: 1.75; }
   @media (max-width: 720px) { .gz-split { grid-template-columns: 1fr; } .gz-yao-col { border-right: 0; padding-right: 0; } }
 
   /* ---- 干支排盘（按年月建日辰时辰直接起卦，复现古籍卦例用） ---- */
@@ -504,8 +511,8 @@
   [hidden] { display: none !important; }
   @media (max-width: 640px) {
     .cast-grid { flex-direction: column; }
-    table.pan { font-size: 13px; }
-    .yao-sym { font-size: 13px; }
+    table.pan { font-size: var(--pan-fs); }
+    .yao-sym { font-size: var(--pan-fs); }
     /* 判据对照退化单列：左右两栏改上下两块，「当时/事后」语义由行名文字承载，断行不丢语义 */
     .cmp-grid { grid-template-columns: 1fr; }
     /* 移动端分栏纵向堆叠，360px 过高，压低滚动区 */
@@ -648,6 +655,12 @@
   <!-- 排盘 -->
   <section class="card" id="panCard" hidden>
     <h2>卦象</h2>
+    <div class="pan-fsbar">
+      <span class="muted">字号</span>
+      <input type="range" id="panFs" min="11" max="22" step="1" value="13" aria-label="排盘字号">
+      <b id="panFsVal">13</b>
+      <span class="muted" style="font-size:12px">古籍版式 / 卦象表格 / 断语同用</span>
+    </div>
     <!-- 古籍版式在前（默认展开）：六神/伏神/本卦/变卦 四列纯文本，可选中、可整段复制 -->
     <div id="classicBox" hidden>
       <div class="classic-bar">
@@ -789,7 +802,7 @@
 <script src="core/guji-lib.js?v=20261113a"></script>
 <script src="core/board.js?v=20261113a"></script>
 <script src="core/toolbar.js?v=20261116b"></script>
-<script src="app.js?v=20261116c"></script>
+<script src="app.js?v=20261116d"></script>
 <script src="bgm.js?v=20261110a"></script>
 </body>
 </html>

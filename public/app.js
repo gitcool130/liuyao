@@ -4375,6 +4375,26 @@
     }
   }
 
+  /* 排盘区字号（古籍版式 / 卦象表格 / 断语共用）
+   * 只改 :root 上的 --pan-fs，各处字号都是 calc(var(--pan-fs) + n) 派生，
+   * 所以一处拖、三处一起变。古籍版式是 white-space:pre + 等宽字体，
+   * 放大只会横向滚动，不会折行把四列挤乱。 */
+  function initPanFont() {
+    const el = $('#panFs'), val = $('#panFsVal');
+    const KEY = 'ly_pan_font';
+    const apply = function (px) {
+      const v = Math.max(11, Math.min(22, parseInt(px, 10) || 13));
+      document.documentElement.style.setProperty('--pan-fs', v + 'px');
+      if (el) el.value = String(v);
+      if (val) val.textContent = String(v);
+      try { localStorage.setItem(KEY, String(v)); } catch (e) { /* 隐私模式忽略 */ }
+    };
+    let saved = 13;
+    try { saved = parseInt(localStorage.getItem(KEY) || '13', 10) || 13; } catch (e) { }
+    apply(saved);
+    if (el) el.oninput = function () { apply(this.value); };
+  }
+
   function initLunar() {
     if (!C.lunar || typeof C.lunar.of !== 'function') {
       const card = $('#lunarCard');
@@ -4438,6 +4458,7 @@
     lnRenderAll();
   }
 
+  initPanFont();
   initLunar();
   renderModelChips();
   loadModels();
