@@ -733,6 +733,20 @@ async function launchBrowser() {
   await page.waitForTimeout(300);
   ok('回今天复位', (await page.$eval('#lnToday', e => e.innerText)).indexOf('农历') >= 0);
 
+  // 字号滑条：只改卡片基准字号，格内三行一起放大
+  ok('有字号滑条', await page.$('#lnFs') !== null);
+  const fsBefore = await page.$eval('#lnGrid .ln-d', e => getComputedStyle(e).fontSize);
+  await page.evaluate(() => {
+    const r = document.getElementById('lnFs');
+    r.value = '19';
+    r.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(250);
+  const fsAfter = await page.$eval('#lnGrid .ln-d', e => getComputedStyle(e).fontSize);
+  ok('滑条能放大字号', parseFloat(fsAfter) > parseFloat(fsBefore), fsBefore + ' → ' + fsAfter);
+  eq('字号值回写到标签', await page.$eval('#lnFsVal', e => e.textContent), '19');
+  eq('字号记在本机', await page.evaluate(() => localStorage.getItem('ly_lunar_font')), '19');
+
   // 回首页：农历卡不在主页里（它已搬成一页）
   await page.click('#sideRail .tb-btn[data-k="home"]');
   await page.waitForTimeout(300);

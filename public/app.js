@@ -4417,6 +4417,24 @@
     if (ys) ys.onchange = function () { lnState.y = parseInt(this.value, 10); lnRenderAll(); };
     const ms = $('#lnMonth');
     if (ms) ms.onchange = function () { lnState.m = parseInt(this.value, 10); lnRenderAll(); };
+
+    /* 字号：只改 #lunarCard 的基准 font-size，卡片内所有尺寸都是 em 派生，
+     * 所以月历格、表头、节气行、说明一起缩放；值记在本机，下次打开还是这个字号。 */
+    const LN_FS_KEY = 'ly_lunar_font';
+    const fs = $('#lnFs'), fsVal = $('#lnFsVal');
+    const applyFs = function (px) {
+      const v = Math.max(12, Math.min(24, parseInt(px, 10) || 14));
+      const card = $('#lunarCard');
+      if (card) card.style.fontSize = v + 'px';
+      if (fs) fs.value = String(v);
+      if (fsVal) fsVal.textContent = String(v);
+      try { localStorage.setItem(LN_FS_KEY, String(v)); } catch (e) { /* 隐私模式忽略 */ }
+    };
+    let lnSaved = 14;
+    try { lnSaved = parseInt(localStorage.getItem(LN_FS_KEY) || '14', 10) || 14; } catch (e) { }
+    applyFs(lnSaved);
+    if (fs) fs.oninput = function () { applyFs(this.value); };
+
     lnRenderAll();
   }
 
