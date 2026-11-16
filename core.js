@@ -38,6 +38,10 @@ if (typeof window === 'undefined') {
   require('./public/core/coverage-audit.js');
   require('./public/core/yingqi-window.js');
   require('./public/core/share.js');
+  // 农历（万年历）：data-lunar 是离线导出的年表+节气链，lunar 是纯换算；
+  // 排盘不依赖它，但 UI 与测试都从这里取，故一并聚合。
+  require('./public/core/data-lunar.js');
+  require('./public/core/lunar.js');
   module.exports = globalThis.LY;
 } else {
   // 浏览器兜底：若单独引入本文件（旧页面），提示正确用法与完整顺序

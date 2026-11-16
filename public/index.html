@@ -88,6 +88,61 @@
     background: #fff; color: var(--ink);
   }
 
+  /* ---- 中国农历（万年历） ---- */
+  .ln-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .ln-head h2 { margin: 0; }
+  .ln-today { font-size: 14px; color: var(--ink); letter-spacing: .5px; }
+  .ln-today b { color: var(--cinnabar); font-weight: 600; }
+  .ln-toggle { margin-left: auto; padding: 4px 12px; font-size: 12.5px; }
+  .ln-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .ln-nav { padding: 2px 10px; font-size: 15px; line-height: 1.2; }
+  .ln-title { font-size: 15px; letter-spacing: 1px; min-width: 128px; }
+  .ln-title b { color: var(--cinnabar); }
+  .ln-pick { display: inline-flex; gap: 6px; margin-left: auto; }
+  .ln-sel {
+    font-family: inherit; font-size: 13px; padding: 4px 6px;
+    border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink);
+  }
+  .ln-today-btn { padding: 3px 10px; font-size: 12.5px; }
+  .ln-terms { margin-top: 8px; font-size: 12.5px; color: var(--ink-light); letter-spacing: .3px; }
+  .ln-terms b { color: var(--gold); font-weight: 600; }
+  .ln-terms .ln-term-sep { margin: 0 10px; color: var(--line); }
+  .ln-grid-wrap { margin-top: 8px; }
+  /* 桌面端别把 7 列摊到 860px 宽——每列 140px 会显得空；限宽居中更像万年历 */
+  .ln-grid { width: 100%; max-width: 560px; margin: 0 auto; border-collapse: collapse; table-layout: fixed; }
+  .ln-grid th {
+    font-size: 12px; font-weight: 500; color: var(--ink-light);
+    padding: 5px 0 6px; border-bottom: 1px solid var(--line);
+  }
+  .ln-grid th.ln-sun { color: var(--cinnabar); }
+  .ln-grid td {
+    height: 54px; text-align: center; vertical-align: top; padding: 3px 0 2px;
+    border-radius: 7px; cursor: pointer; transition: background .12s;
+  }
+  .ln-grid td:hover { background: #fbf6ea; }
+  .ln-grid td.on { background: #fbf1ef; box-shadow: inset 0 0 0 1px var(--cinnabar); }
+  .ln-grid td.blank { cursor: default; }
+  .ln-grid td.blank:hover { background: transparent; }
+  .ln-d {
+    display: inline-block; min-width: 23px; line-height: 1.4;
+    font-size: 14.5px; color: var(--ink); border-radius: 11px;
+  }
+  .ln-grid td.today .ln-d { background: var(--cinnabar); color: #fff; font-weight: 600; }
+  .ln-grid td.sun .ln-d { color: var(--cinnabar); }
+  .ln-grid td.today.sun .ln-d { color: #fff; }
+  .ln-l { display: block; font-size: 11px; line-height: 1.3; color: var(--ink-light); }
+  .ln-l.ln-start { color: var(--cinnabar); }
+  .ln-l.ln-term { color: var(--gold); }
+  .ln-g { display: block; font-size: 10px; line-height: 1.2; color: #b0a696; }
+  .ln-note { margin-top: 8px; font-size: 12px; }
+  @media (max-width: 640px) {
+    .ln-grid td { height: 50px; }
+    .ln-d { font-size: 14px; }
+    .ln-l { font-size: 10.5px; }
+    .ln-g { font-size: 9.5px; }
+    .ln-today { font-size: 12.5px; }
+  }
+
   /* 起卦区 */
   .cast-grid { display: flex; gap: 28px; flex-wrap: wrap; }
   .cast-left { flex: 1; min-width: 300px; }
@@ -483,6 +538,32 @@
     </div>
   </section>
 
+  <!-- 中国农历（万年历）：一行常驻显示今天，点开看整月与节气 -->
+  <section class="card" id="lunarCard">
+    <div class="ln-head">
+      <h2>中国农历</h2>
+      <span class="ln-today" id="lnToday"></span>
+      <button class="btn ghost ln-toggle" id="btnLunarToggle" aria-expanded="false">展开月历</button>
+    </div>
+    <div id="lunarBody" hidden>
+      <div class="ln-bar">
+        <button class="btn ghost ln-nav" id="btnLunarPrev" title="上一个月" aria-label="上一个月">‹</button>
+        <span class="ln-title" id="lnTitle"></span>
+        <button class="btn ghost ln-nav" id="btnLunarNext" title="下一个月" aria-label="下一个月">›</button>
+        <span class="ln-pick">
+          <select id="lnYear" class="ln-sel" aria-label="公历年"></select>
+          <select id="lnMonth" class="ln-sel" aria-label="公历月"></select>
+        </span>
+        <button class="btn ghost ln-today-btn" id="btnLunarToday">回今天</button>
+      </div>
+      <div class="ln-terms" id="lnTerms"></div>
+      <div class="ln-grid-wrap">
+        <table class="ln-grid" id="lnGrid" aria-label="农历月历"></table>
+      </div>
+      <div class="ln-note muted" id="lnNote"></div>
+    </div>
+  </section>
+
   <!-- 干支排盘：直接以干支起卦，六爻自行指定 -->
   <section class="card" id="gzCard" hidden>
     <h2>干支排盘</h2>
@@ -682,6 +763,8 @@
 <script src="core/data.js?v=20261109a"></script>
 <script src="core/data-jieqi.js?v=20261109a"></script>
 <script src="core/calendar.js?v=20261109a"></script>
+<script src="core/data-lunar.js?v=20261116a"></script>
+<script src="core/lunar.js?v=20261116a"></script>
 <script src="core/paipan.js?v=20261109a"></script>
 <script src="core/analyze.js?v=20261109a"></script>
 <script src="core/sensitive.js?v=20261109a"></script>
@@ -699,7 +782,7 @@
 <script src="core/guji-lib.js?v=20261113a"></script>
 <script src="core/board.js?v=20261113a"></script>
 <script src="core/toolbar.js?v=20261111c"></script>
-<script src="app.js?v=20261113b"></script>
+<script src="app.js?v=20261116a"></script>
 <script src="bgm.js?v=20261110a"></script>
 </body>
 </html>

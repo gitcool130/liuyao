@@ -1975,7 +1975,7 @@
     const firstUsable = MODELS.filter(function (x) { return x.configured !== false; })[0] || MODELS[0];
     selModels = current.length ? current : (defaults.length ? defaults : (firstUsable ? [firstUsable.id] : []));
     lsSet('ly_models', JSON.stringify(selModels));
-    renderModelChips();
+  renderModelChips();
   }
 
   async function loadModels() {
@@ -4240,6 +4240,181 @@
     return true;
   }
 
+    /* ---------- 中国农历（万年历） ----------
+   * 数据在 core/data-lunar.js（由 lunar-javascript 离线导出），换算在 core/lunar.js。
+   * 这里只管呈现：一行常驻「今天」+ 可展开的整月网格。
+   * 口径：农历以正月初一换年，四柱走 C.fourPillars（节气换月），与排盘同源，
+   *       所以卡片上的「丙午年 己亥月 甲午日」与占时那一行永远一致。 */
+  const lnState = { y: 0, m: 0, sel: '' };
+  const LN_WEEK = ['日', '一', '二', '三', '四', '五', '六'];
+
+  function lnDayGZ(y, m, d) {
+    try { return C.ganzhiOfIndex(C.dayGanZhiIndex(y, m, d)); } catch (e) { return ''; }
+  }
+
+  function lnPillars(y, m, d) {
+    try {
+      const p = C.fourPillars(new Date(y, m - 1, d, 12, 0, 0));
+      return p.yearGZ + '年 ' + p.monthGZ + '月 ' + p.dayGZ + '日';
+    } catch (e) { return ''; }
+  }
+
+  // 顶部常驻行：公历 + 星期 + 农历 + 四柱
+  function lnRenderHead(y, m, d) {
+    const el = $('#lnToday');
+    if (!el) return;
+    const l = C.lunar.of(y, m, d);
+    const bits = [y + '年' + m + '月' + d + '日 星期' + LN_WEEK[new Date(y, m - 1, d).getDay()]];
+    if (l) bits.push('农历<b>' + l.monthName + l.dayName + '</b>');
+    const pil = lnPillars(y, m, d);
+    if (pil) bits.push(pil);
+    el.innerHTML = bits.join('　·　');
+  }
+
+  function lnClampYear() {
+    if (lnState.y < C.LUNAR_YEAR_FIRST) { lnState.y = C.LUNAR_YEAR_FIRST; lnState.m = 1; }
+    if (lnState.y > C.LUNAR_YEAR_LAST) { lnState.y = C.LUNAR_YEAR_LAST; lnState.m = 12; }
+  }
+
+  function lnFillPickers() {
+    const ys = $('#lnYear'), ms = $('#lnMonth');
+    if (ys && !ys.options.length) {
+      let h = '';
+      for (let y = C.LUNAR_YEAR_FIRST; y <= C.LUNAR_YEAR_LAST; y++) h += '<option value="' + y + '">' + y + ' 年</option>';
+      ys.innerHTML = h;
+    }
+    if (ms && !ms.options.length) {
+      let h = '';
+      for (let m = 1; m <= 12; m++) h += '<option value="' + m + '">' + m + ' 月</option>';
+      ms.innerHTML = h;
+    }
+  }
+
+  function lnRenderAll() {
+    if (!C.lunar || typeof C.lunar.of !== 'function') {
+      const card = $('#lunarCard');
+      if (card) card.hidden = true;      // 旧缓存缺模块时别留个空壳
+      return;
+    }
+    const now = new Date();
+    const ty = now.getFullYear(), tm = now.getMonth() + 1, td = now.getDate();
+    if (!lnState.y) { lnState.y = ty; lnState.m = tm; }
+    lnClampYear();
+    const y = lnState.y, m = lnState.m;
+
+    const selP = lnState.sel ? lnState.sel.split('-').map(Number) : null;
+    lnRenderHead(selP ? selP[0] : ty, selP ? selP[1] : tm, selP ? selP[2] : td);
+
+    if ($('#lnYear')) $('#lnYear').value = String(y);
+    if ($('#lnMonth')) $('#lnMonth').value = String(m);
+    const mid = C.lunar.of(y, m, 15);
+    if ($('#lnTitle')) {
+      $('#lnTitle').innerHTML = y + ' 年 ' + m + ' 月' + (mid ? '　<b>' + mid.monthName + '</b>' : '');
+    }
+
+    // 本月两个节气（节 + 中气）
+    const terms = C.lunar.termsOfMonth(y, m);
+    const termByDay = {};
+    if ($('#lnTerms')) {
+      $('#lnTerms').innerHTML = terms.map(function (t) {
+        const d = C.lunar.jdnToYmd(t.jdn);
+        termByDay[d.d] = t.name;
+        return '<b>' + t.name + '</b> ' + d.m + ' 月 ' + d.d + ' 日 ' +
+          C.lunar.pad2(t.hh) + ':' + C.lunar.pad2(t.mm);
+      }).join('<span class="ln-term-sep">｜</span>') || '（本月无节气，属表外年份）';
+    } else {
+      terms.forEach(function (t) { const d = C.lunar.jdnToYmd(t.jdn); termByDay[d.d] = t.name; });
+    }
+
+    // 月网格：周一为第一列
+    const lead = (new Date(y, m - 1, 1).getDay() + 6) % 7;
+    const dim = new Date(y, m, 0).getDate();
+    let html = '<thead><tr>' +
+      ['一', '二', '三', '四', '五', '六'].map(function (w) { return '<th>' + w + '</th>'; }).join('') +
+      '<th class="ln-sun">日</th></tr></thead><tbody><tr>';
+    let col = 0;
+    for (let i = 0; i < lead; i++) { html += '<td class="blank"></td>'; col++; }
+    for (let d = 1; d <= dim; d++) {
+      const l = C.lunar.of(y, m, d);
+      const cls = [];
+      if (col === 6) cls.push('sun');
+      if (y === ty && m === tm && d === td) cls.push('today');
+      if (selP && selP[0] === y && selP[1] === m && selP[2] === d) cls.push('on');
+      // 农历初一显示月名（含「闰」），节气日显示节气名——与常见万年历一致
+      let label = '', lcls = 'ln-l';
+      if (termByDay[d]) { label = termByDay[d]; lcls += ' ln-term'; }
+      else if (l) {
+        label = l.day === 1 ? l.monthName : l.dayName;
+        if (l.day === 1) lcls += ' ln-start';
+      }
+      html += '<td class="' + cls.join(' ') + '" data-d="' + d + '">' +
+        '<span class="ln-d">' + d + '</span>' +
+        '<span class="' + lcls + '">' + label + '</span>' +
+        '<span class="ln-g">' + lnDayGZ(y, m, d) + '</span></td>';
+      col++;
+      if (col === 7) { html += '</tr>'; col = 0; if (d < dim) html += '<tr>'; }
+    }
+    if (col !== 0) {
+      while (col < 7) { html += '<td class="blank"></td>'; col++; }
+      html += '</tr>';
+    }
+    const grid = $('#lnGrid');
+    if (grid) {
+      grid.innerHTML = html + '</tbody>';
+      Array.prototype.forEach.call(grid.querySelectorAll('td[data-d]'), function (td) {
+        td.onclick = function () {
+          lnState.sel = y + '-' + m + '-' + (+td.getAttribute('data-d'));
+          lnRenderAll();
+        };
+      });
+    }
+
+    if ($('#lnNote')) {
+      $('#lnNote').textContent = '农历以正月初一换年、干支以节气换月（与上方占时同源）；' +
+        '灰字为日干支，金色为节气，红色初一为换月。表覆盖 ' + C.LUNAR_YEAR_FIRST + '–' + C.LUNAR_YEAR_LAST + ' 年。';
+    }
+  }
+
+  function initLunar() {
+    if (!C.lunar || typeof C.lunar.of !== 'function') {
+      const card = $('#lunarCard');
+      if (card) card.hidden = true;
+      return;
+    }
+    lnFillPickers();
+    const tgl = $('#btnLunarToggle');
+    if (tgl) tgl.onclick = function () {
+      const body = $('#lunarBody');
+      if (!body) return;
+      body.hidden = !body.hidden;
+      this.textContent = body.hidden ? '展开月历' : '收起月历';
+      this.setAttribute('aria-expanded', String(!body.hidden));
+      if (!body.hidden) lnRenderAll();
+    };
+    const prev = $('#btnLunarPrev');
+    if (prev) prev.onclick = function () {
+      lnState.m--; if (lnState.m < 1) { lnState.m = 12; lnState.y--; }
+      lnClampYear(); lnRenderAll();
+    };
+    const next = $('#btnLunarNext');
+    if (next) next.onclick = function () {
+      lnState.m++; if (lnState.m > 12) { lnState.m = 1; lnState.y++; }
+      lnClampYear(); lnRenderAll();
+    };
+    const td = $('#btnLunarToday');
+    if (td) td.onclick = function () {
+      const n = new Date();
+      lnState.y = n.getFullYear(); lnState.m = n.getMonth() + 1; lnState.sel = '';
+      lnRenderAll();
+    };
+    const ys = $('#lnYear');
+    if (ys) ys.onchange = function () { lnState.y = parseInt(this.value, 10); lnRenderAll(); };
+    const ms = $('#lnMonth');
+    if (ms) ms.onchange = function () { lnState.m = parseInt(this.value, 10); lnRenderAll(); };
+    lnRenderAll();
+  }
+
+  initLunar();
   renderModelChips();
   loadModels();
   // 供「AI 接口设置」保存后即时刷新模型芯片（本地接口层不重启页面就能生效）

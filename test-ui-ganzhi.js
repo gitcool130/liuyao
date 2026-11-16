@@ -692,6 +692,52 @@ async function launchBrowser() {
     document.querySelectorAll('#panBody .fu-real, #panBody .fu-ref').length
   ]), [0, 0]);
 
+  /* ---------- I. 中国农历（万年历） ---------- */
+  say('I. 中国农历');
+  await page.click('#sideRail .tb-btn[data-k="home"]');
+  await page.waitForTimeout(400);
+  eq('农历卡片已挂载', await page.$eval('#lunarCard', e => !e.hidden), true);
+  const lnToday = await page.$eval('#lnToday', e => e.innerText);
+  ok('常驻行含公历与农历', /年\d+月\d+日 星期/.test(lnToday) && lnToday.indexOf('农历') >= 0, lnToday.slice(0, 60));
+  ok('常驻行含四柱', /年 .+月 .+日/.test(lnToday), lnToday.slice(0, 80));
+
+  eq('月历默认收起', await page.$eval('#lunarBody', e => e.hidden), true);
+  await page.click('#btnLunarToggle');
+  await page.waitForTimeout(400);
+  eq('展开后月历可见', await page.$eval('#lunarBody', e => e.hidden), false);
+  const lnCells = await page.$$eval('#lnGrid td[data-d]', e => e.length);
+  ok('本月天数在 28–31 之间', lnCells >= 28 && lnCells <= 31, 'cells=' + lnCells);
+  eq('七列表头', await page.$$eval('#lnGrid th', e => e.length), 7);
+  const lnStarts = await page.$$eval('#lnGrid .ln-start', e => e.map(x => x.textContent));
+  ok('农历初一标出月名（红字）', lnStarts.length >= 1, JSON.stringify(lnStarts));
+  const lnTerms = await page.$$eval('#lnGrid .ln-term', e => e.map(x => x.textContent));
+  eq('本月两个节气都落在格子里', lnTerms.length, 2);
+  ok('节气行有名称与时刻', /月 \d+ 日 \d{2}:\d{2}/.test(await page.$eval('#lnTerms', e => e.innerText)),
+    await page.$eval('#lnTerms', e => e.innerText));
+  eq('今天高亮一格', await page.$$eval('#lnGrid td.today', e => e.length), 1);
+
+  // 点 16 号：常驻行跟着换（说明「点某天看该日」这条真的通了）
+  const day16 = await page.evaluate(() => {
+    const td = document.querySelector('#lnGrid td[data-d="16"]');
+    return td ? td.innerText.replace(/\n/g, '|') : '';
+  });
+  if (day16) {
+    await page.evaluate(() => document.querySelector('#lnGrid td[data-d="16"]').click());
+    await page.waitForTimeout(300);
+    const afterClick = await page.$eval('#lnToday', e => e.innerText);
+    ok('点某天后常驻行换成该日', afterClick.indexOf('11月16日') >= 0, afterClick.slice(0, 60));
+    eq('该日格子被选中', await page.$$eval('#lnGrid td.on', e => e.length), 1);
+  }
+
+  // 上/下月与回今天
+  const titleBefore = await page.$eval('#lnTitle', e => e.innerText);
+  await page.click('#btnLunarNext');
+  await page.waitForTimeout(300);
+  ok('下月切换生效', (await page.$eval('#lnTitle', e => e.innerText)) !== titleBefore);
+  await page.click('#btnLunarToday');
+  await page.waitForTimeout(300);
+  ok('回今天复位', (await page.$eval('#lnToday', e => e.innerText)).indexOf('农历') >= 0);
+
   /* ---------- F. 古籍全文阅读 ---------- */
   say('F. 古籍全文');
   const textOpts = await page.$$eval('#gujiBook option', e => e.map(x => x.textContent));
