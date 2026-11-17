@@ -886,6 +886,97 @@ async function launchBrowser() {
   eq('关掉后文本一字不差地复原', await page.$eval('#classicText', e => e.textContent), baseText);
   eq('关掉后开关值记在本机', await page.evaluate(() => localStorage.getItem('ly_pan_shensha')), '0');
 
+  /* ---------- L. 卦例库分类标签 ---------- */
+  say('L. 卦例库分类');
+  await page.click('#sideRail .tb-btn[data-k="lib"]');
+  await page.waitForTimeout(400);
+  await page.click('#btnLib');
+  await page.waitForTimeout(1200);
+
+  ok('列表上方有分类标签行', await page.$('#libCats') !== null);
+  const chipLabels = await page.$$eval('#libCats .lib-cat', e => e.map(x => x.getAttribute('data-cat') === '' ? 'ALL' : (x.getAttribute('data-cat-add') ? 'ADD' : x.getAttribute('data-cat'))));
+  ok('有「全部」与预设分类', chipLabels[0] === 'ALL' && chipLabels.indexOf('财运') >= 0 && chipLabels.indexOf('婚姻') >= 0,
+    chipLabels.slice(0, 6).join('/'));
+  ok('末尾有「新建」入口', chipLabels.indexOf('ADD') >= 0);
+
+  // 库里至少有一条（D2 段存过一条）；点开它
+  const libRows = await page.$$eval('#libList .lib-item', e => e.length);
+  ok('列表有条目', libRows >= 1, 'count=' + libRows);
+  /* 记住要点开的那条的 id：断言按 id 查，不靠「列表第一条」的位置
+   * （库里已有别的用例造过的记录，谁在最前不保证）。 */
+  const libId = await page.$eval('#libList .lib-item', e => e.getAttribute('data-id'));
+  await page.evaluate(() => document.querySelector('#libList .lib-item').click());
+  await page.waitForTimeout(1200);
+
+  ok('详情有「所测之事」输入框', await page.$('#libQ') !== null);
+  ok('详情有「分类」输入框', await page.$('#libCat') !== null);
+  ok('分类是可选可输的（datalist）', await page.$('#libCatList') !== null);
+  ok('详情有保存按钮', await page.$('#btnLibMetaSave') !== null);
+
+  // 补填占问 + 分类，保存
+  await page.fill('#libQ', '冒烟补填所测之事');
+  await page.fill('#libCat', '财运');
+  await page.evaluate(() => document.getElementById('btnLibMetaSave').click());
+  await page.waitForTimeout(1200);
+  eq('保存回执', await page.$eval('#libMetaMsg', e => e.textContent), '已保存');
+
+  const afterSave = await page.evaluate((id) => {
+    /* 浏览器模式没有桌面壳，本地接口层把记录写进 localStorage（键 ly_records_v1），
+     * 不是文件——第一版照抄别的探针用了 __mockFiles，直接炸。 */
+    const a = JSON.parse(localStorage.getItem('ly_records_v1') || '[]');
+    const me = a.filter(function (r) { return r.id === id; })[0] || {};
+    return {
+      q: me.question,
+      c: me.category,
+      tag: (document.querySelector('#libList .lib-tag') || {}).textContent || '',
+      chip: Array.from(document.querySelectorAll('#libCats .lib-cat'))
+        .map(e => [e.getAttribute('data-cat'), e.textContent.trim()])
+        .filter(x => x[0] === '财运')[0],
+      listText: (document.querySelector('#libList .lib-item') || {}).innerText || ''
+    };
+  }, libId);
+  eq('记录里的占问已写入', afterSave.q, '冒烟补填所测之事');
+  eq('记录里的分类已写入', afterSave.c, '财运');
+  ok('列表项出现分类徽标', afterSave.tag === '财运', afterSave.tag);
+  ok('列表项文字跟着换了占问', afterSave.listText.indexOf('冒烟补填所测之事') >= 0, afterSave.listText.replace(/\n/g, ' | ').slice(0, 60));
+  ok('分类标签计数变成 1', afterSave.chip && afterSave.chip[1].indexOf('1') >= 0, JSON.stringify(afterSave.chip));
+
+  // 点「财运」筛选 → 只剩这一类；再点回全部
+  await page.evaluate(() => {
+    const c = Array.from(document.querySelectorAll('#libCats .lib-cat')).find(x => x.getAttribute('data-cat') === '财运');
+    c.click();
+  });
+  await page.waitForTimeout(400);
+  eq('筛选后该类高亮', await page.evaluate(() => {
+    const on = document.querySelector('#libCats .lib-cat.on');
+    return on ? on.getAttribute('data-cat') : null;
+  }), '财运');
+  ok('筛选后列表只剩该类', await page.evaluate(() => {
+    const items = Array.from(document.querySelectorAll('#libList .lib-item'));
+    return items.length >= 1 && items.every(x => x.innerText.indexOf('财运') >= 0);
+  }));
+  await page.evaluate(() => {
+    const c = Array.from(document.querySelectorAll('#libCats .lib-cat')).find(x => x.getAttribute('data-cat') === '财运');
+    c.click();
+  });
+  await page.waitForTimeout(400);
+  eq('再点一次回到全部', await page.evaluate(() => {
+    const on = document.querySelector('#libCats .lib-cat.on');
+    return on ? on.getAttribute('data-cat') : null;
+  }), '');
+
+  /* 自建分类：prompt 里填个名字 */
+  page.once('dialog', async d => { await d.accept('求子'); });
+  await page.evaluate(() => document.querySelector('#libCats [data-cat-add]').click());
+  await page.waitForTimeout(600);
+  ok('自建分类出现在标签行', await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('#libCats .lib-cat')).some(x => x.getAttribute('data-cat') === '求子');
+  }));
+  eq('自建分类记在本机', await page.evaluate(() => localStorage.getItem('ly_lib_cats')), '["求子"]');
+
+  await page.click('#sideRail .tb-btn[data-k="home"]');
+  await page.waitForTimeout(300);
+
   /* ---------- F. 古籍全文阅读 ---------- */
   say('F. 古籍全文');
   const textOpts = await page.$$eval('#gujiBook option', e => e.map(x => x.textContent));

@@ -4093,9 +4093,96 @@
   const LIB_PAGE = 100;
   let libRecs = [];     // 已载入的记录（统计口径 = 已载入样本，随"加载更多"一起增长）
   let libLoaded = 0;    // 已渲染条数 = 下一页 offset
+  let libHasMore = false;   // 服务端还有没有下一页（「加载更多」是否出现）
+
+  /* ---------- 分类标签（2026-11-17） ----------
+   * 王哥要的是：列表上方一行「财运/婚姻/…」标签，点一下只看该类；
+   * 详情里能选分类、也能自建；老卦例（未注明所测）还能补填占问。
+   *
+   * 存储：分类写在每条记录上（category 列），自建的**分类名清单**存在本机
+   * （localStorage）——清单只是个输入建议，不影响记录本身；换机器丢了只少几个
+   * 快捷标签，已存的分类值仍在记录里。
+   */
+  const LIB_CAT_PRESET = ['财运', '婚姻', '感情', '事业', '学业', '健康', '出行', '失物', '官讼', '家宅'];
+  const LIB_CAT_KEY = 'ly_lib_cats';
+
+  function libCatsCustom() {
+    try {
+      const a = JSON.parse(localStorage.getItem(LIB_CAT_KEY) || '[]');
+      return Array.isArray(a) ? a.filter(function (x) { return typeof x === 'string' && x; }) : [];
+    } catch (e) { return []; }
+  }
+  function libCatsSaveCustom(list) {
+    try { localStorage.setItem(LIB_CAT_KEY, JSON.stringify(list)); } catch (e) { }
+  }
+  /* 可选分类 = 预设 + 自建 + 记录里出现过的（老数据/别处加的也不能丢） */
+  function libCatsAll(recs) {
+    const out = LIB_CAT_PRESET.slice();
+    const add = function (c) { if (c && out.indexOf(c) < 0) out.push(c); };
+    libCatsCustom().forEach(add);
+    (recs || []).forEach(function (r) { add(r.category); });
+    return out;
+  }
+
+  let libCatCur = '';        // 当前筛选的类名，'' = 全部
+
+  function libCountByCat(recs, name) {
+    return recs.filter(function (r) { return (r.category || '') === name; }).length;
+  }
+
+  /* 分类标签条：全部 | 各类（带条数）| ＋自建 */
+  function renderLibCats(recs) {
+    const box = $('#libCats');
+    if (!box) return;
+    const all = libCatsAll(recs);
+    const custom = libCatsCustom();
+    let html = '<span class="lib-cat' + (libCatCur ? '' : ' on') + '" data-cat="">全部<span class="n">' + recs.length + '</span></span>';
+    all.forEach(function (c) {
+      const n = libCountByCat(recs, c);
+      // 条数为 0 也留着：方便先建好分类再往里放
+      html += '<span class="lib-cat' + (libCatCur === c ? ' on' : '') + '" data-cat="' + escAttr(c) + '">' +
+        esc(c) + '<span class="n">' + n + '</span>' +
+        (custom.indexOf(c) >= 0 ? '<span class="lib-cat-del" data-cat-del="' + escAttr(c) + '" title="删掉这个自建分类（不会改动已分类的卦例）">×</span>' : '') +
+        '</span>';
+    });
+    html += '<span class="lib-cat add" data-cat-add="1" title="新建一个分类">＋ 新建</span>';
+    if (libCatCur && libCountByCat(recs, libCatCur) === 0) {
+      html += '<span class="muted" style="font-size:12px">「' + esc(libCatCur) + '」下暂无卦例</span>';
+    }
+    box.innerHTML = html;
+  }
+
+  /* 按当前筛选渲染列表（分页追加后也要重渲染，所以单独拎出来） */
+  function renderLibListBody(recs) {
+    const list = $('#libList');
+    if (!list) return;
+    const shown = libCatCur ? recs.filter(function (r) { return (r.category || '') === libCatCur; }) : recs;
+    if (!shown.length) {
+      list.innerHTML = '<div class="muted">' + (libCatCur ? '这一类还没有卦例。' : '尚无卦例。') + '</div>';
+      return;
+    }
+    list.innerHTML = shown.map(libItemHTML).join('');
+    // 翻页按钮：只在「全部」视图下有意义（筛选后是已载入集合的子集）
+    if (!libCatCur && libLoaded && libHasMore) {
+      list.insertAdjacentHTML('beforeend',
+        '<div class="btn-row" style="margin-top:8px"><button class="btn" data-lib-more>加载更多</button>' +
+        '<span class="muted" style="margin-left:8px">已载入 ' + libLoaded + ' 例</span></div>');
+    } else if (libCatCur) {
+      list.insertAdjacentHTML('beforeend',
+        '<div class="muted" style="margin-top:8px;font-size:12px">当前从已载入的 ' + recs.length +
+        ' 例中筛选；要筛更早的卦例，先回「全部」点「加载更多」。</div>');
+    }
+  }
+
+  function libRefreshAll() {
+    renderLibCats(libRecs);
+    renderLibListBody(libRecs);
+    renderLibStats(libRecs);
+  }
 
   function libItemHTML(r) {
-    return '<div class="lib-item" data-id="' + escAttr(r.id) + '"><span>' + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) + '</span>' +
+    const tag = r.category ? '<span class="lib-tag">' + esc(r.category) + '</span>' : '';
+    return '<div class="lib-item" data-id="' + escAttr(r.id) + '"><span>' + tag + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) + '</span>' +
       '<span class="lib-side">' + outcomeBadge(r.outcome) + '<span class="muted">' + esc((r.created_at || '').slice(0, 10)) + '</span>' +
       '<button class="lib-load" data-restore="' + escAttr(r.id) + '" title="把这条卦例还原成卦象（等同双击）">装入</button>' +
       '<button class="lib-del" data-del="' + escAttr(r.id) + '" title="删除此卦例">×</button></span></div>';
@@ -4103,26 +4190,16 @@
 
   async function loadLibPage(offset, append) {
     const list = $('#libList');
-    if (!append) { list.innerHTML = '<div class="muted">载入中…</div>'; libRecs = []; libLoaded = 0; }
+    if (!append) { list.innerHTML = '<div class="muted">载入中…</div>'; libRecs = []; libLoaded = 0; libHasMore = false; }
     const res = await apiFetch('/api/records?limit=' + LIB_PAGE + '&offset=' + offset, {});
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || '读取失败');
-    const oldMore = list.querySelector('[data-lib-more]');
-    if (oldMore) oldMore.parentNode.removeChild(oldMore);
-    if (!append) list.innerHTML = '';
-    if (!data.records.length) {
-      if (!append) { list.innerHTML = '<div class="muted">尚无卦例。</div>'; renderLibStats([]); }
-      return;
-    }
-    list.insertAdjacentHTML('beforeend', data.records.map(libItemHTML).join(''));
+    /* 列表统一走 libRefreshAll()：分类筛选/徽标/翻页按钮都要跟着变。
+     * 旧版是把新页 insertAdjacentHTML 进去——一旦按分类筛选就乱套。 */
     libRecs = append ? libRecs.concat(data.records) : data.records.slice();
     libLoaded = libRecs.length;
-    renderLibStats(libRecs);
-    if (data.hasMore) {
-      list.insertAdjacentHTML('beforeend',
-        '<div class="btn-row" style="margin-top:8px"><button class="btn" data-lib-more>加载更多</button>' +
-        '<span class="muted" style="margin-left:8px">已载入 ' + libLoaded + ' 例</span></div>');
-    }
+    libHasMore = !!data.hasMore;
+    libRefreshAll();
   }
 
   async function delCast(id) {
@@ -4142,6 +4219,49 @@
       if (!$('.lib-item')) $('#libList').innerHTML = '<div class="muted">尚无卦例。</div>';
     } catch (err) { alert('删除失败：' + err.message); }
   }
+
+  /* 分类条的点击：筛选 / 新建 / 删除。
+   * 用委托而不是逐节点绑定——分类条每次重渲染都换节点。 */
+  const _libCats = $('#libCats');
+  if (_libCats) _libCats.addEventListener('click', function (e) {
+    const t = e.target;
+    if (!t || !t.closest) return;
+
+    // 删自建分类：只从清单里去掉，不动已分类的卦例（那些记录的 category 值还在）
+    const del = t.closest('[data-cat-del]');
+    if (del) {
+      e.stopPropagation();
+      const name = del.getAttribute('data-cat-del');
+      if (!confirm('删掉分类「' + name + '」？\n（只删这个快捷标签，已归到该类的卦例不会被改动。）')) return;
+      libCatsSaveCustom(libCatsCustom().filter(function (x) { return x !== name; }));
+      if (libCatCur === name) libCatCur = '';
+      renderLibCats(libRecs);
+      renderLibListBody(libRecs);
+      return;
+    }
+
+    // 新建分类
+    if (t.closest('[data-cat-add]')) {
+      const name = (prompt('新分类名（如：求子、房产、跳槽）：') || '').trim();
+      if (!name) return;
+      if (name.length > 12) { alert('分类名请控制在 12 字以内。'); return; }
+      const list = libCatsCustom();
+      const exists = libCatsAll(libRecs).indexOf(name) >= 0;
+      if (!exists) { list.push(name); libCatsSaveCustom(list); }
+      libCatCur = name;    // 建好就直接看这一类
+      libRefreshAll();
+      return;
+    }
+
+    // 切筛选
+    const chip = t.closest('[data-cat]');
+    if (chip) {
+      const name = chip.getAttribute('data-cat') || '';
+      libCatCur = (libCatCur === name) ? '' : name;   // 再点一次回全部
+      renderLibCats(libRecs);
+      renderLibListBody(libRecs);
+    }
+  });
 
   // 事件委托：分页后节点是追加进来的，用一次性委托避免每页重复绑定
   const _libList = $('#libList');
@@ -4380,10 +4500,29 @@
       if (myToken !== castToken) return;
       $('#libDetail').innerHTML = '<div class="ai-block"><b>' + esc(r.hex) + '</b>　<span class="muted">' +
         esc(r.datetime || '') + '　' + esc(r.pillars || '') + '</span>' +
+        '<div id="libQShown" style="font-size:13px;margin:2px 0 4px"><span class="muted">所测：</span>' +
+        (r.question ? esc(r.question) : '<span class="muted">（未注明所测，可在下方补填）</span>') + '</div>' +
         '<pre class="pan-text">' + esc(r.pan_text || '') + '</pre>' +
         '<div class="btn-row" style="justify-content:flex-start;margin:6px 0 2px">' +
         '<button class="btn ghost" id="btnLibBoard" title="把这张盘画到画板上圈点">导入画板</button>' +
         '<button class="btn ghost" id="btnLibRestore" title="按这条记录还原成卦象">装入卦象</button>' +
+        '</div>' +
+        /* 占问 + 分类（2026-11-17）：老卦例的系统提示「（未注明所测）」，这里能补填。
+         * 分类支持选已有的、也能直接手输新的（datalist）；两者都只改这一条记录的两列，
+         * 走 POST /api/records?meta=1，不动盘面与断卦对话。 */
+        '<div class="lib-meta-row">' +
+        '<label for="libQ">所测之事</label>' +
+        '<input id="libQ" list="libQList" maxlength="100" placeholder="如：占这笔货款何时到" ' +
+        'value="' + escAttr(r.question || '') + '" style="min-width:260px">' +
+        '<datalist id="libQList"></datalist>' +
+        '<label for="libCat">分类</label>' +
+        '<input id="libCat" list="libCatList" maxlength="12" placeholder="选或输入新分类" ' +
+        'value="' + escAttr(r.category || '') + '" style="width:132px">' +
+        '<datalist id="libCatList">' +
+        libCatsAll(libRecs).map(function (c) { return '<option value="' + escAttr(c) + '"></option>'; }).join('') +
+        '</datalist>' +
+        '<button class="btn ghost" id="btnLibMetaSave" style="padding:3px 12px">保存</button>' +
+        '<span class="muted" id="libMetaMsg" style="font-size:12px"></span>' +
         '</div>' +
         // 断语：老卦例多半没写过，这里就地补写并单独保存（只改这一条记录的断语，
         // 不动盘面与对话历史）；也能当复盘笔记用
@@ -4427,6 +4566,59 @@
       if (br) br.onclick = function () { restoreCastById(r.id); };
 
       // 断语就地保存：老卦例（早年没这个字段）补写断语的主路径
+      /* 「所测之事 / 分类」保存：只改这两列。
+       * 需要原地更新三处：这条记录在 libRecs 里的缓存、列表项的文字与徽标、分类条计数——
+       * 否则存完还得手动「载入卦例库」才看得到（王哥最烦这种「点了没反应」）。 */
+      const mSave = $('#btnLibMetaSave');
+      if (mSave) mSave.onclick = async function () {
+        const msg = $('#libMetaMsg');
+        const qEl = $('#libQ'), cEl = $('#libCat');
+        const qTxt = (qEl && qEl.value || '').trim();
+        const cTxt = (cEl && cEl.value || '').trim();
+        mSave.disabled = true;
+        if (msg) { msg.style.color = ''; msg.textContent = '保存中…'; }
+        try {
+          const res = await apiFetch('/api/records?meta=1', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: r.id, question: qTxt, category: cTxt })
+          });
+          const d = await res.json().catch(function () { return {}; });
+          if (!res.ok) throw new Error(d.message || ('HTTP ' + res.status));
+          // 缓存与界面同步
+          const i = libRecs.findIndex(function (x) { return x.id === r.id; });
+          if (i >= 0) {
+            libRecs[i].question = qTxt;
+            libRecs[i].category = cTxt;
+          }
+          r.question = qTxt;
+          r.category = cTxt;
+          if (cTxt && libCatsAll(libRecs).indexOf(cTxt) < 0) {
+            const list = libCatsCustom(); list.push(cTxt); libCatsSaveCustom(list);
+          }
+          libRefreshAll();
+          /* 详情顶部那行「卦名 日期 四柱」不动（它是盘面信息）；
+           * 占问改了就把它下面那行说明更新掉，避免和列表里的新占问不一致。 */
+          const det = $('#libDetail');
+          if (det) {
+            let qline = det.querySelector('#libQShown');
+            if (!qline) {
+              qline = document.createElement('div');
+              qline.id = 'libQShown';
+              qline.style.cssText = 'font-size:13px;margin:2px 0 4px';
+              const block = det.querySelector('.ai-block');
+              if (block && block.parentNode) block.parentNode.insertBefore(qline, block.nextSibling);
+            }
+            qline.innerHTML = '<span class="muted">所测：</span>' + esc(qTxt || '（未注明所测）');
+          }
+          if (msg) { msg.style.color = '#3f5a33'; msg.textContent = '已保存'; }
+        } catch (e) {
+          if (msg) { msg.style.color = '#a5352c'; msg.textContent = '保存失败：' + (e && e.message ? e.message : e); }
+        } finally {
+          mSave.disabled = false;
+        }
+      };
+
       const dSave = $('#btnLibDuanSave');
       if (dSave) dSave.onclick = async function () {
         const msg = $('#libDuanMsg'), ta = $('#libDuan');

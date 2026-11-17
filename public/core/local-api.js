@@ -313,6 +313,28 @@
       })();
     }
 
+    /* 分类 / 占问回填（2026-11-17）：与服务端 ?meta=1 同一语义——只改这两列，
+     * 不动盘面与对话。前端只有一处代码，本地壳与线上库走同一条路。 */
+    if (q.get('meta')) {
+      return (async function () {
+        let b; try { b = await req.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+        const id = b && b.id;
+        const i = recs.findIndex(function (r) { return r.id === id; });
+        if (i < 0) return json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
+        const hasCat = Object.prototype.hasOwnProperty.call(b, 'category');
+        const hasQ = Object.prototype.hasOwnProperty.call(b, 'question');
+        if (!hasCat && !hasQ) return json({ error: 'BAD_FIELD', message: 'category 或 question 至少给一个' }, 400);
+        if (hasCat) recs[i].category = (b.category == null ? null : String(b.category).slice(0, 40));
+        if (hasQ) recs[i].question = (b.question == null ? null : String(b.question).slice(0, 100));
+        recs[i].updated_at = nowISO();
+        if (!(await writeRecs(recs))) return json({ error: 'STORAGE_FULL', message: '本机存储写入失败' }, 507);
+        const out = { ok: true };
+        if (hasCat) out.category = recs[i].category;
+        if (hasQ) out.question = recs[i].question;
+        return json(out);
+      })();
+    }
+
     if (q.get('id')) {
       const id = q.get('id');
       const hit = recs.filter(function (r) { return r.id === id; })[0];

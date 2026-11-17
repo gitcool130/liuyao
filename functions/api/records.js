@@ -244,7 +244,7 @@ export async function onRequestGet(context) {
   // 跳行/重行（上一页末尾与下一页开头同秒时尤甚）。id 为主键、必然唯一，
   // 与 created_at 同向 DESC 后分页游标才确定。LIMIT/OFFSET 不变。
   const { results } = await env.LIUYAO_DB.prepare(
-    'SELECT id, created_at, datetime, question, hex, pillars, outcome FROM casts ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?'
+    'SELECT id, created_at, datetime, question, hex, pillars, outcome, category FROM casts ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?'
   ).bind(limit + 1, offset).all();
   // 读路径同样不能信库里的数据：历史无校验写入的非法 id 行一律不下发前端
   // （这些 id 会被拼进 data-id / data-del 属性，是存储型 XSS 的入口）
@@ -349,6 +349,62 @@ async function handleConclusion(request, env) {
   }
 }
 
+// 分类与占问回填（2026-11-17）：只写 category / question 两列。
+//
+// 为什么不并进主 POST：主 POST 的 INSERT 清单一旦加上 category，**没迁移过的旧库**
+// 会因为「no such column」整条 INSERT 失败——连卦例都存不进去。分类丢了大不了未分类，
+// 卦例丢了是数据事故。所以照 conclusion 的做法单开一路，缺列时回 501 给迁移语句。
+//
+// 为什么 question 也走这里：「（未注明所测）」的老卦例要能补填所测之事，
+// 而主 POST 改 question 必须连盘面一起带（否则会拿当前盘覆盖），太重。
+//
+// 两个字段可单独给：只改分类就只传 category，只改占问就只传 question。
+async function handleMeta(request, env) {
+  const read = await readJsonLimited(request, MAX_JSON_BODY);
+  if (read.error === 'TOO_LARGE') return payloadTooLarge();
+  if (read.error) return json({ error: 'BAD_JSON' }, 400);
+  const b = read.value;
+  const id = (b && typeof b.id === 'string') ? b.id : '';
+  if (!ID_RE.test(id)) return json({ error: 'BAD_ID', message: '非法 id' }, 400);
+
+  const hasCat = Object.prototype.hasOwnProperty.call(b, 'category');
+  const hasQ = Object.prototype.hasOwnProperty.call(b, 'question');
+  if (!hasCat && !hasQ) return json({ error: 'BAD_FIELD', message: 'category 或 question 至少给一个' }, 400);
+  if (hasCat && b.category != null && typeof b.category !== 'string') {
+    return json({ error: 'BAD_FIELD', message: 'category 须为字符串' }, 400);
+  }
+  if (hasQ && b.question != null && typeof b.question !== 'string') {
+    return json({ error: 'BAD_FIELD', message: 'question 须为字符串' }, 400);
+  }
+
+  const sets = [], vals = [];
+  if (hasCat) { sets.push('category = ?'); vals.push(b.category == null ? null : String(b.category).slice(0, 40)); }
+  if (hasQ) { sets.push('question = ?'); vals.push(b.question == null ? null : String(b.question).slice(0, 100)); }
+  vals.push(id);
+
+  try {
+    const r = await env.LIUYAO_DB.prepare('UPDATE casts SET ' + sets.join(', ') + ' WHERE id = ?')
+      .bind.apply(null, vals).run();
+    const changes = r && r.meta && typeof r.meta.changes === 'number' ? r.meta.changes : 0;
+    if (!changes) return json({ error: 'NOT_FOUND', message: '卦例不存在' }, 404);
+    const out = { ok: true };
+    if (hasCat) out.category = b.category == null ? null : String(b.category).slice(0, 40);
+    if (hasQ) out.question = b.question == null ? null : String(b.question).slice(0, 100);
+    return json(out);
+  } catch (e) {
+    /* category 是后加的列。缺列只有一种可能：这个库还没跑过 ALTER。 */
+    const msg = String((e && e.message) || '');
+    if (/no such column/i.test(msg)) {
+      return json({
+        error: 'NO_COLUMN',
+        message: '本库缺 category 列，先执行：npx wrangler d1 execute liuyao-db --remote --command="ALTER TABLE casts ADD COLUMN category TEXT;"'
+      }, 501);
+    }
+    throw e;
+  }
+}
+
+
 export async function onRequestPost(context) {
   const { request, env } = context;
   // 跨站守卫：Content-Type 必须 JSON、Origin（若带）必须同源——挡掉「借访客浏览器写库」
@@ -364,6 +420,8 @@ export async function onRequestPost(context) {
   if (flagOn(url, 'outcome')) return handleOutcome(request, env);
   // 断语回填（2026-11-13）：独立分支，只写 conclusion 列
   if (flagOn(url, 'conclusion')) return handleConclusion(request, env);
+  // 分类 / 占问回填（2026-11-17）：独立分支，只写 category / question
+  if (flagOn(url, 'meta')) return handleMeta(request, env);
 
   let b;
   const read = await readJsonLimited(request, MAX_JSON_BODY);

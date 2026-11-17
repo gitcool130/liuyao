@@ -397,6 +397,36 @@
     background: #fff; border: 1px solid var(--line); border-radius: 6px;
     padding: 10px; margin: 10px 0; line-height: 1.6;
   }
+  /* ---- 卦例库分类标签 ---- */
+  .lib-cats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
+  .lib-cat {
+    font-size: 12.5px; line-height: 1.6; padding: 2px 10px; border-radius: 11px;
+    border: 1px solid var(--line); background: #fffdf8; color: var(--ink-light);
+    cursor: pointer; user-select: none; transition: all .12s;
+  }
+  .lib-cat:hover { border-color: var(--cinnabar); color: var(--cinnabar-dark); }
+  .lib-cat.on { background: var(--cinnabar); border-color: var(--cinnabar); color: #fff; }
+  .lib-cat .n { opacity: .68; margin-left: 3px; font-size: 11.5px; }
+  .lib-cat.add { border-style: dashed; }
+  .lib-cat-del {
+    margin-left: 4px; opacity: .5; font-size: 11px; cursor: pointer;
+  }
+  .lib-cat-del:hover { opacity: 1; }
+  /* 列表项里的分类徽标 */
+  .lib-tag {
+    display: inline-block; font-size: 11.5px; line-height: 1.6; padding: 0 7px;
+    border-radius: 9px; background: #f3ecdd; color: #7d6a45; margin-right: 6px;
+    vertical-align: 1px;
+  }
+  /* 详情里「占问 / 分类」编辑行 */
+  .lib-meta-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  .lib-meta-row label { font-size: 12.5px; color: var(--ink-light); }
+  .lib-meta-row input, .lib-meta-row select {
+    font-family: inherit; font-size: 13px; padding: 4px 8px;
+    border: 1px solid var(--line); border-radius: 6px; background: #fffdf8; color: var(--ink);
+  }
+  .lib-meta-row input:focus, .lib-meta-row select:focus { outline: none; border-color: var(--cinnabar); }
+
   /* 个人卦例详情里的断语框：给老卦例补断语用，单独保存 */
   .lib-duan {
     width: 100%; box-sizing: border-box; min-height: 96px; resize: vertical; margin-top: 4px;
@@ -825,6 +855,10 @@
       <span class="muted" id="loginTip" style="align-self:center;font-size:13px">卦例库需口令，浏览与装入均需登录</span>
     </div>
     <div class="muted" style="font-size:12px;margin-top:6px">点条目看详情；点右侧「装入」把这一卦还原成卦象（双击条目也行）</div>
+    <!-- 分类标签（2026-11-17）：点一下只看该类，再点一次看全部；
+         末尾「＋」可自建分类（存本机，随时删）。分类存在每条记录上，
+         老卦例可在下方详情里随时补填。 -->
+    <div class="lib-cats" id="libCats"></div>
     <div id="libStats" style="margin-top:10px"></div>
     <div id="libDue" style="margin-top:10px"></div>
     <div id="libList" style="margin-top:12px"></div>
@@ -856,11 +890,11 @@
 <script src="core/shensha.js?v=20261117a"></script>
 <script src="core/ocr-paipan.js?v=20261117a"></script>
 <script src="core/file-store.js?v=20261117a"></script>
-<script src="core/local-api.js?v=20261113a"></script>
+<script src="core/local-api.js?v=20261117a"></script>
 <script src="core/guji-lib.js?v=20261113a"></script>
 <script src="core/board.js?v=20261113a"></script>
 <script src="core/toolbar.js?v=20261116b"></script>
-<script src="app.js?v=20261117a"></script>
+<script src="app.js?v=20261117b"></script>
 <script src="bgm.js?v=20261110a"></script>
 </body>
 </html>
