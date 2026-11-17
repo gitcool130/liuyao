@@ -10,9 +10,24 @@ const { chromium } = require('playwright-core');
 const fs = require('fs');
 const path = require('path');
 
-const EXE = process.env.LY_CHROME ||
-  'C:/Users/ABC/AppData/Local/ms-playwright/chromium-1228/chrome-win64/chrome.exe';
 const BASE = process.argv[2] || 'http://127.0.0.1:8932';
+
+/* ⚠ 不能写死本机的 chrome 路径：CI 上没有那个文件，会以
+ *   「Failed to launch chromium because executable doesn't exist」整步挂掉
+ *   （2026-11-17 这轮就是这么挂的，白瞎了一次构建）。
+ * 与 test-ui-ganzhi.js 同一套兜底：msedge → chrome → playwright 自带。 */
+async function launchBrowser() {
+  const attempts = [];
+  if (process.env.LY_CHROME) attempts.push({ executablePath: process.env.LY_CHROME, headless: true });
+  attempts.push({ channel: 'msedge', headless: true });
+  attempts.push({ channel: 'chrome', headless: true });
+  attempts.push({ headless: true });
+  let lastErr;
+  for (const opt of attempts) {
+    try { return await chromium.launch(opt); } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
 
 const FX = path.join(__dirname, 'tests', 'fixtures', 'ocr');
 const loadOcr = function (f) {
@@ -33,7 +48,7 @@ function eq(name, got, want) {
 }
 
 (async () => {
-  const b = await chromium.launch({ executablePath: EXE, headless: true });
+  const b = await launchBrowser();
   const ctx = await b.newContext({ viewport: { width: 1300, height: 1100 } });
   await ctx.addInitScript(function (payload) {
     const files = { '卦例库.json': '[]', '我的古籍.json': JSON.stringify({ books: [] }) };
