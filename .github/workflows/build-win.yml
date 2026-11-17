@@ -176,8 +176,12 @@ jobs:
             "/r:$wm\Windows.Storage.winmd",
             "/r:$wm\Windows.Graphics.winmd",
             "/r:$wm\Windows.Media.winmd",
-            "/r:$wm\Windows.Globalization.winmd",
-          ) + $facadeDlls + @(
+            "/r:$wm\Windows.Globalization.winmd"
+          )
+          # 追加要用 += ：写成 “) + \$facadeDlls + @( ... )” 跨行拼接时，
+          # PowerShell 解析器会在那行报 "Missing expression after ','"（实测踩过）
+          $compilerArgs += $facadeDlls
+          $compilerArgs += @(
             '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
             '/r:System.IO.Compression.dll', '/r:System.IO.Compression.FileSystem.dll',
             'windows-shell\Program.cs'
