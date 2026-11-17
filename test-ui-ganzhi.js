@@ -779,6 +779,100 @@ async function launchBrowser() {
   eq('改字号不改版式文本（复制/对齐仍一致）', await page.$eval('#classicText', e => e.textContent), panTxtBefore);
   eq('字号记在本机', await page.evaluate(() => localStorage.getItem('ly_pan_font')), '19');
 
+  /* ---------- K. 神煞开关 ---------- */
+  say('K. 神煞开关');
+  await page.click('#sideRail .tb-btn[data-k="home"]');
+  await page.waitForTimeout(300);
+  await page.$eval('#btnModeDate', el => el.click());
+  await page.waitForTimeout(300);
+  await page.fill('#guaNameInput', '雷水解');
+  await page.fill('#guaDongInput', '2,4');
+  await page.click('#btnByName');
+  await page.waitForTimeout(1000);
+
+  // 造一张与实拍盘同口径的盘：丙午年 己亥月 乙未日
+  await page.click('#btnModeGz');
+  await page.waitForTimeout(400);
+  const gzPick = async (id, label) => {
+    const v = await page.evaluate(({ id, label }) => {
+      const o = Array.from(document.getElementById(id).options).find(x => x.text.indexOf(label) >= 0);
+      return o ? o.value : null;
+    }, { id, label });
+    if (v != null) await page.evaluate(({ id, v }) => {
+      const el = document.getElementById(id);
+      el.value = v;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, { id, v });
+  };
+  await gzPick('gzYear', '丙午');
+  await gzPick('gzMonth', '亥');
+  await gzPick('gzDay', '乙未');
+  await gzPick('gzHour', '申');
+  await page.selectOption('#gzBen', '雷水解');
+  await page.waitForTimeout(300);
+  // #gzYao 是上→初渲染：二爻=索引4、四爻=索引2
+  await page.evaluate(() => {
+    document.querySelectorAll('#gzYao .gz-move').forEach((el, i) => {
+      if (i === 4 || i === 2) { el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }
+    });
+  });
+  await page.waitForTimeout(300);
+  await page.click('#btnGzPaipan');
+  await page.waitForTimeout(1000);
+
+  ok('卦象卡有神煞开关', await page.$('#panShensha') !== null);
+  // 先确保是关的（上一条用例可能留了开着的状态）
+  await page.evaluate(() => {
+    const c = document.getElementById('panShensha');
+    c.checked = false; c.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForTimeout(400);
+  eq('默认关：古籍版式里没有神煞行', await page.evaluate(() =>
+    document.getElementById('classicText').textContent.indexOf('神煞') >= 0), false);
+  eq('默认关：表格里没有神煞块', await page.evaluate(() =>
+    !!document.querySelector('#panBody .pan-ss-box')), false);
+
+  /* 关着时候的文本必须先记下来：打开再关掉要一字不差地复原——
+   * 这是「神煞不影响盘面」的硬证据，也是古籍回归基线不被污染的前提。 */
+  const baseText = await page.$eval('#classicText', e => e.textContent);
+
+  await page.evaluate(() => {
+    const c = document.getElementById('panShensha');
+    c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForTimeout(500);
+  const ssOn = await page.evaluate(() => {
+    /* 神煞是多行（每行四项），从「神煞：」那行起把后续以全角缩进开头的行也算上，
+     * 否则只拿到第一行的四项（贵人/天医/谋星都在后面的行里——第一版就这么漏的）。 */
+    const lines = document.getElementById('classicText').textContent.split('\n');
+    const start = lines.findIndex(l => l.indexOf('神煞') >= 0);
+    const block = [];
+    for (let i = start; i >= 0 && i < lines.length; i++) {
+      if (i > start && !/^\u3000/.test(lines[i])) break;
+      block.push(lines[i].trim());
+    }
+    return {
+      row: block.join(''),
+      box: (document.querySelector('#panBody .pan-ss-box') || {}).innerText || '',
+      hits: document.querySelectorAll('#panBody .pan-ss-box .ss-hit').length
+    };
+  });
+  ok('打开后有神煞行', ssOn.row.length > 10, ssOn.row.slice(0, 40));
+  ok('神煞含卦身（雷水解→丑）', ssOn.row.indexOf('卦身-丑') >= 0, ssOn.row.slice(0, 30));
+  ok('神煞含贵人子申', ssOn.row.indexOf('贵人-子申') >= 0);
+  ok('神煞含天医戌', ssOn.row.indexOf('天医-戌') >= 0);
+  ok('神煞含谋星丑', ssOn.row.indexOf('谋星-丑') >= 0);
+  ok('表格里也出神煞块', ssOn.box.indexOf('神煞') >= 0, ssOn.box.slice(0, 40));
+  ok('命中的地支被标红（ss-hit）', ssOn.hits > 0, 'hits=' + ssOn.hits);
+
+  await page.evaluate(() => {
+    const c = document.getElementById('panShensha');
+    c.checked = false; c.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForTimeout(400);
+  eq('关掉后文本一字不差地复原', await page.$eval('#classicText', e => e.textContent), baseText);
+  eq('关掉后开关值记在本机', await page.evaluate(() => localStorage.getItem('ly_pan_shensha')), '0');
+
   /* ---------- F. 古籍全文阅读 ---------- */
   say('F. 古籍全文');
   const textOpts = await page.$$eval('#gujiBook option', e => e.map(x => x.textContent));

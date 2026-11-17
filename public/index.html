@@ -89,6 +89,25 @@
     background: #fff; color: var(--ink);
   }
 
+  /* ---- 截图导入：解析预览 + 确认条 ---- */
+  #ocrPreview {
+    margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line);
+    border-radius: 8px; background: #fffdf8; font-size: 13px; line-height: 1.85;
+  }
+  #ocrPreview .ocr-h { font-size: 13px; color: var(--cinnabar-dark); letter-spacing: 1px; margin-bottom: 4px; }
+  #ocrPreview table { border-collapse: collapse; margin: 4px 0 6px; }
+  #ocrPreview td { padding: 1px 10px 1px 0; vertical-align: top; }
+  #ocrPreview td.k { color: var(--ink-light); white-space: nowrap; }
+  #ocrPreview td.v b { color: var(--cinnabar-dark); }
+  #ocrPreview .ocr-warn { color: #a5352c; }
+  #ocrPreview .ocr-raw {
+    margin-top: 6px; max-height: 132px; overflow: auto; white-space: pre-wrap;
+    font-family: "Courier New", monospace; font-size: 11.5px; line-height: 1.6;
+    color: #8d8578; background: #fbf8f0; border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 8px;
+  }
+  #ocrPreview .ocr-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+
   /* ---- 中国农历（万年历） ---- */
   /* 字号：卡片上挂一个基准 font-size，下面全部用 em 派生——滑动条只改这一个值，
      月历、表头、节气行、说明一起跟着放大，不会有一处漏掉。 */
@@ -393,7 +412,21 @@
     margin: -8px 0 10px; font-size: 12.5px; color: var(--ink-light);
   }
   .pan-fsbar input[type=range] { width: 110px; accent-color: var(--cinnabar); }
-  .pan-fsbar b { color: var(--ink); font-weight: 600; min-width: 2.2em; text-align: right; }
+  .pan-fsbar .pan-ss-toggle {
+    display: inline-flex; align-items: center; gap: 4px; margin-left: 14px;
+    padding-left: 12px; border-left: 1px solid var(--line); cursor: pointer;
+  }
+  .pan-fsbar .pan-ss-toggle input { accent-color: var(--cinnabar); cursor: pointer; }
+  /* 神煞行：古籍版式里是一行等宽文本；表格版里是标题下一行小字 */
+  .pan-ss-line { color: var(--ink-light); }
+  .pan-ss-line b { color: var(--gold); font-weight: 600; }
+  .pan-ss-line .ss-hit { color: var(--cinnabar-dark); font-weight: 600; }
+  .pan-ss-box {
+    margin-top: 6px; font-size: 12.5px; line-height: 1.9; color: var(--ink-light);
+    padding: 6px 9px; background: #fbf8f0; border: 1px solid var(--line); border-radius: 6px;
+  }
+  .pan-ss-box b { color: var(--gold); font-weight: 600; letter-spacing: 1px; }
+  .pan-ss-box .ss-hit { color: var(--cinnabar-dark); font-weight: 600; }
   .pan-text .gzc-kong { color: var(--cinnabar); font-weight: 600; }
   /* 与卦象表格 .gzp-po 同色同线型（#b3261e + 点线），两版对看时规则一致；
      加粗实测不改列宽（pre 的 scrollWidth 前后都是 1014px），四列不会因此错位 */
@@ -401,6 +434,8 @@
   /* 伏神：真伏（本卦缺亲）用靛蓝加粗，与旬空/月破的朱红分开；首卦同位参照压成暗色 */
   .pan-text .gzc-fu { color: #1a5fb4; font-weight: 600; }
   .pan-text .gzc-fu-ref { color: #b6ac9d; }
+  /* 古籍版式里的神煞行：整行压淡，名称用金色，别抢爻画的注意力 */
+  .pan-text .gzc-ss { color: var(--ink-light); }
   .fu-real { color: #1a5fb4; font-weight: 600; }
   .fu-ref { color: #b6ac9d; }
   .fu-real-tip { color: #1a5fb4; }
@@ -652,6 +687,23 @@
     </div>
   </section>
 
+  <!-- 截图导入：手机上那些排盘 App 排好的盘只剩截图时用这个。
+       独立成一张卡，不进 #castCard——否则切到干支口径后整张起卦卡收起，
+       导入入口跟着消失，想再导一张就找不到了（实测踩过）。 -->
+  <section class="card" id="ocrCard">
+    <h2>从截图导入</h2>
+    <div class="muted" style="margin-bottom:8px;line-height:1.7">
+      把「六爻排盘宝」这类排盘 App 的截图丢进来，本机识别出<b>卦名与四柱</b>，六亲/六神/伏神/旬空全部重排现算。
+      全程本地（Windows 自带 OCR），不联网、不上传。
+    </div>
+    <div class="btn-row" style="justify-content:flex-start;align-items:center">
+      <button class="btn ghost" id="btnOcrPick" title="选择一张排盘截图，用系统 OCR 读出卦名与四柱">选择截图</button>
+      <button class="btn ghost" id="btnOcrPaste" title="读取剪贴板里的图片（Win+Shift+S 截图后直接点）">读剪贴板截图</button>
+      <span class="muted" id="ocrState" style="font-size:12px"></span>
+    </div>
+    <div id="ocrPreview" hidden></div>
+  </section>
+
   <!-- 排盘 -->
   <section class="card" id="panCard" hidden>
     <h2>卦象</h2>
@@ -660,6 +712,10 @@
       <input type="range" id="panFs" min="11" max="22" step="1" value="13" aria-label="排盘字号">
       <b id="panFsVal">13</b>
       <span class="muted" style="font-size:12px">古籍版式 / 卦象表格 / 断语同用</span>
+      <label class="pan-ss-toggle" title="显示/隐藏神煞（驿马、桃花、贵人、卦身…）；不影响断卦，断卦只用五行生克">
+        <input type="checkbox" id="panShensha">
+        <span>神煞</span>
+      </label>
     </div>
     <!-- 古籍版式在前（默认展开）：六神/伏神/本卦/变卦 四列纯文本，可选中、可整段复制 -->
     <div id="classicBox" hidden>
@@ -797,12 +853,14 @@
 <script src="core/share.js?v=20261110a"></script>
 <!-- 离线/桌面版：提示词（构建时从 functions/api/interpret.js 抽取）+ 本地接口层 -->
 <script src="core/prompt.js?v=20261110a"></script>
-<script src="core/file-store.js?v=20261112c"></script>
+<script src="core/shensha.js?v=20261117a"></script>
+<script src="core/ocr-paipan.js?v=20261117a"></script>
+<script src="core/file-store.js?v=20261117a"></script>
 <script src="core/local-api.js?v=20261113a"></script>
 <script src="core/guji-lib.js?v=20261113a"></script>
 <script src="core/board.js?v=20261113a"></script>
 <script src="core/toolbar.js?v=20261116b"></script>
-<script src="app.js?v=20261116d"></script>
+<script src="app.js?v=20261117a"></script>
 <script src="bgm.js?v=20261110a"></script>
 </body>
 </html>

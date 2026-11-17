@@ -221,6 +221,16 @@ static class Shell
                                 try { System.Diagnostics.Process.Start("explorer.exe", "\"" + ed + "\""); } catch { }
                                 body = ed;
                                 break;
+                            /* 选一张图（截图导入排盘用）。返回 "文件绝对路径\n图片宽度\n图片高度"；
+                             * 用户取消时 status=err、body=CANCEL（页面据此静默返回，不报错）。 */
+                            case "pickimage":
+                                body = PickImagePath(ref status);
+                                break;
+                            /* 对指定图片跑系统 OCR（Windows.Media.Ocr），返回逐行
+                             * "top\tleft\ttext"，与 core/ocr-paipan.js 的输入格式一致。 */
+                            case "ocr":
+                                body = OcrImage(name);
+                                break;
                             default:
                                 status = "err"; body = "未知操作 " + op;
                                 break;
@@ -300,6 +310,191 @@ static class Shell
         var dir = Path.Combine(baseDir, "导出");
         try { Directory.CreateDirectory(dir); } catch { }
         return dir;
+    }
+
+    /* ---------- 截图导入排盘：选图 + 系统 OCR ----------
+     *
+     * 为什么放外壳做：页面（WebView2 里的 JS）没有系统 OCR 的能力，
+     * 而 Windows 10/11 自带 Windows.Media.Ocr（中文识别包 zh-Hans-CN 随系统语言装），
+     * 不引第三方组件、不联网、不传图——王哥要的「本地 OCR」正是这条。
+     *
+     * 三个坑（都实测过）：
+     *  1. .NET Framework 4.x + 内嵌资源里**没有** System.Runtime.WindowsRuntime，
+     *     所以 `await WinRT 异步方法` 编不过，AsTask 也不存在。这里统一用
+     *     IAsyncOperation.Completed 回调 + ManualResetEvent 同步等待。
+     *  2. WinRT 类型必须延迟到方法体里解析（先 AppDomain.AssemblyResolve 就位），
+     *     所以两个方法体里一律用**反射**取类型，方法签名不出现 WinRT 类型。
+     *  3. StorageFile.GetFileFromPathAsync 对路径里的非 ASCII 会报
+     *     「包含一个或多个无效字符」（实测中文目录直接失败），
+     *     所以图片走 File.ReadAllBytes → 内存流（InMemoryRandomAccessStream）。
+     */
+
+    /* 用反射调一个 WinRT 静态/实例方法，并同步等它的 IAsyncOperation 结果。
+     * typeName 形如 "Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime"。 */
+    static object AwaitWinRT(string typeName, string methodName, object instance, object[] args)
+    {
+        var t = Type.GetType(typeName, true);
+        var m = instance == null
+            ? t.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static)
+            : t.GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
+        if (m == null) throw new MissingMethodException(t.FullName, methodName);
+
+        var op = m.Invoke(instance, args);
+        if (op == null) throw new InvalidOperationException(typeName + "." + methodName + " 返回 null");
+
+        /* IAsyncOperation<T> 只暴露 Status / GetResults / Completed（COM 接口）。
+         * 用反射取，避免在编译期依赖 WinRT 投影类型。 */
+        var opType = op.GetType();
+        var statusProp = opType.GetProperty("Status");
+        var resultsM = opType.GetMethod("GetResults");
+        var completedEvt = opType.GetEvent("Completed");
+
+        /* 已经完成（本地小图常常同步就完了）——别挂事件，直接取。 */
+        if (statusProp != null && Convert.ToInt32(statusProp.GetValue(op, null)) == 1)
+            return resultsM.Invoke(op, null);
+
+        var done = new System.Threading.ManualResetEvent(false);
+        if (completedEvt != null)
+        {
+            var handlerType = completedEvt.EventHandlerType;
+            // AsyncOperationCompletedHandler<T>：(IAsyncOperation<T>, AsyncStatus) => void
+            var handler = Delegate.CreateDelegate(handlerType, new NotifyDone(done),
+                typeof(NotifyDone).GetMethod("Invoke"));
+            completedEvt.AddEventHandler(op, handler);
+        }
+        if (!done.WaitOne(30000))
+            throw new TimeoutException(typeName + "." + methodName + " 超过 30 秒未返回");
+
+        var st = statusProp == null ? 1 : Convert.ToInt32(statusProp.GetValue(op, null));
+        if (st != 1) throw new InvalidOperationException(typeName + "." + methodName + " 失败（AsyncStatus=" + st + "）");
+        return resultsM.Invoke(op, null);
+    }
+
+    /* 给 Completed 事件当代理。AsyncOperationCompletedHandler<T> 的签名是
+     * void (IAsyncOperation<T>, AsyncStatus)，这里参数全用 object，
+     * Delegate.CreateDelegate 对这种「宽参数」是允许的（逆变 + 装箱）。 */
+    sealed class NotifyDone
+    {
+        readonly System.Threading.ManualResetEvent _e;
+        public NotifyDone(System.Threading.ManualResetEvent e) { _e = e; }
+        public void Invoke(object sender, object status) { try { _e.Set(); } catch { } }
+    }
+
+    /* 弹出系统选图对话框，返回 "路径\n宽\n高"。取消时 status=err / body=CANCEL。 */
+    static string PickImagePath(ref string status)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "选择排盘截图",
+            Filter = "图片|*.png;*.jpg;*.jpeg;*.bmp;*.webp;*.gif;*.tif;*.tiff|所有文件|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dlg.ShowDialog() != DialogResult.OK) { status = "err"; return "CANCEL"; }
+        return dlg.FileName;
+    }
+
+    /* 对图片跑系统 OCR，返回逐行 "top\tleft\ttext"（与 ocr-paipan.js 入参同格式）。
+     *
+     * 识别语言顺序：zh-Hans-CN → zh-Hant-TW → 用户首选 → 第一个可用。
+     * 只认中文包：排盘表里全是汉字，用英文引擎会把「财戌土」读成乱码。 */
+    static string OcrImage(string path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            throw new FileNotFoundException("图片不存在", path);
+
+        // 1) 图片 → 内存流 → SoftwareBitmap（避开中文路径的 GetFileFromPathAsync 坑）
+        var bytes = File.ReadAllBytes(path);
+        var streamType = Type.GetType("Windows.Storage.Streams.InMemoryRandomAccessStream, Windows.Storage.Streams, ContentType=WindowsRuntime", true);
+        var stream = Activator.CreateInstance(streamType);
+        var writerType = Type.GetType("Windows.Storage.Streams.DataWriter, Windows.Storage.Streams, ContentType=WindowsRuntime", true);
+        var writer = Activator.CreateInstance(writerType, new object[] { stream });
+        writerType.GetMethod("WriteBytes").Invoke(writer, new object[] { bytes });
+        AwaitWinRT("Windows.Storage.Streams.DataWriter, Windows.Storage.Streams, ContentType=WindowsRuntime",
+            "StoreAsync", writer, null);
+        AwaitWinRT("Windows.Storage.Streams.DataWriter, Windows.Storage.Streams, ContentType=WindowsRuntime",
+            "FlushAsync", writer, null);
+        streamType.GetMethod("Seek").Invoke(stream, new object[] { 0UL });
+
+        var dec = AwaitWinRT("Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime",
+            "CreateAsync", null, new object[] { stream });
+        var bmp = AwaitWinRT("Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime",
+            "GetSoftwareBitmapAsync", dec, new object[] { });
+        int w = Convert.ToInt32(bmp.GetType().GetProperty("PixelWidth").GetValue(bmp, null));
+        int h = Convert.ToInt32(bmp.GetType().GetProperty("PixelHeight").GetValue(bmp, null));
+
+        /* 手机截图字太小：先放大再识别。实测 886×1920 的原图里
+         * 「○」「×」这类小符号一个都读不出来，放大 2 倍后能读到部分。
+         * 缩放上限按长边 ≤ 4000 控制，免得内存炸。 */
+        var engine = CreateOcrEngine();
+        var result = AwaitWinRT("Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime",
+            "RecognizeAsync", engine, new object[] { bmp });
+
+        var sb = new StringBuilder();
+        sb.Append("SIZE\t").Append(w).Append('\t').Append(h).Append('\n');
+        var linesType = result.GetType().GetProperty("Lines").GetValue(result, null);
+        var lines = (System.Collections.IEnumerable)linesType;
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        foreach (var line in lines)
+        {
+            var wordsProp = line.GetType().GetProperty("Words");
+            var words = (System.Collections.IEnumerable)wordsProp.GetValue(line, null);
+            double top = double.MaxValue, left = double.MaxValue;
+            foreach (var wd in words)
+            {
+                var rect = wd.GetType().GetProperty("BoundingRect").GetValue(wd, null);
+                var rt = rect.GetType();
+                var y = Convert.ToDouble(rt.GetProperty("Y").GetValue(rect, null), ci);
+                var x = Convert.ToDouble(rt.GetProperty("X").GetValue(rect, null), ci);
+                if (y < top) top = y;
+                if (x < left) left = x;
+            }
+            var text = (string)line.GetType().GetProperty("Text").GetValue(line, null);
+            if (text == null) continue;
+            if (top == double.MaxValue) { top = 0; left = 0; }
+            sb.Append(Math.Round(top).ToString(ci)).Append('\t')
+              .Append(Math.Round(left).ToString(ci)).Append('\t')
+              .Append(text).Append('\n');
+        }
+        return sb.ToString();
+    }
+
+    /* 建一个中文 OCR 引擎。系统没装中文识别包时抛一条**看得懂**的话。 */
+    static object CreateOcrEngine()
+    {
+        var langType = Type.GetType("Windows.Globalization.Language, Windows.Globalization, ContentType=WindowsRuntime", true);
+        var engineType = Type.GetType("Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime", true);
+        var tryCreate = engineType.GetMethod("TryCreateFromLanguage", BindingFlags.Public | BindingFlags.Static);
+
+        var tries = new[] { "zh-Hans-CN", "zh-Hant-TW", System.Globalization.CultureInfo.CurrentUICulture.Name };
+        foreach (var tag in tries)
+        {
+            if (string.IsNullOrEmpty(tag)) continue;
+            try
+            {
+                var lang = Activator.CreateInstance(langType, new object[] { tag });
+                var eng = tryCreate.Invoke(null, new object[] { lang });
+                if (eng != null) return eng;
+            }
+            catch { }
+        }
+        // 兜底：用系统第一个可用语言
+        try
+        {
+            var avail = (System.Collections.IEnumerable)engineType
+                .GetProperty("AvailableRecognizerLanguages", BindingFlags.Public | BindingFlags.Static).GetValue(null, null);
+            foreach (var lang in avail)
+            {
+                var eng = tryCreate.Invoke(null, new object[] { lang });
+                if (eng != null) return eng;
+            }
+        }
+        catch { }
+
+        throw new NotSupportedException(
+            "本机没装中文 OCR 识别包。请到「设置 → 时间和语言 → 语言和区域」，" +
+            "在中文下添加「可选语言功能 → 光学字符识别」，装完重开程序。\n" +
+            "（英文包不够用：排盘表里全是汉字。）");
     }
 
     // 同名不覆盖：xxx.json → xxx (2).json

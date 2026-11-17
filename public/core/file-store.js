@@ -70,6 +70,18 @@
     openExport: function () { return call('openexport'); },
     // 直接落到 <exe>\导出\，返回完整路径
     saveExport: function (name, text) { return call('saveexport', name, text, 60000); },
-    saveExportB64: function (name, b64) { return call('saveexportb64', name, b64, 60000); }
+    saveExportB64: function (name, b64) { return call('saveexportb64', name, b64, 60000); },
+
+    /* ---------- 截图导入排盘（需要桌面壳：浏览器里没有这两样） ---------- */
+    // 弹系统选图框 → 返回 {path, w, h}；用户取消时 reject('CANCEL')
+    pickImage: function () {
+      return call('pickimage', '', '', 120000).then(function (body) {
+        const t = String(body || '');
+        const nl = t.indexOf('\n');
+        return { path: nl < 0 ? t : t.slice(0, nl), w: 0, h: 0 };
+      });
+    },
+    // 对图片跑系统 OCR → 返回 "top\tleft\ttext" 多行（首行是 "SIZE\tw\th"）
+    ocr: function (path) { return call('ocr', path, '', 120000); }
   };
 })(typeof window !== 'undefined' ? window : globalThis);

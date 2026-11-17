@@ -1,6 +1,7 @@
 /* 六爻排盘 UI (app.js) 依赖 core.js（浏览器中挂于 window.LY） */
 (function () {
   const C = window.LY;
+  const LY = window.LY;   // 别名：截图导入用 LY.ocrPaipan（与 C 同一个对象）
 
   // 核心脚本加载守卫（core/*.js 依次挂载 window.LY）：
   // 任一核心文件 404/被缓存或插件拦截时，旧版会在 renderTime() 处抛
@@ -833,6 +834,57 @@
     } catch (e) { return null; }
   }
 
+  /* ---------- 神煞（可选显示） ----------
+   * 开关默认关闭，值记在本机。为什么默认关：
+   *   ① 断卦只用五行生克（analyze.js 开头就写明了「不用神煞」），神煞是参考；
+   *   ② 古籍版式是等宽四列，多一行会把整套对齐往下推，老手看盘未必想被占屏。
+   * 打开后：古籍版式多一行「神煞：…」、表格版多一块小字，复制文本也带上。
+   */
+  const SS_KEY = 'ly_pan_shensha';
+  let showShensha = false;
+  try { showShensha = localStorage.getItem(SS_KEY) === '1'; } catch (e) { }
+
+  function shenshaOf(p) {
+    if (!LY.shensha || typeof LY.shensha.compute !== 'function' || !p) return null;
+    try { return LY.shensha.compute(p); } catch (e) { return null; }
+  }
+
+  /* 神煞逐项文本（不含样式）：卦身 香闺 床帐 在前，其余按传统序。
+   * 分隔符用「-」而不是「、」：等宽版式里「、」占一格会让定宽排布算错。 */
+  function shenshaItems(ss) {
+    if (!ss) return [];
+    const bits = [];
+    if (ss.guaShen) bits.push('卦身-' + ss.guaShen.zhi);
+    if (ss.xiangGui.length) bits.push('香闺-' + ss.xiangGui.join(''));
+    if (ss.chuangZhang.length) bits.push('床帐-' + ss.chuangZhang.join(''));
+    ss.list.forEach(function (it) { bits.push(it.name + '-' + it.zhi.join('')); });
+    return bits;
+  }
+
+  function shenshaLine(ss) { return shenshaItems(ss).join('、'); }
+
+  /* 富文本版：命中的地支（落在本卦某爻上）用朱红加粗标出来——
+   * 「这个神煞到底在不在卦里」一眼就知道，比给一串干支有用得多。 */
+  function shenshaHTML(ss, escFn) {
+    if (!ss) return '';
+    const seg = [];
+    const one = function (label, zhiList, onLines, basis) {
+      const has = onLines && onLines.length;
+      const z = zhiList.map(function (z2) {
+        return has && zhiList.length === 1 ? '<span class="ss-hit">' + z2 + '</span>' : z2;
+      }).join('');
+      seg.push('<b>' + escFn(label) + '</b>' + z +
+        (has ? '<span class="ss-hit">(' + onLines.map(function (n) { return LINE_POS[n - 1] || n; }).join('') + ')</span>' : ''));
+    };
+    if (ss.guaShen) seg.push('<b>卦身</b>' + ss.guaShen.zhi);
+    if (ss.xiangGui.length) seg.push('<b>香闺</b>' + ss.xiangGui.join(''));
+    if (ss.chuangZhang.length) seg.push('<b>床帐</b>' + ss.chuangZhang.join(''));
+    ss.list.forEach(function (it) { one(it.name, it.zhi, it.onLines, it.basis); });
+    return seg.join('　');
+  }
+
+  const LINE_POS = ['初', '二', '三', '四', '五', '上'];
+
   function panClassicRows(p) {
     const pil = p.pillars;
     const pad = function (str, w) {
@@ -857,6 +909,24 @@
     let gong = p.palace + '宫：' + p.benName + hexTag(p);
     if (p.hasBian) gong += '　之　' + p.bianPalace + '宫：' + p.bianName + hexTag(p);
     flat(gong);
+
+    /* 2.5) 神煞（开关打开才出；关着时文本与旧版逐字相同，古籍回归不受影响）
+     * 排法：每项「名称-干支」定宽（6 全角宽），一行三项就换行，续行缩进对齐到「神煞：」之后。
+     * 为什么定宽：等宽版式靠全角空格对齐，神煞项长短不一会把 pre 的 scrollWidth 撑开
+     * （实测撑到 85 字宽，六爻行被横向滚动带走）。 */
+    if (showShensha) {
+      const ss = shenshaOf(p);
+      if (ss) {
+        const items = shenshaItems(ss);
+        const PER = 4;
+        for (let k = 0; k < items.length; k += PER) {
+          const seg = items.slice(k, k + PER).map(function (t) { return pad(t, 7); }).join('');
+          rows.push(k === 0
+            ? [{ t: '神煞：' }, { t: seg.replace(/[\u3000]+$/, ''), cls: 'gzc-ss' }]
+            : [{ t: '　　　' }, { t: seg.replace(/[\u3000]+$/, ''), cls: 'gzc-ss' }]);
+        }
+      }
+    }
 
     // 3) 表头
     flat('六神　伏　　神　　【本　　卦】' + (p.hasBian ? '　　　　【变　　　卦】' : ''));
@@ -1036,6 +1106,17 @@
     const pil = pan.pillars;
     const title = '<b>' + pan.benName + '</b>（' + pan.palace + '宫 · ' + pan.palaceWx + '）' +
       (pan.hasBian ? ' 之 <b>' + pan.bianName + '</b>（' + pan.bianPalace + '宫）' : '（静卦）');
+    /* 神煞（开关打开才出）。放在标题与表格之间，不挤爻行；
+     * 命中本卦某爻的地支标朱红并在括号里注明在第几爻。 */
+    let ssHtml = '';
+    if (showShensha) {
+      const ss = shenshaOf(pan);
+      if (ss) {
+        ssHtml = '<div class="pan-ss-box"><b>神煞</b>　' + shenshaHTML(ss, esc) +
+          '<div class="muted" style="font-size:11.5px;margin-top:2px">按日支/日干/月建起例；' +
+          '朱红＝此煞落在本卦该爻（括号为爻位）。神煞只作参考，断卦仍以五行生克为准。</div></div>';
+      }
+    }
     let rows = '';
     const pure = pureLinesOf(pan);
     const isPureGua = !!(pure && pan.benName === PURE_HEX[pan.palace]);
@@ -1091,6 +1172,7 @@
       '<table class="pan"><thead><tr><th>六神</th>' +
       '<th title="亮色＝本卦所缺之亲，伏于本宫首卦同位；暗色＝本宫首卦同位（参照，非真伏）">伏神</th>' +
       '<th>本卦</th><th>世应</th><th>变爻</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+      ssHtml +
       '<div class="muted" style="font-size:12px;margin-top:6px">伏神：<b class="fu-real-tip">亮色</b>＝本卦所缺、伏于本宫首卦同位；' +
       '<span class="fu-ref-tip">暗色</span>＝本宫首卦同位（参照，非真伏）；八纯卦六亲自足，不列伏神。</div>';
     renderWxBlock();
@@ -1282,6 +1364,248 @@
         (r.bian ? '　之　<b class="gz-hi">' + r.bian + '</b>' : '（静卦）');
     }
   }
+
+  /* ---------- 从截图导入排盘（本地系统 OCR → 解析 → 确认 → 装入） ----------
+   *
+   * 来历：王哥在「六爻排盘宝」里排好的盘只剩截图，要能直接搬进来。
+   * 照六爻工坊的同一套思路（那儿是 ML Kit，这里用 Windows 自带的
+   * Windows.Media.Ocr）：**只取不可推算的卦名与四柱**，六亲/纳甲/六神/
+   * 伏神/旬空全交给引擎现算——OCR 读歪一个爻，整盘就全歪，不如重排。
+   *
+   * 流程故意做成「先给确认条、再装入」：OCR 必然有错字，让人过一眼
+   * 比默默排出一张错盘安全得多（王哥最在意数据准确）。
+   */
+  let ocrLast = null;      // 上次解析结果，供「装入排盘」用
+
+  function ocrSetState(msg, isErr) {
+    const el = $('#ocrState');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isErr ? '#a5352c' : '';
+  }
+
+  /* 把 bits（初→上）变成爻值：1 少阳 / 0 少阴 / 9 老阳动 / 6 老阴动 */
+  function bitsToVals(bits, dong) {
+    return bits.map(function (b, i) {
+      const moving = (dong || []).indexOf(i + 1) >= 0;
+      return b === 1 ? (moving ? 9 : 1) : (moving ? 6 : 0);
+    });
+  }
+
+  /* 渲染解析预览：把「认到了什么」逐条摆出来，让人核对 */
+  function renderOcrPreview(res, srcLabel) {
+    const box = $('#ocrPreview');
+    if (!box) return;
+    const pil = res.pillars || {};
+    const dongTxt = res.dong && res.dong.length ? res.dong.join('、') + ' 爻' : '（静卦）';
+    const dongSrc = res.dongFrom === 'diff' ? '由本卦→变卦的差异反推'
+      : res.dongFrom === 'glyph' ? '读自爻画旁的动爻符号' : '—';
+    const solarTxt = res.solar
+      ? (res.solar.y + '年' + res.solar.m + '月' + res.solar.d + '日 ' +
+         res.solar.hh + ':' + (res.solar.mm < 10 ? '0' : '') + res.solar.mm)
+      : '（未认出）';
+
+    let rows = '';
+    rows += '<tr><td class="k">本卦</td><td class="v"><b>' + esc(res.benName || '（未认出）') + '</b></td></tr>';
+    rows += '<tr><td class="k">变卦</td><td class="v">' + (res.bianName ? '<b>' + esc(res.bianName) + '</b>' : '（静卦 / 无）') + '</td></tr>';
+    rows += '<tr><td class="k">动爻</td><td class="v">' + esc(dongTxt) + '　<span class="muted" style="font-size:12px">' + esc(dongSrc) + '</span></td></tr>';
+    rows += '<tr><td class="k">四柱</td><td class="v">' +
+      esc([pil.yearGZ || '—', pil.monthGZ || '—', pil.dayGZ || '—', pil.hourGZ || '—'].join('　')) + '</td></tr>';
+    rows += '<tr><td class="k">占时</td><td class="v">' + esc(solarTxt) + '</td></tr>';
+    if (res.question) rows += '<tr><td class="k">占问</td><td class="v">' + esc(res.question) + '</td></tr>';
+    if (res.method) rows += '<tr><td class="k">起卦方式</td><td class="v">' + esc(res.method) + '</td></tr>';
+
+    let html = '<div class="ocr-h">识别结果（核对无误再装入）</div>' +
+      '<table>' + rows + '</table>';
+
+    if (res.warnings && res.warnings.length) {
+      html += '<div class="ocr-warn">' + res.warnings.map(function (w) { return '· ' + esc(w); }).join('<br>') + '</div>';
+    }
+
+    html += '<div class="ocr-acts">' +
+      '<button class="btn primary" id="btnOcrLoad"' + (res.ok ? '' : ' disabled') + '>装入排盘</button>' +
+      '<button class="btn ghost" id="btnOcrCancel">放弃</button>' +
+      '<span class="muted" style="font-size:12px">' + esc(srcLabel || '') + '</span>' +
+      '</div>';
+
+    if (res.raw) {
+      html += '<details style="margin-top:8px"><summary class="muted" style="font-size:12px;cursor:pointer">看 OCR 原文（' +
+        res.raw.split('\n').filter(Boolean).length + ' 行）</summary>' +
+        '<div class="ocr-raw">' + esc(res.raw) + '</div></details>';
+    }
+
+    box.innerHTML = html;
+    box.hidden = false;
+
+    const load = $('#btnOcrLoad');
+    if (load) load.onclick = function () { ocrLoadToPan(); };
+    const cancel = $('#btnOcrCancel');
+    if (cancel) cancel.onclick = function () { ocrClear(); };
+  }
+
+  function ocrClear() {
+    ocrLast = null;
+    const box = $('#ocrPreview');
+    if (box) { box.hidden = true; box.innerHTML = ''; }
+    ocrSetState('');
+  }
+
+  /* 解析 → 预览。raw 是「top\tleft\ttext」多行（或纯文本，函数自己认） */
+  function ocrHandleText(raw, srcLabel) {
+    if (!LY.ocrPaipan) { ocrSetState('缺 core/ocr-paipan.js，无法解析', true); return; }
+
+    /* 第一次解析只为拿卦名，算出两卦的 bits 再解析一次——
+     * 「动爻 = 两卦差异」这条路要求先知道 bits，所以必须两趟。 */
+    let res = LY.ocrPaipan.parse(raw);
+    const bb = res.benName ? guaBitsByName(res.benName) : null;
+    const xb = res.bianName ? guaBitsByName(res.bianName) : null;
+    if (bb) res = LY.ocrPaipan.parse(raw, { benBits: bb, bianBits: xb });
+
+    ocrLast = res;
+    renderOcrPreview(res, srcLabel);
+
+    if (!res.ok) {
+      ocrSetState('没认出关键的卦名/日柱，看下面的提示', true);
+    } else {
+      ocrSetState('认到 ' + res.benName + (res.bianName ? ' 之 ' + res.bianName : '') + '，核对后装入');
+    }
+  }
+
+  /* 「装入排盘」：走干支口径装盘——截图里给的是四柱，不是摇卦现场，
+   * 走公历那条会拿当前时刻重算四柱，与截图上不符。 */
+  function ocrLoadToPan() {
+    const res = ocrLast;
+    if (!res || !res.benName) { ocrSetState('没有可装入的卦', true); return; }
+    const bits = guaBitsByName(res.benName);
+    if (!bits) { ocrSetState('卦名无法转成六爻：' + res.benName, true); return; }
+
+    setCastMode('ganzhi');
+    const pil = res.pillars || {};
+    if (typeof pil.yearIdx === 'number' && pil.yearIdx >= 0) gzState.yearIdx = pil.yearIdx;
+    if (typeof pil.monthZhi === 'number' && pil.monthZhi >= 0) gzState.monthZhi = pil.monthZhi;
+    if (typeof pil.dayIdx === 'number' && pil.dayIdx >= 0) gzState.dayIdx = pil.dayIdx;
+    if (typeof pil.hourZhi === 'number' && pil.hourZhi >= 0) gzState.hourZhi = pil.hourZhi;
+
+    gzState.yang = bits.map(function (b) { return b === 1; });
+    gzState.moving = bits.map(function (b, i) { return (res.dong || []).indexOf(i + 1) >= 0; });
+    gzRefresh();
+
+    /* 六爻数据也要落到 records：否则「存入卦例库」拿不到爻值、
+     * 画板/分享/断卦都当没起卦（按卦名起卦那条也是这么填的）。 */
+    const vals = bitsToVals(bits, res.dong);
+    records = vals.map(function (v) {
+      return { coins: coinsFromVal(v), backs: v === 9 ? 3 : v === 1 ? 1 : v === 0 ? 2 : 0, val: v, mode: 'ocr' };
+    });
+    resetTossState();
+    applyQuestionText(res.question || '');
+    if (res.question && $('#castQuestion')) $('#castQuestion').value = res.question;
+    // 占问回填后，干支模式下由 computePan 统一排；断语跟着换新卦
+    setDuan('', '');
+    computePan();
+    renderCoins(); renderTossHint(); renderStack();
+
+    /* 把识别到的东西也写回干支面板的输入框，方便对照/微调 */
+    if ($('#guaNameInput')) $('#guaNameInput').value = res.benName;
+    if ($('#guaDongInput')) $('#guaDongInput').value = (res.dong || []).join('');
+
+    const h = $('#byNameHint');
+    if (h) {
+      h.innerHTML = '<span style="color:#3f5a33">已从截图装入：' + esc(res.benName) +
+        (res.bianName ? ' 之 ' + esc(res.bianName) : '') + '　·　' +
+        esc([pil.yearGZ || '—', pil.monthGZ || '—', pil.dayGZ || '—'].join(' ')) +
+        '　·　动爻 ' + (res.dong && res.dong.length ? esc(res.dong.join('、')) : '无') +
+        '。盘已按干支口径排出，可在下方核对。</span>';
+    }
+    ocrSetState('已装入');
+    const pc = $('#panCard');
+    if (pc && !pc.hidden) pc.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  /* 选图 → OCR → 解析（桌面壳里走系统 OCR；浏览器里只能读剪贴板图片） */
+  function ocrFromPath(path, label) {
+    if (!LY_FS || !LY_FS.available) { ocrSetState('这个环境不能跑系统 OCR（浏览器里请用「读剪贴板」，或直接粘贴文本）', true); return; }
+    ocrSetState('正在识别…');
+    LY_FS.ocr(path).then(function (body) {
+      // 首行是 "SIZE\tw\th"，其余是 "top\tleft\ttext"
+      const lines = String(body || '').split('\n').filter(function (l) {
+        return l && !/^SIZE\t/.test(l);
+      });
+      if (!lines.length) { ocrSetState('系统 OCR 没读出任何文字——图片是不是太小/太糊？', true); return; }
+      ocrHandleText(lines.join('\n'), label || '');
+    }).catch(function (e) {
+      ocrSetState('识别失败：' + (e && e.message ? e.message : e), true);
+    });
+  }
+
+  function ocrPickFile() {
+    if (!LY_FS || !LY_FS.available) {
+      // 浏览器兜底：用 <input type=file> 选图——但浏览器没有系统 OCR，
+      // 这条路只能拿到路径，仍得靠剪贴板粘贴文本，所以直接引导。
+      ocrSetState('浏览器里没有系统 OCR：请用「读剪贴板」，或把识别文本粘贴到下方', true);
+      return;
+    }
+    ocrSetState('选择图片…');
+    LY_FS.pickImage().then(function (r) {
+      if (!r || !r.path) { ocrSetState(''); return; }
+      ocrFromPath(r.path, r.path.split(/[\\/]/).pop());
+    }).catch(function (e) {
+      const msg = String((e && e.message) || e);
+      ocrSetState(msg === 'CANCEL' ? '' : ('选图失败：' + msg), msg !== 'CANCEL');
+    });
+  }
+
+  /* 读剪贴板里的图（Win+Shift+S 截图后直接点）。浏览器里这条路也能用，
+   * 但浏览器没有系统 OCR —— 只能把图存下来提示走桌面版。这里只做桌面壳。 */
+  function ocrFromClipboard() {
+    if (!LY_FS || !LY_FS.available) { ocrSetState('读剪贴板需要桌面版', true); return; }
+    if (!navigator.clipboard || !navigator.clipboard.read) {
+      ocrSetState('此环境不能读剪贴板', true); return;
+    }
+    ocrSetState('读剪贴板…');
+    navigator.clipboard.read().then(function (items) {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.types.indexOf('image/png') < 0) continue;
+        return it.getType('image/png').then(function (blob) {
+          const fr = new FileReader();
+          fr.onload = function () {
+            const b64 = String(fr.result).split(',')[1] || '';
+            /* 图片得先落盘才能给系统 OCR：借「导出」通道写进 导出\ 目录，
+             * 再拿路径去识别（壳的 saveExportB64 会返回完整路径）。 */
+            const nm = '截图导入-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.png';
+            LY_FS.saveExportB64(nm, b64).then(function (p) {
+              ocrFromPath(p, nm);
+            }).catch(function (e) {
+              ocrSetState('临时存图失败：' + (e && e.message ? e.message : e), true);
+            });
+          };
+          fr.readAsDataURL(blob);
+        });
+      }
+      ocrSetState('剪贴板里没有图片（先 Win+Shift+S 截一下）', true);
+    }).catch(function () { ocrSetState('读剪贴板失败：请改用「选择截图」', true); });
+  }
+
+  (function bindOcr() {
+    const pick = $('#btnOcrPick');
+    if (pick) pick.onclick = ocrPickFile;
+    const past = $('#btnOcrPaste');
+    if (past) past.onclick = ocrFromClipboard;
+    /* 起卦卡里也支持 Ctrl+V 直接贴图（与画板同款体验） */
+    document.addEventListener('paste', function (e) {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf('image') === 0) {
+          ocrFromClipboard();
+          e.preventDefault();
+          return;
+        }
+      }
+    });
+  })();
+
+  // 供探针/画板直接喂文本调用
+  window.__lyOcrText = ocrHandleText;
 
   function castByName() {
     const hint = $('#byNameHint');
@@ -4379,6 +4703,20 @@
    * 只改 :root 上的 --pan-fs，各处字号都是 calc(var(--pan-fs) + n) 派生，
    * 所以一处拖、三处一起变。古籍版式是 white-space:pre + 等宽字体，
    * 放大只会横向滚动，不会折行把四列挤乱。 */
+  /* 神煞开关：勾上就重渲染当前盘（不重排，只重画）——不勾时整段代码路径不变，
+   * 意味着古籍回归的文本基线一字不动。 */
+  function initShenshaToggle() {
+    const box = $('#panShensha');
+    if (box) {
+      box.checked = showShensha;
+      box.onchange = function () {
+        showShensha = !!this.checked;
+        try { localStorage.setItem(SS_KEY, showShensha ? '1' : '0'); } catch (e) { }
+        if (pan) { renderPan(); }
+      };
+    }
+  }
+
   function initPanFont() {
     const el = $('#panFs'), val = $('#panFsVal');
     const KEY = 'ly_pan_font';
@@ -4459,6 +4797,7 @@
   }
 
   initPanFont();
+  initShenshaToggle();
   initLunar();
   renderModelChips();
   loadModels();
