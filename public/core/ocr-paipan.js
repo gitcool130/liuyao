@@ -397,7 +397,10 @@
     else if (byGlyph && byGlyph.length) { dong = byGlyph; dongFrom = 'glyph'; }
 
     const warnings = [];
-    if (byGlyph && byDiff && byGlyph.join(',') !== byDiff.join(',')) {
+    /* 只有「两路都真的读到了东西」且不一致才算冲突。
+     * 实测 byGlyph 常是空数组（手机截图里的 ○× 太小读不出），
+     * 旧条件会让它和 byDiff 一比就报「不一致」，纯属噪音。 */
+    if (byGlyph && byGlyph.length && byDiff && byDiff.length && byGlyph.join(',') !== byDiff.join(',')) {
       warnings.push('爻画符号读到的动爻（' + (byGlyph.join('、') || '无') +
         '）与两卦差异（' + (byDiff.join('、') || '无') + '）不一致，已按两卦差异为准，请核对');
     }
