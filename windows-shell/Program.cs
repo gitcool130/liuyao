@@ -167,6 +167,7 @@ static class Shell
                     var name = parts.Length > 2 ? parts[2] : "";
                     var payload = parts.Length > 3 ? parts[3] : "";
                     string status = "ok", body = "";
+                    bool asyncHandled = false;   // 分支自己回消息时置位（见 ocr）
                     try
                     {
                         switch (op)
@@ -227,9 +228,36 @@ static class Shell
                                 body = PickImagePath(ref status);
                                 break;
                             /* 对指定图片跑系统 OCR（Windows.Media.Ocr），返回逐行
-                             * "top\tleft\ttext"，与 core/ocr-paipan.js 的输入格式一致。 */
+                             * "top\tleft\ttext"，与 core/ocr-paipan.js 的输入格式一致。
+                             *
+                             * ⚠ 必须丢到后台线程跑：本方法在 WebView2 的 **UI（STA）线程**上，
+                             * 而 AwaitWinRT 是同步等待 IAsyncOperation。WinRT 的完成回调要
+                             * marshal 回同一个 STA 线程，可该线程正被 WaitOne 堵着——消息泵不转，
+                             * 回调永远排不上，结果是「30 秒超时」（2026-11-17 真机上就是这么挂的）。
+                             * 后台线程是 MTA，完成回调走线程池，不需要消息泵；算完再 BeginInvoke
+                             * 回到 UI 线程发消息。 */
                             case "ocr":
-                                body = OcrImage(name);
+                                {
+                                    var reqId = id;
+                                    var reqPath = name;
+                                    // 后台（MTA）跑，算完 BeginInvoke 回 UI 线程发消息
+                                    System.Threading.Tasks.Task.Run(new Action(() =>
+                                    {
+                                        string st2 = "ok", bd2 = "";
+                                        try { bd2 = OcrImage(reqPath); }
+                                        catch (Exception ex2) { st2 = "err"; bd2 = ex2.Message; Log("OcrImage", ex2); }
+                                        try
+                                        {
+                                            form.BeginInvoke(new Action(() =>
+                                            {
+                                                try { core.PostWebMessageAsString(reqId + "\n" + st2 + "\n" + bd2); }
+                                                catch { }
+                                            }));
+                                        }
+                                        catch { }
+                                    }));
+                                    asyncHandled = true;   // 已自行回消息，别再走末尾统一回执
+                                }
                                 break;
                             default:
                                 status = "err"; body = "未知操作 " + op;
@@ -241,6 +269,7 @@ static class Shell
                         status = "err"; body = ex.Message;
                         Log("FileBridge:" + op, ex);
                     }
+                    if (asyncHandled) return;   // 该分支已在后台线程自行回消息
                     try { core.PostWebMessageAsString(id + "\n" + status + "\n" + body); } catch { }
                 };
 
