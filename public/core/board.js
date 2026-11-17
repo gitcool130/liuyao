@@ -64,6 +64,10 @@
       '<div class="bd-bar bd-bar2">' +
       '<button class="bd-mini bd-green" id="bdShot" title="Win+Shift+S 截图后点这里（或直接 Ctrl+V）">截屏批注</button>' +
       '<button class="bd-mini bd-green" id="bdPan">载入卦象</button>' +
+      /* 导入盘面（2026-11-17 从首页并进来）：截图走系统 OCR，文本直接解析。
+       * 两者都只读「卦名 + 四柱」，六亲六神伏神由引擎重排。 */
+      '<button class="bd-mini bd-green" id="bdOcrShot" title="选一张排盘 App 的截图，本机 OCR 读出卦名与四柱">截图导入</button>' +
+      '<button class="bd-mini bd-green" id="bdOcrText" title="读剪贴板里的排盘文本（也能直接点开编辑框粘）">文本导入</button>' +
       '<button class="bd-mini" id="bdImage">插入图片</button>' +
       '<button class="bd-mini" id="bdSave" title="把画布（含底图与批注）存成 PNG">截图</button>' +
       '<button class="bd-mini" id="bdCollapse">收起</button>' +
@@ -75,6 +79,19 @@
       '<button class="bd-mini bd-green" id="bdDrawText">按文本画出</button>' +
       '<button class="bd-mini" id="bdCopyText" title="把文本框内容复制走">复制文本</button>' +
       '</span></div>' +
+      /* 导入盘面：截图（系统 OCR）或文本（粘贴/剪贴板）。
+       * 解析结果在这儿核对，点「装入排盘」才真装（会跳回首页排盘）。 */
+      '<div class="bd-ocrzone" id="bdOcrZone" hidden>' +
+      '<div class="bd-ocrhead"><b>导入盘面</b>' +
+      '<span class="muted" id="ocrState" style="font-size:12px"></span>' +
+      '<button class="bd-mini" id="bdOcrClose" style="margin-left:auto">收起</button></div>' +
+      '<textarea id="bdOcrRaw" placeholder="把排盘 App 复制的文本粘到这里（认得「雷水解 之 坤为地」「月日：丙子年 己亥月 乙未日」这类），或点上面「截图导入」选图。粘完点下面的「解析这段文本」。"></textarea>' +
+      '<div class="bd-ocracts">' +
+      '<button class="bd-mini bd-green" id="bdOcrParse">解析这段文本</button>' +
+      '<button class="bd-mini" id="bdOcrPaste">读剪贴板</button>' +
+      '</div>' +
+      '<div id="ocrPreview" hidden></div>' +
+      '</div>' +
       // 断语：与排盘页共用同一份，载入卦象/装入卦例时自动带出，改这里也会同步回去
       '<div class="bd-duanrow">' +
       '<span class="bd-duanlabel">断语</span>' +
@@ -512,6 +529,12 @@
     '.bd-duanlabel{flex:0 0 auto;font-size:12.5px;letter-spacing:2px;color:var(--ink-light);padding-top:6px}' +
     '#bdDuan{flex:1;min-height:56px;max-height:180px;resize:vertical;font-family:inherit;font-size:12.5px;' +
     'line-height:1.7;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fffdf8;color:var(--ink)}' +
+    '.bd-ocrzone{margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fffdf8}' +
+    '.bd-ocrhead{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px}' +
+    '#bdOcrRaw{width:100%;box-sizing:border-box;min-height:64px;max-height:160px;resize:vertical;' +
+    'font-family:inherit;font-size:12.5px;line-height:1.6;padding:6px 8px;border:1px solid var(--line);' +
+    'border-radius:6px;background:#fff;color:var(--ink)}' +
+    '.bd-ocracts{display:flex;gap:6px;margin-top:6px}' +
     '.bd-mini.bd-red{color:#a5352c;border-color:#e6bdb7}' +
     '.bd-mini.bd-red:hover{background:#fdf1ef}' +
     '.bd-wrap{border:1px solid var(--line);border-radius:8px;background:' + PAPER + ';overflow:hidden;line-height:0;margin-top:8px}' +

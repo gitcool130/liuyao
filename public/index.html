@@ -397,6 +397,14 @@
     background: #fff; border: 1px solid var(--line); border-radius: 6px;
     padding: 10px; margin: 10px 0; line-height: 1.6;
   }
+  /* 存入时的分类输入（在按钮行里，随排盘卡片） */
+  .save-cat { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink-light); }
+  .save-cat input {
+    font-family: inherit; font-size: 12.5px; width: 92px; padding: 3px 7px;
+    border: 1px solid var(--line); border-radius: 6px; background: #fffdf8; color: var(--ink);
+  }
+  .save-cat input:focus { outline: none; border-color: var(--cinnabar); }
+
   /* ---- 卦例库分类标签 ---- */
   .lib-cats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
   .lib-cat {
@@ -412,6 +420,31 @@
     margin-left: 4px; opacity: .5; font-size: 11px; cursor: pointer;
   }
   .lib-cat-del:hover { opacity: 1; }
+  /* 批量整理工具条 */
+  .lib-bulk {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-top: 8px; padding: 8px 10px; border-radius: 8px;
+    background: #fbf6ea; border: 1px solid var(--line);
+  }
+  .lib-bulk .lib-bulk-n { font-size: 13px; color: var(--cinnabar-dark); font-weight: 600; }
+  .lib-bulk select {
+    font-family: inherit; font-size: 13px; padding: 4px 8px;
+    border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink);
+  }
+  /* 每行左侧的勾选框：只在「整理模式」出现，平时不占地方 */
+  .lib-pick { margin-right: 7px; vertical-align: -1px; accent-color: var(--cinnabar); cursor: pointer; }
+  /* 分类徽标可点：就地改这一条的分类 */
+  .lib-tag { cursor: pointer; border: 1px dashed transparent; }
+  .lib-tag:hover { border-color: #cbbfa4; }
+  .lib-tag-add { background: #f7f3ea; color: #a8a094; }
+  /* 就地改分类的小浮层 */
+  .lib-tag-pop {
+    position: absolute; z-index: 40; background: #fff; border: 1px solid var(--line);
+    border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,.12); padding: 6px;
+    display: flex; flex-wrap: wrap; gap: 5px; max-width: 280px;
+  }
+  .lib-tag-pop .lib-cat { font-size: 12px; }
+
   /* 列表项里的分类徽标 */
   .lib-tag {
     display: inline-block; font-size: 11.5px; line-height: 1.6; padding: 0 7px;
@@ -717,23 +750,6 @@
     </div>
   </section>
 
-  <!-- 截图导入：手机上那些排盘 App 排好的盘只剩截图时用这个。
-       独立成一张卡，不进 #castCard——否则切到干支口径后整张起卦卡收起，
-       导入入口跟着消失，想再导一张就找不到了（实测踩过）。 -->
-  <section class="card" id="ocrCard">
-    <h2>从截图导入</h2>
-    <div class="muted" style="margin-bottom:8px;line-height:1.7">
-      把「六爻排盘宝」这类排盘 App 的截图丢进来，本机识别出<b>卦名与四柱</b>，六亲/六神/伏神/旬空全部重排现算。
-      全程本地（Windows 自带 OCR），不联网、不上传。
-    </div>
-    <div class="btn-row" style="justify-content:flex-start;align-items:center">
-      <button class="btn ghost" id="btnOcrPick" title="选择一张排盘截图，用系统 OCR 读出卦名与四柱">选择截图</button>
-      <button class="btn ghost" id="btnOcrPaste" title="读取剪贴板里的图片（Win+Shift+S 截图后直接点）">读剪贴板截图</button>
-      <span class="muted" id="ocrState" style="font-size:12px"></span>
-    </div>
-    <div id="ocrPreview" hidden></div>
-  </section>
-
   <!-- 排盘 -->
   <section class="card" id="panCard" hidden>
     <h2>卦象</h2>
@@ -776,6 +792,11 @@
     <div class="btn-row">
       <button class="btn ghost" id="btnClassic">古籍版式</button>
       <button class="btn" id="btnCopy">复制排盘文本</button>
+      <span class="save-cat" title="存入时顺手归到某个分类；留空＝不分类，之后还能在卦例库里改">
+        <label for="saveCat">分类</label>
+        <input id="saveCat" list="saveCatList" maxlength="12" placeholder="可不填" aria-label="存入时的分类">
+        <datalist id="saveCatList"></datalist>
+      </span>
       <button class="btn" id="btnSave">存入卦例库</button>
       <button class="btn ghost" id="btnShare">复制分享链接</button>
       <button class="btn ghost" id="btnReset">重新起卦</button>
@@ -859,6 +880,16 @@
          末尾「＋」可自建分类（存本机，随时删）。分类存在每条记录上，
          老卦例可在下方详情里随时补填。 -->
     <div class="lib-cats" id="libCats"></div>
+    <!-- 批量整理（2026-11-17）：勾选若干条 → 一次归到某个分类。
+         显式勾选而不是拖拽：WebView2 与触屏上拖拽容易失灵，勾选在哪都可靠。 -->
+    <div class="lib-bulk" id="libBulk" hidden>
+      <span class="lib-bulk-n" id="libBulkN">已选 0 条</span>
+      <select id="libBulkCat" aria-label="归到哪个分类"></select>
+      <button class="btn primary" id="libBulkApply" style="padding:3px 12px">归到此类</button>
+      <button class="btn ghost" id="libBulkNew" style="padding:3px 12px">新建分类…</button>
+      <button class="btn ghost" id="libBulkClear" style="padding:3px 12px">取消选择</button>
+      <span class="muted" id="libBulkMsg" style="font-size:12px"></span>
+    </div>
     <div id="libStats" style="margin-top:10px"></div>
     <div id="libDue" style="margin-top:10px"></div>
     <div id="libList" style="margin-top:12px"></div>
@@ -892,9 +923,9 @@
 <script src="core/file-store.js?v=20261117a"></script>
 <script src="core/local-api.js?v=20261117a"></script>
 <script src="core/guji-lib.js?v=20261113a"></script>
-<script src="core/board.js?v=20261113a"></script>
+<script src="core/board.js?v=20261117a"></script>
 <script src="core/toolbar.js?v=20261116b"></script>
-<script src="app.js?v=20261117b"></script>
+<script src="app.js?v=20261117c"></script>
 <script src="bgm.js?v=20261110a"></script>
 </body>
 </html>

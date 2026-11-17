@@ -401,6 +401,7 @@
     // 切口径即作废当前盘：两种占时口径的盘不能混着看
     records = []; pan = null; lastBullets = []; lastAnalysis = null;
     setDuan('', '');          // 断语跟着盘一起作废，别把上一卦的断语带过来
+    resetSaveCat();           // 存入分类同理：新卦不该带上一卦的类
     resetTossState();
     timeLocked = false; lockedDate = null;
     if (!isGz && timeMode === 'live') selectedDate = beijingNow();
@@ -537,7 +538,7 @@
     }
     renderCoins(); renderTossHint(); renderStack();
     // 六爻齐了就是一卦之始：断语跟着换（上一卦写过什么不能带到新卦上）
-    if (records.length === 6) { setDuan('', ''); computePan(); }
+    if (records.length === 6) { setDuan('', ''); resetSaveCat(); computePan(); }
   };
 
   // 撤销（M6 修复）：撤销必须彻底重置当前爻状态（含 curCoins 与盲摆内定值），
@@ -551,6 +552,7 @@
     if (!records.length) { resetTossState(); renderCoins(); renderTossHint(); renderStack(); return; }
     records.pop(); pan = null; lastBullets = []; lastAnalysis = null;
     setDuan('', '');      // 撤销后盘面没了，断语跟着清（再落一爻是新的一卦）
+    resetSaveCat();
     resetTossState(); // ★ 关键修复：清掉 curCoins / pendingToss
     $('#panCard').hidden = true; $('#analysisCard').hidden = true; $('#aiCard').hidden = true;
     renderCoins(); renderTossHint(); renderStack();
@@ -583,6 +585,7 @@
     resetAIState();
     records = []; pan = null; lastBullets = []; lastAnalysis = null;
     setDuan('', '');
+    resetSaveCat();               // 新卦不带上一卦的存入分类
     resetTossState();
     timeLocked = false;           // 重新起卦解锁时间，等待新的首摇
     lockedDate = null;
@@ -1517,8 +1520,13 @@
         '。盘已按干支口径排出，可在下方核对。</span>';
     }
     ocrSetState('已装入');
-    const pc = $('#panCard');
-    if (pc && !pc.hidden) pc.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    /* 导入入口现在在「画板涂鸦」页里，盘却排在首页——不跳回去，人会以为没成功。
+     * 与「个人卦例 → 装入」同一个处理（那里也踩过「点了没反应」）。 */
+    if (typeof window.__lyOpenPane === 'function') window.__lyOpenPane('home');
+    setTimeout(function () {
+      const pc = $('#panCard');
+      if (pc && !pc.hidden) pc.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 120);
   }
 
   /* 选图 → OCR → 解析（桌面壳里走系统 OCR；浏览器里只能读剪贴板图片） */
@@ -1586,23 +1594,72 @@
     }).catch(function () { ocrSetState('读剪贴板失败：请改用「选择截图」', true); });
   }
 
-  (function bindOcr() {
-    const pick = $('#btnOcrPick');
-    if (pick) pick.onclick = ocrPickFile;
-    const past = $('#btnOcrPaste');
-    if (past) past.onclick = ocrFromClipboard;
-    /* 起卦卡里也支持 Ctrl+V 直接贴图（与画板同款体验） */
-    document.addEventListener('paste', function (e) {
-      const items = (e.clipboardData && e.clipboardData.items) || [];
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type && items[i].type.indexOf('image') === 0) {
-          ocrFromClipboard();
-          e.preventDefault();
-          return;
-        }
+  /* 导入区的按钮全部走 document 级委托（2026-11-17）。
+   * 为什么不直接拿节点绑：这块 UI 现在由 core/board.js 动态生成，
+   * 而 app.js 的初始化可能早于 board.js 的 build()，直接 $() 会拿到 null，
+   * 表现就是「按钮点了没反应」——本项目已经栽过这种时序坑。 */
+  function ocrEnsureZone() {
+    const z = $('#bdOcrZone');
+    if (z) z.hidden = false;
+    return z;
+  }
+
+  async function ocrFromClipboardText() {
+    ocrEnsureZone();
+    const ta = $('#bdOcrRaw');
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      ocrSetState('此环境不能读剪贴板文字，请手动粘贴到下面的框里', true);
+      if (ta) ta.focus();
+      return;
+    }
+    try {
+      const t = await navigator.clipboard.readText();
+      if (!t || !t.trim()) { ocrSetState('剪贴板里没有文字', true); return; }
+      if (ta) ta.value = t;
+      ocrHandleText(t, '剪贴板文本');
+    } catch (e) {
+      ocrSetState('读剪贴板失败：请手动粘贴', true);
+      if (ta) ta.focus();
+    }
+  }
+
+  document.addEventListener('click', function (e) {
+    const t = e.target;
+    if (!t || !t.closest) return;
+
+    if (t.closest('#bdOcrShot')) { ocrEnsureZone(); ocrPickFile(); return; }
+    if (t.closest('#bdOcrText')) { ocrFromClipboardText(); return; }
+    if (t.closest('#bdOcrPaste')) { ocrFromClipboardText(); return; }
+    if (t.closest('#bdOcrClose')) {
+      const z = $('#bdOcrZone');
+      if (z) z.hidden = true;
+      ocrSetState('');
+      return;
+    }
+    if (t.closest('#bdOcrParse')) {
+      const ta = $('#bdOcrRaw');
+      const txt = ta ? String(ta.value || '') : '';
+      if (!txt.trim()) { ocrSetState('框里还没有内容：把排盘文本粘进来', true); return; }
+      ocrHandleText(txt, '粘贴的文本');
+      return;
+    }
+    // 预览条里的「装入排盘 / 放弃」由 renderOcrPreview 自己绑，这里不拦
+  });
+
+  /* 贴图（Win+Shift+S 之后直接 Ctrl+V）：画板里贴图是当底图，
+   * 这里不抢——只在导入区开着、且焦点不在文本框时才当作「要 OCR 这张图」。 */
+  document.addEventListener('paste', function (e) {
+    const z = $('#bdOcrZone');
+    if (!z || z.hidden) return;
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.indexOf('image') === 0) {
+        ocrFromClipboard();
+        e.preventDefault();
+        return;
       }
-    });
-  })();
+    }
+  });
 
   // 供探针/画板直接喂文本调用
   window.__lyOcrText = ocrHandleText;
@@ -3825,8 +3882,38 @@
       if (myGen !== saveGen) return;   // 在途时已重新起卦：不要写回旧 id
       if (!res.ok) throw new Error(data.message || '保存失败');
       castId = data.id;
+
+      /* 分类单独写一步（2026-11-17）。
+       * 为什么不塞进主 POST：主 POST 的 INSERT 清单刻意不含 category——一旦加上，
+       * 没跑过 ALTER 的旧库会「no such column」整条失败，连卦例都存不进去。
+       * 分类写失败不算保存失败（盘面已经进库了），只把提示说清楚。 */
+      const catEl = $('#saveCat');
+      const catWanted = catEl ? String(catEl.value || '').trim() : '';
+      let catErr = '';
+      if (catWanted && castId) {
+        try {
+          const r2 = await apiFetch('/api/records?meta=1', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: castId, category: catWanted })
+          });
+          if (!r2.ok) {
+            const d2 = await r2.json().catch(function () { return {}; });
+            catErr = d2.message || ('HTTP ' + r2.status);
+          } else if (libCatsAll(libRecs).indexOf(catWanted) < 0) {
+            const list = libCatsCustom(); list.push(catWanted); libCatsSaveCustom(list);
+          }
+        } catch (e) { catErr = (e && e.message) || String(e); }
+      }
       btn.textContent = '已入卦例库 ✓';
-      showSaveTip(true, data.hasBaseline !== false, '');
+      showSaveTip(true, data.hasBaseline !== false, catErr ? ('分类没存上：' + catErr) : '');
+      if (catWanted) {
+        const tip = $('#saveTip');
+        if (tip && !catErr) {
+          tip.hidden = false;
+          tip.textContent = (tip.textContent || '') + '　·　已归到分类「' + catWanted + '」';
+        }
+      }
     } catch (e) {
       if (myGen === saveGen) {
         showSaveTip(false, null, e.message);
@@ -4126,6 +4213,15 @@
 
   let libCatCur = '';        // 当前筛选的类名，'' = 全部
 
+  /* ---------- 批量整理状态（2026-11-17） ----------
+   * 王哥要「能自由整理进各个分类」。逐条进详情改太慢，这里给两条快路：
+   *   ① 点行首的分类徽标 → 就地改这一条
+   *   ② 勾选若干条 → 一次归到某个类（勾选比拖拽可靠，触屏和 WebView2 都不会失灵）
+   */
+  let libPicked = new Set();   // 已勾选的记录 id
+  let libPickMode = false;     // 是否处在「整理模式」（决定勾选框显不显示）
+
+
   function libCountByCat(recs, name) {
     return recs.filter(function (r) { return (r.category || '') === name; }).length;
   }
@@ -4146,6 +4242,11 @@
         '</span>';
     });
     html += '<span class="lib-cat add" data-cat-add="1" title="新建一个分类">＋ 新建</span>';
+    /* 「整理」开关：开了才在每行显示勾选框，平时不占版面 */
+    html += '<span class="lib-cat" data-pick-mode="1" style="margin-left:auto;' +
+      (libPickMode ? 'background:var(--cinnabar);border-color:var(--cinnabar);color:#fff' : '') +
+      '" title="打开后每行出现勾选框，可一次把多条归到同一分类">' +
+      (libPickMode ? '整理中…' : '整理') + '</span>';
     if (libCatCur && libCountByCat(recs, libCatCur) === 0) {
       html += '<span class="muted" style="font-size:12px">「' + esc(libCatCur) + '」下暂无卦例</span>';
     }
@@ -4156,6 +4257,11 @@
   function renderLibListBody(recs) {
     const list = $('#libList');
     if (!list) return;
+    /* 筛选的类在新数据里一条都没有 → 自动退回「全部」。
+     * 否则重载后停在一个空类上，用户会以为库空了。只有「全部」才是真空库。 */
+    if (libCatCur && recs.length && !recs.some(function (r) { return (r.category || '') === libCatCur; })) {
+      libCatCur = '';
+    }
     const shown = libCatCur ? recs.filter(function (r) { return (r.category || '') === libCatCur; }) : recs;
     if (!shown.length) {
       list.innerHTML = '<div class="muted">' + (libCatCur ? '这一类还没有卦例。' : '尚无卦例。') + '</div>';
@@ -4174,15 +4280,104 @@
     }
   }
 
+  /* 批量工具条：勾选数、可选分类、提示 */
+  function renderLibBulk() {
+    const box = $('#libBulk');
+    if (!box) return;
+    const n = libPicked.size;
+    box.hidden = !libPickMode && n === 0;
+    const nEl = $('#libBulkN');
+    if (nEl) nEl.textContent = '已选 ' + n + ' 条';
+
+    const sel = $('#libBulkCat');
+    if (sel) {
+      const keep = sel.value;
+      const cats = libCatsAll(libRecs);
+      let html = '<option value="">（不归到任何类 / 清空分类）</option>';
+      cats.forEach(function (c) { html += '<option value="' + escAttr(c) + '">' + esc(c) + '</option>'; });
+      sel.innerHTML = html;
+      if (keep && cats.indexOf(keep) >= 0) sel.value = keep;
+    }
+    const apply = $('#libBulkApply');
+    if (apply) apply.disabled = n === 0;
+  }
+
+  /* 单条改分类（就地改，供徽标浮层用） */
+  async function libSetCategory(id, cat) {
+    const res = await apiFetch('/api/records?meta=1', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id, category: cat || '' })
+    });
+    const d = await res.json().catch(function () { return {}; });
+    if (!res.ok) throw new Error(d.message || ('HTTP ' + res.status));
+    const i = libRecs.findIndex(function (x) { return x.id === id; });
+    if (i >= 0) libRecs[i].category = cat || '';
+    if (cat && libCatsAll(libRecs).indexOf(cat) < 0) {
+      const list = libCatsCustom(); list.push(cat); libCatsSaveCustom(list);
+    }
+  }
+
+  /* 批量归类：逐条 POST（条数少，几十条以内；串行避免把本地写文件搞乱） */
+  async function libBulkApply(cat) {
+    const ids = Array.from(libPicked);
+    if (!ids.length) return;
+    const msg = $('#libBulkMsg');
+    const apply = $('#libBulkApply');
+    if (apply) apply.disabled = true;
+    let done = 0, bad = 0;
+    for (let k = 0; k < ids.length; k++) {
+      if (msg) { msg.style.color = ''; msg.textContent = '归入中… ' + (k + 1) + '/' + ids.length; }
+      try { await libSetCategory(ids[k], cat); done++; }
+      catch (e) { bad++; }
+    }
+    libPicked.clear();
+    libPickMode = false;
+    libRefreshAll();
+    renderLibBulk();
+    if (msg) {
+      msg.style.color = bad ? '#a5352c' : '#3f5a33';
+      msg.textContent = cat
+        ? ('已把 ' + done + ' 条归到「' + cat + '」' + (bad ? '，' + bad + ' 条失败' : ''))
+        : ('已清空 ' + done + ' 条的分类' + (bad ? '，' + bad + ' 条失败' : ''));
+    }
+  }
+
+  /* 把现有分类灌进「存入时的分类」候选（datalist）：存新卦时可直接挑 */
+  /* 换卦就把「存入分类」清空：不然上一卦选的分类会悄悄带到新卦上，
+   * 存完才发现归错了类（分类错比没分类更麻烦，得回头找）。 */
+  function resetSaveCat() {
+    const el = $('#saveCat');
+    if (el) el.value = '';
+  }
+
+  function refreshSaveCatList() {
+    const dl = $('#saveCatList');
+    if (!dl) return;
+    const cats = libCatsAll(libRecs);
+    dl.innerHTML = cats.map(function (c) { return '<option value="' + escAttr(c) + '"></option>'; }).join('');
+  }
+
   function libRefreshAll() {
     renderLibCats(libRecs);
     renderLibListBody(libRecs);
     renderLibStats(libRecs);
+    renderLibBulk();
+    refreshSaveCatList();
   }
 
   function libItemHTML(r) {
-    const tag = r.category ? '<span class="lib-tag">' + esc(r.category) + '</span>' : '';
-    return '<div class="lib-item" data-id="' + escAttr(r.id) + '"><span>' + tag + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) + '</span>' +
+    /* 分类徽标做成可点：点它就地改这一条的分类（弹小浮层）。
+     * 没分类的显示「＋分类」淡色占位，也点得动——不然老卦例没地方下手。 */
+    const tag = r.category
+      ? '<span class="lib-tag" data-tag="' + escAttr(r.id) + '" title="点一下改这一条的分类">' + esc(r.category) + '</span>'
+      : '<span class="lib-tag lib-tag-add" data-tag="' + escAttr(r.id) + '" title="点一下给这一条归个类">＋分类</span>';
+    /* 勾选框：只在「整理模式」（libPickMode）出现，平时不占版面 */
+    const pick = libPickMode
+      ? '<input type="checkbox" class="lib-pick" data-pick="' + escAttr(r.id) + '"' +
+        (libPicked.has(r.id) ? ' checked' : '') + ' title="勾选后可批量归类">'
+      : '';
+    return '<div class="lib-item" data-id="' + escAttr(r.id) + '"><span>' + pick + tag + esc(r.question || '（未注明所测）') + ' · ' + esc(r.hex) + '</span>' +
       '<span class="lib-side">' + outcomeBadge(r.outcome) + '<span class="muted">' + esc((r.created_at || '').slice(0, 10)) + '</span>' +
       '<button class="lib-load" data-restore="' + escAttr(r.id) + '" title="把这条卦例还原成卦象（等同双击）">装入</button>' +
       '<button class="lib-del" data-del="' + escAttr(r.id) + '" title="删除此卦例">×</button></span></div>';
@@ -4240,6 +4435,14 @@
       return;
     }
 
+    // 「整理」开关
+    if (t.closest('[data-pick-mode]')) {
+      libPickMode = !libPickMode;
+      if (!libPickMode) libPicked.clear();
+      libRefreshAll();
+      return;
+    }
+
     // 新建分类
     if (t.closest('[data-cat-add]')) {
       const name = (prompt('新分类名（如：求子、房产、跳槽）：') || '').trim();
@@ -4258,9 +4461,103 @@
     if (chip) {
       const name = chip.getAttribute('data-cat') || '';
       libCatCur = (libCatCur === name) ? '' : name;   // 再点一次回全部
+      if (libPicked.size) libPicked.clear();          // 换筛选清勾选，免得误改看不见的记录
       renderLibCats(libRecs);
       renderLibListBody(libRecs);
+      renderLibBulk();
     }
+  });
+
+  /* 批量条的三个按钮：归到此类 / 新建分类 / 取消选择 */
+  (function bindLibBulk() {
+    const apply = $('#libBulkApply');
+    if (apply) apply.onclick = function () {
+      const sel = $('#libBulkCat');
+      const cat = sel ? String(sel.value || '') : '';
+      if (!libPicked.size) { const m = $('#libBulkMsg'); if (m) { m.style.color = '#a5352c'; m.textContent = '先勾选要整理的卦例'; } return; }
+      const n = libPicked.size;
+      if (!confirm(cat
+        ? ('把选中的 ' + n + ' 条归到「' + cat + '」？')
+        : ('清空选中 ' + n + ' 条的分类？（卦例本身不动）'))) return;
+      libBulkApply(cat);
+    };
+    const addNew = $('#libBulkNew');
+    if (addNew) addNew.onclick = async function () {
+      if (!libPicked.size) { const m = $('#libBulkMsg'); if (m) { m.style.color = '#a5352c'; m.textContent = '先勾选要整理的卦例'; } return; }
+      const name = (prompt('新分类名（建好后直接把选中的归进去）：') || '').trim();
+      if (!name) return;
+      if (name.length > 12) { alert('分类名请控制在 12 字以内。'); return; }
+      if (libCatsAll(libRecs).indexOf(name) < 0) {
+        const list = libCatsCustom(); list.push(name); libCatsSaveCustom(list);
+      }
+      const sel = $('#libBulkCat');
+      if (sel) { renderLibBulk(); sel.value = name; }
+      libBulkApply(name);
+    };
+    const clr = $('#libBulkClear');
+    if (clr) clr.onclick = function () {
+      libPicked.clear();
+      libPickMode = false;
+      libRefreshAll();
+      const m = $('#libBulkMsg');
+      if (m) m.textContent = '';
+    };
+  })();
+
+  /* 就地改分类的小浮层：点徽标弹出分类列表，选完立即保存。
+   * 为什么用浮层而不是 prompt：prompt 在 WebView2 里不一定弹得出来
+   * （本项目踩过「alert 静默消失」的坑），而且手打分类名太慢。 */
+  let _tagPop = null;
+  function closeTagPicker() {
+    if (_tagPop && _tagPop.parentNode) _tagPop.parentNode.removeChild(_tagPop);
+    _tagPop = null;
+  }
+  function openTagPicker(recId, anchorEl) {
+    closeTagPicker();
+    const cats = libCatsAll(libRecs);
+    const hit = libRecs.filter(function (x) { return x.id === recId; })[0] || {};
+    const cur = hit.category || '';
+    const pop = document.createElement('div');
+    pop.className = 'lib-tag-pop';
+    let html = '';
+    cats.forEach(function (c) {
+      html += '<span class="lib-cat' + (cur === c ? ' on' : '') + '" data-set-cat="' + escAttr(c) + '">' + esc(c) + '</span>';
+    });
+    html += '<span class="lib-cat add" data-set-cat="__new__">＋新建</span>';
+    if (cur) html += '<span class="lib-cat" data-set-cat="">（清空分类）</span>';
+    pop.innerHTML = html;
+
+    const r = anchorEl.getBoundingClientRect();
+    pop.style.left = Math.max(8, r.left + window.scrollX) + 'px';
+    pop.style.top = (r.bottom + window.scrollY + 4) + 'px';
+    document.body.appendChild(pop);
+    _tagPop = pop;
+
+    pop.addEventListener('click', async function (e2) {
+      const c = e2.target.closest('[data-set-cat]');
+      if (!c) return;
+      let val = c.getAttribute('data-set-cat');
+      if (val === '__new__') {
+        val = (prompt('新分类名：') || '').trim();
+        if (!val) return;
+        if (val.length > 12) { alert('分类名请控制在 12 字以内。'); return; }
+      }
+      closeTagPicker();
+      try {
+        await libSetCategory(recId, val);
+        libRefreshAll();
+        const msg = $('#libBulkMsg');
+        if (msg) { msg.style.color = '#3f5a33'; msg.textContent = val ? ('已归到「' + val + '」') : '已清空分类'; }
+      } catch (err) {
+        alert('改分类失败：' + ((err && err.message) || err));
+      }
+    });
+  }
+  // 点别处关掉浮层
+  document.addEventListener('click', function (e) {
+    if (!_tagPop) return;
+    if (e.target.closest && (e.target.closest('.lib-tag-pop') || e.target.closest('[data-tag]'))) return;
+    closeTagPicker();
   });
 
   // 事件委托：分页后节点是追加进来的，用一次性委托避免每页重复绑定
@@ -4274,6 +4571,24 @@
     if (dis) { dismissDueTask(dis.dataset.dueDismiss); return; }
     const del = t.closest('.lib-del');
     if (del) { e.stopPropagation(); delCast(del.dataset.del); return; }
+    /* 勾选框：只记状态，不触发「看详情」 */
+    const pk = t.closest('[data-pick]');
+    if (pk) {
+      e.stopPropagation();
+      const pid = pk.getAttribute('data-pick');
+      if (pk.checked) libPicked.add(pid); else libPicked.delete(pid);
+      renderLibBulk();
+      return;
+    }
+
+    /* 点分类徽标 → 就地改这一条的分类（弹小浮层，选完即存） */
+    const tg = t.closest('[data-tag]');
+    if (tg) {
+      e.stopPropagation();
+      openTagPicker(tg.getAttribute('data-tag'), tg);
+      return;
+    }
+
     // 「装入」按钮：单击就还原，不靠双击——WebView2 里双击事件不一定能拿到，
     // 且单击详情插入 DOM 后双击的两次落在不同节点上会丢事件。
     const ld = t.closest('[data-restore]');
@@ -4437,6 +4752,11 @@
   };
 
   $('#btnLib').onclick = async function () {
+    /* 重新载入 = 想看全部。旧版保留上一次的筛选，于是点完看到「这一类还没有卦例」，
+     * 像库里空了（实测：库里 3 条，列表显示空）。 */
+    libCatCur = '';
+    libPicked.clear();
+    libPickMode = false;
     try {
       await loadLibPage(0, false);
       loadDueTasks();   // 回访提醒与列表并行拉取，失败静默（辅助功能不打断主流程）
@@ -4748,6 +5068,7 @@
     if (d.question && uc) { uc.value = d.question; uc.hidden = false; }
     renderTime(); renderCoins(); renderTossHint(); renderStack();
     setDuan('', '');      // 分享链接不带断语（提示里也写了「需重新断卦」）
+    resetSaveCat();
     computePan();
     if (hint) {
       hint.innerHTML = '已按分享链接还原盘面（' + esc(pan ? pan.benName : '') +
@@ -5014,6 +5335,7 @@
 
   step('排盘字号', initPanFont);
   step('神煞开关', initShenshaToggle);
+  step('分类候选', refreshSaveCatList);
   step('中国农历', initLunar);
   step('模型芯片', renderModelChips);
   loadModels();

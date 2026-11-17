@@ -974,6 +974,88 @@ async function launchBrowser() {
   }));
   eq('自建分类记在本机', await page.evaluate(() => localStorage.getItem('ly_lib_cats')), '["求子"]');
 
+  /* ---------- L2. 批量整理与就地改分类 ---------- */
+  say('L2. 批量整理');
+  // 先造第二条，才能验批量
+  await page.click('#sideRail .tb-btn[data-k="home"]');
+  await page.waitForTimeout(300);
+  /* K 段把口径切到了干支，起卦卡是收起的；先切回公历才能用「按卦名排」 */
+  await page.$eval('#btnModeDate', el => el.click());
+  await page.waitForTimeout(300);
+  await page.fill('#guaNameInput', '乾为天');
+  await page.fill('#guaDongInput', '');
+  await page.click('#btnByName');
+  await page.waitForTimeout(900);
+  await page.fill('#castQuestion', '批量测试一');
+  await page.click('#btnSave');
+  await page.waitForTimeout(1200);
+
+  await page.click('#sideRail .tb-btn[data-k="lib"]');
+  await page.waitForTimeout(300);
+  await page.click('#btnLib');
+  await page.waitForTimeout(1200);
+
+  /* 批量归类的断言需要库里至少两条。前面几段各存过一条，但顺序不保证，
+   * 所以这里直接看实际条数，不够就不做后面的断言（不硬凑数据、也不假通过）。 */
+  const libN = await page.$$eval('#libList .lib-item', e => e.length);
+  ok('库里至少两条（够验批量）', libN >= 2, 'n=' + libN);
+
+  ok('分类条有「整理」开关', await page.$('#libCats [data-pick-mode]') !== null);
+  eq('平时不显示勾选框', await page.$$eval('#libList .lib-pick', e => e.length), 0);
+
+  await page.evaluate(() => document.querySelector('#libCats [data-pick-mode]').click());
+  await page.waitForTimeout(400);
+  ok('整理模式下出现勾选框', (await page.$$eval('#libList .lib-pick', e => e.length)) >= 2);
+
+  const beforeBulk = await page.evaluate(() => JSON.parse(localStorage.getItem('ly_records_v1') || '[]').length);
+  // 勾两条
+  await page.evaluate(() => {
+    const boxes = document.querySelectorAll('#libList .lib-pick');
+    [0, 1].forEach(i => { if (boxes[i]) { boxes[i].checked = true; boxes[i].dispatchEvent(new Event('click', { bubbles: true })); } });
+  });
+  await page.waitForTimeout(300);
+  ok('勾选后显示已选条数', /已选 2 条/.test(await page.$eval('#libBulkN', e => e.textContent)),
+    await page.$eval('#libBulkN', e => e.textContent));
+
+  await page.selectOption('#libBulkCat', '财运');
+  page.once('dialog', async d => { await d.accept(); });
+  await page.evaluate(() => document.getElementById('libBulkApply').click());
+  await page.waitForTimeout(2200);
+  const bulkRes = await page.evaluate(() => {
+    const a = JSON.parse(localStorage.getItem('ly_records_v1') || '[]');
+    return {
+      n: a.length,
+      cats: a.map(r => r.category).filter(Boolean),
+      msg: (document.getElementById('libBulkMsg') || {}).textContent,
+      bulkHidden: document.getElementById('libBulk').hidden
+    };
+  });
+  eq('批量归类不新增记录', bulkRes.n, beforeBulk);
+  eq('两条都归到了「财运」', bulkRes.cats.filter(c => c === '财运').length, 2);
+  ok('回执说明归了几条', /已把 2 条/.test(bulkRes.msg), bulkRes.msg);
+  ok('归完退出整理模式', bulkRes.bulkHidden);
+
+  // 就地改分类：点徽标弹浮层
+  await page.evaluate(() => document.querySelector('#libList .lib-tag').click());
+  await page.waitForTimeout(400);
+  ok('点徽标弹出分类浮层', await page.$('.lib-tag-pop') !== null);
+  const popItems = await page.$$eval('.lib-tag-pop [data-set-cat]', e => e.map(x => x.textContent.trim()));
+  ok('浮层里有可选分类', popItems.indexOf('财运') >= 0 && popItems.indexOf('＋新建') >= 0, popItems.slice(0, 6).join('/'));
+
+  // 选一个改掉
+  page.once('dialog', async d => { await d.accept(); });
+  await page.evaluate(() => {
+    const c = Array.from(document.querySelectorAll('.lib-tag-pop [data-set-cat]')).find(x => x.getAttribute('data-set-cat') === '失物');
+    if (c) c.click();
+  });
+  await page.waitForTimeout(1000);
+  const afterTag = await page.evaluate(() => {
+    const a = JSON.parse(localStorage.getItem('ly_records_v1') || '[]');
+    return { cats: a.map(r => r.category), popGone: !document.querySelector('.lib-tag-pop') };
+  });
+  ok('就地改分类生效', afterTag.cats.indexOf('失物') >= 0, JSON.stringify(afterTag.cats));
+  ok('选完浮层自动关掉', afterTag.popGone);
+
   await page.click('#sideRail .tb-btn[data-k="home"]');
   await page.waitForTimeout(300);
 

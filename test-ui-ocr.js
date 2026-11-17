@@ -84,15 +84,30 @@ function eq(name, got, want) {
   console.log('截图导入');
 
   /* ---------- 入口 ---------- */
-  ok('起卦页有「选择截图」', await page.$('#btnOcrPick') !== null);
-  ok('起卦页有「读剪贴板截图」', await page.$('#btnOcrPaste') !== null);
+  /* 导入入口已并入「画板涂鸦」（2026-11-17 王哥要求），首页不再有那张卡 */
+  eq('首页不再有旧的导入卡', await page.evaluate(function () {
+    return !!document.getElementById('ocrCard');
+  }), false);
+  await page.click('#sideRail .tb-btn[data-k="board"]');
+  await page.waitForTimeout(700);
+  ok('画板里有「截图导入」', await page.$('#bdOcrShot') !== null);
+  ok('画板里有「文本导入」', await page.$('#bdOcrText') !== null);
   ok('解析模块已加载', await page.evaluate(function () {
     return !!(window.LY && window.LY.ocrPaipan && window.LY.ocrPaipan.parse);
   }));
-  eq('未导入时预览收起', await page.$eval('#ocrPreview', function (e) { return e.hidden; }), true);
+  eq('未导入时导入区收起', await page.$eval('#bdOcrZone', function (e) { return e.hidden; }), true);
+
+  /* 每装入一次都会自动跳回首页，所以每次导入前都要先回画板。
+   * 用它统一处理，免得每处都写两行。 */
+  async function backToBoardAndShot() {
+    await page.click('#sideRail .tb-btn[data-k="board"]');
+    await page.waitForTimeout(500);
+    await page.click('#bdOcrShot');
+    await page.waitForTimeout(900);
+  }
 
   /* ---------- 盘一：有变卦、动二四 ---------- */
-  await page.click('#btnOcrPick');
+  await page.click('#bdOcrShot');
   await page.waitForTimeout(900);
   const prev = await page.evaluate(function () {
     const box = document.getElementById('ocrPreview');
@@ -122,7 +137,7 @@ function eq(name, got, want) {
       head0: head[0], head1: head[1],
       moves: Array.from(document.querySelectorAll('#gzYao .gz-move'))
         .map(function (e, i) { return e.checked ? (6 - i) : 0; }).filter(Boolean),
-      ocrCardStill: !document.getElementById('ocrCard').hidden
+      pane: (document.querySelector('#sideRail .tb-btn.on') || {}).textContent
     };
   });
   ok('装入后切到干支口径', pan1.gzMode);
@@ -134,8 +149,8 @@ function eq(name, got, want) {
   ok('旬空与截图一致（辰巳）', pan1.head0.indexOf('辰巳') >= 0, pan1.head0);
   ok('本卦雷水解、变卦坤为地', pan1.head1.indexOf('雷水解') >= 0 && pan1.head1.indexOf('坤为地') >= 0, pan1.head1);
   eq('动爻正是二、四', pan1.moves, [4, 2]);
-  /* 导入卡独立于起卦卡：切到干支口径后起卦卡会收起，导入入口必须还在 */
-  ok('导入卡在干支口径下仍可见（不受口径切换影响）', pan1.ocrCardStill);
+  /* 导入入口在画板页、盘排在首页：装入后必须自动跳回首页，否则看着像没成功 */
+  eq('装入后自动跳回首页排盘', pan1.pane, '首页排盘');
 
   /* ---------- 存进卦例库：导入的盘要能存 ---------- */
   await page.click('#btnSave');
@@ -155,8 +170,7 @@ function eq(name, got, want) {
   eq('记录里六爻爻值完整（0/9/6 三档）', saved.tosses, [0, 9, 0, 9, 0, 0]);
 
   /* ---------- 盘二：静卦 + 占问 ---------- */
-  await page.click('#btnOcrPick');
-  await page.waitForTimeout(900);
+  await backToBoardAndShot();
   await page.click('#btnOcrLoad');
   await page.waitForTimeout(1300);
   const pan2 = await page.evaluate(function () {
@@ -175,9 +189,63 @@ function eq(name, got, want) {
   eq('盘二 · 无动爻', pan2.moves, 0);
   eq('盘二 · 占问带进来了', pan2.question, '快递何时来');
 
+  /* ---------- 文本导入（粘贴/剪贴板文本解析） ---------- */
+  await page.click('#sideRail .tb-btn[data-k="board"]');
+  await page.waitForTimeout(500);
+  await page.evaluate(function () { document.querySelector('#bdOcrText').click(); });
+  await page.waitForTimeout(400);
+  await page.fill('#bdOcrRaw', [
+    '占问：这笔货款何时到',
+    '时间：阳历 2026 年 11 月 17 日 16 时 35 分',
+    '月日：(丙午年) 己亥月 乙未日 (空 辰巳)',
+    '震：雷水解        坤为地',
+    '六冲卦'
+  ].join(String.fromCharCode(10)));
+  await page.evaluate(function () { document.querySelector('#bdOcrParse').click(); });
+  await page.waitForTimeout(600);
+  const txtPrev = await page.evaluate(function () {
+    const box = document.getElementById('ocrPreview');
+    return { shown: !box.hidden, text: box.innerText };
+  });
+  ok('文本导入出识别结果', txtPrev.shown);
+  ok('文本导入认出本卦', txtPrev.text.indexOf('雷水解') >= 0, txtPrev.text.slice(0, 60));
+  ok('文本导入认出占问', txtPrev.text.indexOf('这笔货款何时到') >= 0);
+
+  await page.click('#btnOcrLoad');
+  await page.waitForTimeout(1400);
+  const txtPan = await page.evaluate(function () {
+    return {
+      head0: document.getElementById('classicText').textContent.split(String.fromCharCode(10))[0],
+      question: (document.getElementById('castQuestion') || {}).value,
+      pane: (document.querySelector('#sideRail .tb-btn.on') || {}).textContent
+    };
+  });
+  ok('文本导入的盘排出来了', txtPan.head0.indexOf('乙未日') >= 0 && txtPan.head0.indexOf('辰巳') >= 0, txtPan.head0);
+  eq('文本导入的占问回填', txtPan.question, '这笔货款何时到');
+  eq('文本导入后也跳回首页', txtPan.pane, '首页排盘');
+
+  /* ---------- 存入时能选分类 ---------- */
+  ok('结果页有「分类」输入框', await page.$('#saveCat') !== null);
+  await page.fill('#saveCat', '货款');
+  await page.click('#btnSave');
+  await page.waitForTimeout(1800);
+  const savedCat = await page.evaluate(function () {
+    const a = JSON.parse(window.__files['卦例库.json'] || '[]');
+    const me = a.filter(function (r) { return r.question === '这笔货款何时到'; })[0] || {};
+    return { cat: me.category, tip: (document.getElementById('saveTip') || {}).textContent };
+  });
+  eq('存入时写的分类落库了', savedCat.cat, '货款');
+  ok('回执里说明已归类', String(savedCat.tip).indexOf('货款') >= 0, savedCat.tip);
+
+  /* 换卦要把分类清掉，别带到下一卦去 */
+  await page.click('#btnReset');
+  await page.waitForTimeout(600);
+  eq('重新起卦后分类框清空', await page.evaluate(function () {
+    return (document.getElementById('saveCat') || {}).value;
+  }), '');
+
   /* ---------- 放弃按钮 ---------- */
-  await page.click('#btnOcrPick');
-  await page.waitForTimeout(900);
+  await backToBoardAndShot();
   await page.click('#btnOcrCancel');
   await page.waitForTimeout(300);
   eq('点「放弃」后预览收起', await page.$eval('#ocrPreview', function (e) { return e.hidden; }), true);
