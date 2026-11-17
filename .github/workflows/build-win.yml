@@ -139,6 +139,21 @@ jobs:
                            "$wm\Windows.Globalization.winmd")) {
             if (-not (Test-Path $p)) { throw "缺少 WinRT 依赖：$p" }
           }
+          # WinMetadata 的 winmd 是 .NET Core 风格，内部引用 System.Runtime 门面程序集，
+          # .NET Framework 的编译器需要显式带上 Facades（否则 CS0012：
+          # The type 'System.Attribute' is defined in an assembly that is not referenced）。
+          # 路径用环境变量拼，避免反斜杠在 YAML/PowerShell 两层转义里被吃掉
+          $refRoot = Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies\Microsoft\Framework\.NETFramework'
+          $facades = Get-ChildItem $refRoot `
+                       -Directory -ErrorAction SilentlyContinue |
+                     Sort-Object Name -Descending |
+                     ForEach-Object { Join-Path $_.FullName 'Facades' } |
+                     Where-Object { Test-Path $_ } |
+                     Select-Object -First 1
+          if (-not $facades) { throw "找不到 .NET Framework 的 Facades 目录（winmd 编译必需）" }
+          $facadeDlls = Get-ChildItem $facades -Filter *.dll | ForEach-Object { "/r:" + $_.FullName }
+          Write-Host "facades=$facades（引用 $($facadeDlls.Count) 个门面程序集）"
+
           Write-Host "winrt=$winrt"
           Write-Host "winmd=$wm"
 
@@ -162,6 +177,7 @@ jobs:
             "/r:$wm\Windows.Graphics.winmd",
             "/r:$wm\Windows.Media.winmd",
             "/r:$wm\Windows.Globalization.winmd",
+          ) + $facadeDlls + @(
             '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
             '/r:System.IO.Compression.dll', '/r:System.IO.Compression.FileSystem.dll',
             'windows-shell\Program.cs'
