@@ -1,7 +1,7 @@
 /* 真机验证：C# 壳里的系统 OCR 通道（浏览器里验不了，只能连真 exe 的 CDP） */
 const { chromium } = require('playwright-core');
 (async () => {
-  const b = await chromium.connectOverCDP('http://127.0.0.1:9240');
+  const b = await chromium.connectOverCDP('http://127.0.0.1:9241');
   const ctx = b.contexts()[0];
   const page = ctx.pages()[0] || await ctx.newPage();
   await page.waitForTimeout(2000);

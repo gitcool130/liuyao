@@ -129,6 +129,19 @@ jobs:
           Write-Host "winf=$winf"
           Write-Host "ldr=$ldr"
 
+          # 系统 OCR 用的 WinRT 投影：编译期要 System.Runtime.WindowsRuntime.dll
+          # （提供 IAsyncOperation 的 awaiter）与 WinMetadata\*.winmd（Windows.* 类型）。
+          # 反射走不通——WinRT 异步返回 System.__ComObject，上面看不到任何 WinRT 成员。
+          $wm = "$env:WINDIR\System32\WinMetadata"
+          $winrt = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\System.Runtime.WindowsRuntime.dll"
+          foreach ($p in @($winrt, "$wm\Windows.Foundation.winmd", "$wm\Windows.Storage.winmd",
+                           "$wm\Windows.Graphics.winmd", "$wm\Windows.Media.winmd",
+                           "$wm\Windows.Globalization.winmd")) {
+            if (-not (Test-Path $p)) { throw "缺少 WinRT 依赖：$p" }
+          }
+          Write-Host "winrt=$winrt"
+          Write-Host "winmd=$wm"
+
           $out = "莲斋六爻排盘.exe"
           # 参数必须走数组 + 双引号字符串：写成 `/resource:$core,...` 时 PowerShell 不展开变量，
           # 会把字面量 $core 传给编译器（CS1566）
@@ -143,6 +156,12 @@ jobs:
             "/resource:$winf,Microsoft.Web.WebView2.WinForms.dll",
             "/resource:$ldr,WebView2Loader.dll",
             "/r:$core", "/r:$winf",
+            "/r:$winrt",
+            "/r:$wm\Windows.Foundation.winmd",
+            "/r:$wm\Windows.Storage.winmd",
+            "/r:$wm\Windows.Graphics.winmd",
+            "/r:$wm\Windows.Media.winmd",
+            "/r:$wm\Windows.Globalization.winmd",
             '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
             '/r:System.IO.Compression.dll', '/r:System.IO.Compression.FileSystem.dll',
             'windows-shell\Program.cs'

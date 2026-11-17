@@ -23,6 +23,13 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
+/* WinRT 投影：编译期需引用 System.Runtime.WindowsRuntime.dll 与 WinMetadata\*.winmd，
+ * 见 Program.cs 顶部 OcrImageAsync 的注释（反射拿不到 WinRT 成员，只能走强类型）。 */
+using Windows.Foundation;
+using Windows.Globalization;
+using Windows.Graphics.Imaging;
+using Windows.Media.Ocr;
+using Windows.Storage.Streams;
 using Microsoft.Web.WebView2.WinForms;
 
 static class Shell
@@ -230,12 +237,11 @@ static class Shell
                             /* 对指定图片跑系统 OCR（Windows.Media.Ocr），返回逐行
                              * "top\tleft\ttext"，与 core/ocr-paipan.js 的输入格式一致。
                              *
-                             * ⚠ 必须丢到后台线程跑：本方法在 WebView2 的 **UI（STA）线程**上，
-                             * 而 AwaitWinRT 是同步等待 IAsyncOperation。WinRT 的完成回调要
-                             * marshal 回同一个 STA 线程，可该线程正被 WaitOne 堵着——消息泵不转，
-                             * 回调永远排不上，结果是「30 秒超时」（2026-11-17 真机上就是这么挂的）。
-                             * 后台线程是 MTA，完成回调走线程池，不需要消息泵；算完再 BeginInvoke
-                             * 回到 UI 线程发消息。 */
+                             * ⚠ 必须丢到后台线程跑：本方法是 WebView2 的 **UI（STA）线程**上的
+                             * 同步事件处理器。WinRT 的完成回调要 marshal 回创建它的线程，
+                             * 若在那条线程上同步等（GetResult/WaitOne），消息泵被堵住、回调永远
+                             * 排不上——表现就是「30 秒超时」（2026-11-17 真机上遇到过）。
+                             * 后台（MTA）线程不需要消息泵，算完再 BeginInvoke 回 UI 线程发消息。 */
                             case "ocr":
                                 {
                                     var reqId = id;
@@ -244,7 +250,7 @@ static class Shell
                                     System.Threading.Tasks.Task.Run(new Action(() =>
                                     {
                                         string st2 = "ok", bd2 = "";
-                                        try { bd2 = OcrImage(reqPath); }
+                                        try { bd2 = OcrImageAsync(reqPath).GetAwaiter().GetResult(); }
                                         catch (Exception ex2) { st2 = "err"; bd2 = ex2.Message; Log("OcrImage", ex2); }
                                         try
                                         {
@@ -358,57 +364,6 @@ static class Shell
      *     所以图片走 File.ReadAllBytes → 内存流（InMemoryRandomAccessStream）。
      */
 
-    /* 用反射调一个 WinRT 静态/实例方法，并同步等它的 IAsyncOperation 结果。
-     * typeName 形如 "Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime"。 */
-    static object AwaitWinRT(string typeName, string methodName, object instance, object[] args)
-    {
-        var t = Type.GetType(typeName, true);
-        var m = instance == null
-            ? t.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static)
-            : t.GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
-        if (m == null) throw new MissingMethodException(t.FullName, methodName);
-
-        var op = m.Invoke(instance, args);
-        if (op == null) throw new InvalidOperationException(typeName + "." + methodName + " 返回 null");
-
-        /* IAsyncOperation<T> 只暴露 Status / GetResults / Completed（COM 接口）。
-         * 用反射取，避免在编译期依赖 WinRT 投影类型。 */
-        var opType = op.GetType();
-        var statusProp = opType.GetProperty("Status");
-        var resultsM = opType.GetMethod("GetResults");
-        var completedEvt = opType.GetEvent("Completed");
-
-        /* 已经完成（本地小图常常同步就完了）——别挂事件，直接取。 */
-        if (statusProp != null && Convert.ToInt32(statusProp.GetValue(op, null)) == 1)
-            return resultsM.Invoke(op, null);
-
-        var done = new System.Threading.ManualResetEvent(false);
-        if (completedEvt != null)
-        {
-            var handlerType = completedEvt.EventHandlerType;
-            // AsyncOperationCompletedHandler<T>：(IAsyncOperation<T>, AsyncStatus) => void
-            var handler = Delegate.CreateDelegate(handlerType, new NotifyDone(done),
-                typeof(NotifyDone).GetMethod("Invoke"));
-            completedEvt.AddEventHandler(op, handler);
-        }
-        if (!done.WaitOne(30000))
-            throw new TimeoutException(typeName + "." + methodName + " 超过 30 秒未返回");
-
-        var st = statusProp == null ? 1 : Convert.ToInt32(statusProp.GetValue(op, null));
-        if (st != 1) throw new InvalidOperationException(typeName + "." + methodName + " 失败（AsyncStatus=" + st + "）");
-        return resultsM.Invoke(op, null);
-    }
-
-    /* 给 Completed 事件当代理。AsyncOperationCompletedHandler<T> 的签名是
-     * void (IAsyncOperation<T>, AsyncStatus)，这里参数全用 object，
-     * Delegate.CreateDelegate 对这种「宽参数」是允许的（逆变 + 装箱）。 */
-    sealed class NotifyDone
-    {
-        readonly System.Threading.ManualResetEvent _e;
-        public NotifyDone(System.Threading.ManualResetEvent e) { _e = e; }
-        public void Invoke(object sender, object status) { try { _e.Set(); } catch { } }
-    }
-
     /* 弹出系统选图对话框，返回 "路径\n宽\n高"。取消时 status=err / body=CANCEL。 */
     static string PickImagePath(ref string status)
     {
@@ -425,134 +380,86 @@ static class Shell
 
     /* 对图片跑系统 OCR，返回逐行 "top\tleft\ttext"（与 ocr-paipan.js 入参同格式）。
      *
-     * 识别语言顺序：zh-Hans-CN → zh-Hant-TW → 用户首选 → 第一个可用。
-     * 只认中文包：排盘表里全是汉字，用英文引擎会把「财戌土」读成乱码。 */
-    static string OcrImage(string path)
+     * ⚠ 这里必须用**强类型 WinRT 投影 + async/await**，不能用反射：
+     *   WinRT 异步方法返回的是 System.__ComObject，而 System.__ComObject 上
+     *   **看不到任何 WinRT 成员**——实测 GetProperty("Status")、GetMethod("GetResults")、
+     *   GetEvent("Completed") 全部返回 null（成员只有 7 个 Object 基成员）。
+     *   之前那版反射拿不到 Status，就退化成「挂 Completed 事件」，可事件也拿不到，
+     *   于是必然 WaitOne 到 30 秒超时。这是 projection 缺失，不是慢。
+     * 所以编译期必须带上：
+     *   /r:System.Runtime.WindowsRuntime.dll（提供 IAsyncOperation 的 awaiter）
+     *   /r:%WINDIR%\System32\WinMetadata\*.winmd（提供 Windows.* 类型）
+     *
+     * 另外两条实测出来的坑：
+     *   ① 不能在 WebView2 的 UI（STA）线程上同步等——WinRT 完成回调要回到同一线程，
+     *      而它被堵着，消息泵不转 → 死锁。调用方已用 Task.Run 丢到后台线程。
+     *   ② StorageFile.GetFileFromPathAsync 对含非 ASCII 的路径会报
+     *      「包含一个或多个无效字符」，所以图片走 File.ReadAllBytes → 内存流。
+     */
+    static async System.Threading.Tasks.Task<string> OcrImageAsync(string path)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
             throw new FileNotFoundException("图片不存在", path);
 
-        // 1) 图片 → 内存流 → SoftwareBitmap（避开中文路径的 GetFileFromPathAsync 坑）
         var bytes = File.ReadAllBytes(path);
-        var streamType = Type.GetType("Windows.Storage.Streams.InMemoryRandomAccessStream, Windows.Storage.Streams, ContentType=WindowsRuntime", true);
-        var stream = Activator.CreateInstance(streamType);
-        var writerType = Type.GetType("Windows.Storage.Streams.DataWriter, Windows.Storage.Streams, ContentType=WindowsRuntime", true);
-        var writer = Activator.CreateInstance(writerType, new object[] { stream });
-        writerType.GetMethod("WriteBytes").Invoke(writer, new object[] { bytes });
-        AwaitWinRT("Windows.Storage.Streams.DataWriter, Windows.Storage.Streams, ContentType=WindowsRuntime",
-            "StoreAsync", writer, null);
-        AwaitWinRT("Windows.Storage.Streams.DataWriter, Windows.Storage.Streams, ContentType=WindowsRuntime",
-            "FlushAsync", writer, null);
-        streamType.GetMethod("Seek").Invoke(stream, new object[] { 0UL });
+        var stream = new InMemoryRandomAccessStream();
+        var writer = new DataWriter(stream);
+        writer.WriteBytes(bytes);
+        await writer.StoreAsync();
+        await writer.FlushAsync();
+        writer.DetachStream();
+        stream.Seek(0UL);
 
-        var dec = AwaitWinRT("Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime",
-            "CreateAsync", null, new object[] { stream });
-        var bmp = AwaitWinRT("Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime",
-            "GetSoftwareBitmapAsync", dec, new object[] { });
-        int w = Convert.ToInt32(bmp.GetType().GetProperty("PixelWidth").GetValue(bmp, null));
-        int h = Convert.ToInt32(bmp.GetType().GetProperty("PixelHeight").GetValue(bmp, null));
+        var decoder = await BitmapDecoder.CreateAsync(stream);
+        var bmp = await decoder.GetSoftwareBitmapAsync();
+        int w = bmp.PixelWidth, h = bmp.PixelHeight;
 
-        /* 手机截图字太小：先放大再识别。实测 886×1920 的原图里
-         * 「○」「×」这类小符号一个都读不出来，放大 2 倍后能读到部分。
-         * 缩放上限按长边 ≤ 4000 控制，免得内存炸。 */
         var engine = CreateOcrEngine();
-        var result = AwaitWinRT("Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime",
-            "RecognizeAsync", engine, new object[] { bmp });
+        var result = await engine.RecognizeAsync(bmp);
 
         var sb = new StringBuilder();
         sb.Append("SIZE\t").Append(w).Append('\t').Append(h).Append('\n');
-        var linesType = result.GetType().GetProperty("Lines").GetValue(result, null);
-        var lines = (System.Collections.IEnumerable)linesType;
         var ci = System.Globalization.CultureInfo.InvariantCulture;
-        foreach (var line in lines)
+        foreach (var line in result.Lines)
         {
-            var wordsProp = line.GetType().GetProperty("Words");
-            var words = (System.Collections.IEnumerable)wordsProp.GetValue(line, null);
             double top = double.MaxValue, left = double.MaxValue;
-            foreach (var wd in words)
+            foreach (var wd in line.Words)
             {
-                var rect = wd.GetType().GetProperty("BoundingRect").GetValue(wd, null);
-                var rt = rect.GetType();
-                var y = Convert.ToDouble(rt.GetProperty("Y").GetValue(rect, null), ci);
-                var x = Convert.ToDouble(rt.GetProperty("X").GetValue(rect, null), ci);
-                if (y < top) top = y;
-                if (x < left) left = x;
+                var r2 = wd.BoundingRect;
+                if (r2.Y < top) top = r2.Y;
+                if (r2.X < left) left = r2.X;
             }
-            var text = (string)line.GetType().GetProperty("Text").GetValue(line, null);
-            if (text == null) continue;
             if (top == double.MaxValue) { top = 0; left = 0; }
             sb.Append(Math.Round(top).ToString(ci)).Append('\t')
               .Append(Math.Round(left).ToString(ci)).Append('\t')
-              .Append(text).Append('\n');
+              .Append(line.Text).Append('\n');
         }
         return sb.ToString();
     }
 
     /* 建一个中文 OCR 引擎。系统没装中文识别包时抛一条**看得懂**的话。 */
-    static object CreateOcrEngine()
+    static OcrEngine CreateOcrEngine()
     {
-        var langType = Type.GetType("Windows.Globalization.Language, Windows.Globalization, ContentType=WindowsRuntime", true);
-        var engineType = Type.GetType("Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime", true);
-        var tryCreate = engineType.GetMethod("TryCreateFromLanguage", BindingFlags.Public | BindingFlags.Static);
-
         var tries = new[] { "zh-Hans-CN", "zh-Hant-TW", System.Globalization.CultureInfo.CurrentUICulture.Name };
         foreach (var tag in tries)
         {
             if (string.IsNullOrEmpty(tag)) continue;
             try
             {
-                var lang = Activator.CreateInstance(langType, new object[] { tag });
-                var eng = tryCreate.Invoke(null, new object[] { lang });
+                var eng = OcrEngine.TryCreateFromLanguage(new Language(tag));
                 if (eng != null) return eng;
             }
             catch { }
         }
-        // 兜底：用系统第一个可用语言
-        try
+        foreach (var lang in OcrEngine.AvailableRecognizerLanguages)
         {
-            var avail = (System.Collections.IEnumerable)engineType
-                .GetProperty("AvailableRecognizerLanguages", BindingFlags.Public | BindingFlags.Static).GetValue(null, null);
-            foreach (var lang in avail)
-            {
-                var eng = tryCreate.Invoke(null, new object[] { lang });
-                if (eng != null) return eng;
-            }
+            var eng = OcrEngine.TryCreateFromLanguage(lang);
+            if (eng != null) return eng;
         }
-        catch { }
-
         throw new NotSupportedException(
             "本机没装中文 OCR 识别包。请到「设置 → 时间和语言 → 语言和区域」，" +
             "在中文下添加「可选语言功能 → 光学字符识别」，装完重开程序。\n" +
             "（英文包不够用：排盘表里全是汉字。）");
-    }
-
-    // 同名不覆盖：xxx.json → xxx (2).json
-    static string UniquePath(string dir, string name)
-    {
-        var target = Path.Combine(dir, name);
-        if (!File.Exists(target)) return target;
-        var stem = Path.GetFileNameWithoutExtension(name);
-        var ext = Path.GetExtension(name);
-        for (var i = 2; i < 1000; i++)
-        {
-            var t = Path.Combine(dir, stem + " (" + i + ")" + ext);
-            if (!File.Exists(t)) return t;
-        }
-        return Path.Combine(dir, stem + "-" + DateTime.Now.ToString("HHmmss") + ext);
-    }
-
-    // 只允许简单的文件名，禁止目录穿越
-    static string DataPath(string name)
-    {
-        var safe = new StringBuilder();
-        foreach (var ch in (name ?? ""))
-        {
-            if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.' || ch == ' ') safe.Append(ch);
-        }
-        var n = safe.ToString().Trim();
-        if (n.Length == 0) n = "unnamed.json";
-        if (!n.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) n += ".json";
-        return Path.Combine(DataDir(), n);
     }
 
     /* ---------- 崩溃日志 ---------- */
