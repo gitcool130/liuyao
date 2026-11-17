@@ -347,19 +347,52 @@ static class Shell
         return dir;
     }
 
+    // 同名不覆盖：xxx.json → xxx (2).json
+    static string UniquePath(string dir, string name)
+    {
+        var target = Path.Combine(dir, name);
+        if (!File.Exists(target)) return target;
+        var stem = Path.GetFileNameWithoutExtension(name);
+        var ext = Path.GetExtension(name);
+        for (var i = 2; i < 1000; i++)
+        {
+            var t = Path.Combine(dir, stem + " (" + i + ")" + ext);
+            if (!File.Exists(t)) return t;
+        }
+        return Path.Combine(dir, stem + "-" + DateTime.Now.ToString("HHmmss") + ext);
+    }
+
+    // 只允许简单的文件名，禁止目录穿越
+    static string DataPath(string name)
+    {
+        var safe = new StringBuilder();
+        foreach (var ch in (name ?? ""))
+        {
+            if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.' || ch == ' ') safe.Append(ch);
+        }
+        var n = safe.ToString().Trim();
+        if (n.Length == 0) n = "unnamed.json";
+        if (!n.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) n += ".json";
+        return Path.Combine(DataDir(), n);
+    }
+
     /* ---------- 截图导入排盘：选图 + 系统 OCR ----------
      *
      * 为什么放外壳做：页面（WebView2 里的 JS）没有系统 OCR 的能力，
      * 而 Windows 10/11 自带 Windows.Media.Ocr（中文识别包 zh-Hans-CN 随系统语言装），
      * 不引第三方组件、不联网、不传图——王哥要的「本地 OCR」正是这条。
      *
-     * 三个坑（都实测过）：
-     *  1. .NET Framework 4.x + 内嵌资源里**没有** System.Runtime.WindowsRuntime，
-     *     所以 `await WinRT 异步方法` 编不过，AsTask 也不存在。这里统一用
-     *     IAsyncOperation.Completed 回调 + ManualResetEvent 同步等待。
-     *  2. WinRT 类型必须延迟到方法体里解析（先 AppDomain.AssemblyResolve 就位），
-     *     所以两个方法体里一律用**反射**取类型，方法签名不出现 WinRT 类型。
-     *  3. StorageFile.GetFileFromPathAsync 对路径里的非 ASCII 会报
+     * 四个坑（都实测过）：
+     *  1. **不能用反射**：WinRT 异步方法返回 System.__ComObject，在它上面
+     *     GetProperty("Status") / GetMethod("GetResults") / GetEvent("Completed")
+     *     全部返回 null（只有 7 个 Object 基成员）——投影缺失，反射一条路都走不通。
+     *     必须编译期引 winmd + System.Runtime.WindowsRuntime，用强类型调用。
+     *  2. **不能 await op 直接等**：.NET Framework 的 IAsyncOperation awaiter 来自
+     *     扩展方法，实测编译报 CS4028。改用 ToTask() 自己包 TaskCompletionSource。
+     *  3. **不能在 UI 线程上同步等**：WinRT 完成回调要 marshal 回创建它的线程，
+     *     那条线程若被堵住（GetResult/WaitOne），消息泵不转 → 死锁。
+     *     调用方已用 Task.Run 丢到后台（MTA）线程。
+     *  4. StorageFile.GetFileFromPathAsync 对含非 ASCII 的路径报
      *     「包含一个或多个无效字符」（实测中文目录直接失败），
      *     所以图片走 File.ReadAllBytes → 内存流（InMemoryRandomAccessStream）。
      */
@@ -396,6 +429,32 @@ static class Shell
      *   ② StorageFile.GetFileFromPathAsync 对含非 ASCII 的路径会报
      *      「包含一个或多个无效字符」，所以图片走 File.ReadAllBytes → 内存流。
      */
+    /* WinRT 异步 → Task。
+     *
+     * 为什么不用 await op 直接等：.NET Framework 里 IAsyncOperation<T> 的 awaiter
+     * 由 System.Runtime.WindowsRuntime 的扩展方法提供，实测编译报 CS4028
+     * 「'await' requires that the type ... have a suitable GetAwaiter method」
+     * （Facades 一并引用后扩展方法解析被搅乱）。这里干脆自己包一层 TaskCompletionSource，
+     * await 一个原生 Task，不依赖任何扩展方法。 */
+    static System.Threading.Tasks.Task<T> ToTask<T>(IAsyncOperation<T> op)
+    {
+        var tcs = new System.Threading.Tasks.TaskCompletionSource<T>();
+        if (op == null) { tcs.SetException(new ArgumentNullException("op")); return tcs.Task; }
+        if (op.Status == AsyncStatus.Completed) { tcs.SetResult(op.GetResults()); return tcs.Task; }
+        if (op.Status != AsyncStatus.Started)
+        {
+            tcs.SetException(new InvalidOperationException("WinRT 异步失败：AsyncStatus=" + op.Status));
+            return tcs.Task;
+        }
+        op.Completed = (o, st) =>
+        {
+            if (st == AsyncStatus.Completed) { try { tcs.SetResult(o.GetResults()); } catch (Exception e) { tcs.SetException(e); } }
+            else if (st == AsyncStatus.Canceled) { tcs.SetCanceled(); }
+            else { tcs.SetException(new InvalidOperationException("WinRT 异步失败：AsyncStatus=" + st)); }
+        };
+        return tcs.Task;
+    }
+
     static async System.Threading.Tasks.Task<string> OcrImageAsync(string path)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
@@ -405,17 +464,17 @@ static class Shell
         var stream = new InMemoryRandomAccessStream();
         var writer = new DataWriter(stream);
         writer.WriteBytes(bytes);
-        await writer.StoreAsync();
-        await writer.FlushAsync();
+        await ToTask(writer.StoreAsync());
+        await ToTask(writer.FlushAsync());
         writer.DetachStream();
         stream.Seek(0UL);
 
-        var decoder = await BitmapDecoder.CreateAsync(stream);
-        var bmp = await decoder.GetSoftwareBitmapAsync();
+        var decoder = await ToTask(BitmapDecoder.CreateAsync(stream));
+        var bmp = await ToTask(decoder.GetSoftwareBitmapAsync());
         int w = bmp.PixelWidth, h = bmp.PixelHeight;
 
         var engine = CreateOcrEngine();
-        var result = await engine.RecognizeAsync(bmp);
+        var result = await ToTask(engine.RecognizeAsync(bmp));
 
         var sb = new StringBuilder();
         sb.Append("SIZE\t").Append(w).Append('\t').Append(h).Append('\n');
