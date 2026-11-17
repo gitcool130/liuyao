@@ -39,6 +39,19 @@ async function launchBrowser() {
 
   await page.goto(BASE + '/index.html?local=1', { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#btnRandom', { timeout: 20000 });
+  /* app.js 初始化跑完才置位 window.__lyReady。慢机器上「等固定毫秒」会假失败
+   * （2026-11-17 CI 上「结果区空态」「点数字卦没反应」两条就是这么挂的）。 */
+  await page.waitForFunction('window.__lyReady === true', { timeout: 30000 });
+  /* 初始化若在中间某步挂了，页面会留 __lyInitError（app.js 的 step() 写的）。
+   * 这里直接把它打出来——否则只能看到「结果区空白」「按钮没反应」这类下游假象。 */
+  const initErr = await page.evaluate(() => window.__lyInitError || null);
+  if (initErr) {
+    console.log('  ✗ 初始化失败于「' + initErr.step + '」：' + initErr.message);
+    console.log('    ' + String(initErr.stack || '').split('\n').slice(0, 4).join('\n    '));
+    fail++;
+  } else {
+    pass++;
+  }
 
   /* ---------- A. 本地模式生效 ---------- */
   say('A. 本地接口层');
@@ -943,4 +956,7 @@ async function launchBrowser() {
   await browser.close();
   console.log('\n干支排盘 UI 冒烟：通过 ' + pass + '　失败 ' + fail);
   process.exit(fail ? 1 : 0);
-})().catch(e => { console.error('SCRIPT FAIL:', e && e.message); process.exit(1); });
+})().catch(function (e) {
+  console.error('SCRIPT FAIL:', e && e.message);
+  process.exit(1);
+});

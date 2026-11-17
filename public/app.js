@@ -4796,22 +4796,53 @@
     lnRenderAll();
   }
 
-  initPanFont();
-  initShenshaToggle();
-  initLunar();
-  renderModelChips();
+  /* 初始化包一层：任何一处抛错都要**看得见**。
+   * 现在的样子是「初始化中途挂了 → 页面半死：按钮点不动、结果区空白」，
+   * 用户只会认为程序坏了（本地与 CI 表现还不一致，2026-11-17 排查花了很久）。
+   * 这里把错误连同失败的那一步一起写到页面顶部，并留在 window.__lyInitError 里
+   * 供冒烟测试读取——比让人对着空界面猜强得多。 */
+  const INIT_STEPS = [];
+  function step(name, fn) {
+    INIT_STEPS.push(name);
+    try { fn(); return true; }
+    catch (e) {
+      const msg = (e && e.message) ? e.message : String(e);
+      window.__lyInitError = { step: name, message: msg, stack: (e && e.stack) || '' };
+      try { console.error('[ly-init] ' + name + ' 失败：' + msg, e); } catch (e2) { }
+      var box = document.createElement('div');
+      box.id = 'lyInitFail';
+      box.style.cssText = 'margin:12px;padding:10px 14px;border:1px solid #b22c2c;border-radius:8px;' +
+        'background:#fff8f6;color:#3a2b22;font-size:13px;line-height:1.8';
+      box.innerHTML = '<b>界面初始化在「' + name + '」这一步出错</b><br>' + msg +
+        '<br><span style="color:#8d8578">排盘内核可能仍可用；若按钮无反应，请按 Ctrl+F5 强制刷新。</span>';
+      try { document.body.insertBefore(box, document.body.firstChild); } catch (e3) { }
+      return false;
+    }
+  }
+
+  step('排盘字号', initPanFont);
+  step('神煞开关', initShenshaToggle);
+  step('中国农历', initLunar);
+  step('模型芯片', renderModelChips);
   loadModels();
   // 供「AI 接口设置」保存后即时刷新模型芯片（本地接口层不重启页面就能生效）
   window.__lyReloadModels = loadModels;
   renderLoginBtn();
   // 干支排盘：先铺选项，再把默认值设成「今天的月建与日辰」（打开即可用）
-  fillGzSelects();
-  gzAdoptToday();
-  gzRefresh();
-  renderTime();
-  renderCoins();
-  renderTossHint();
-  renderStack();
-  renderAIEmpty();      // 一进来「断卦结果」就要有说明，不能是空白 div
-  restoreFromShare();
+  step('干支下拉', fillGzSelects);
+  step('干支默认值', gzAdoptToday);
+  step('干支预览', gzRefresh);
+  step('占时', renderTime);
+  step('铜钱', renderCoins);
+  step('摇卦提示', renderTossHint);
+  step('爻栈', renderStack);
+  step('断卦空态', renderAIEmpty);   // 一进来「断卦结果」就要有说明，不能是空白 div
+  step('分享链接', restoreFromShare);
+
+  /* 初始化完成标记。为什么要它：
+   * 冒烟测试原来靠「waitForSelector('#btnRandom') + 等 600ms」判断页面就绪，
+   * 本地快机器够用，GitHub Actions 的慢机器上初始化还没跑完就开始断言，
+   * 于是「结果区空态」「点数字卦没反应」这类**假失败**接连出现（2026-11-17 实测）。
+   * 页面自己宣告「我准备好了」，测试等这个标志，比猜时间可靠。 */
+  window.__lyReady = true;
 })();
