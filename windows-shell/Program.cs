@@ -25,7 +25,8 @@ using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 /* WinRT 投影：编译期需引用 System.Runtime.WindowsRuntime.dll 与 WinMetadata\*.winmd，
  * 见 Program.cs 顶部 OcrImageAsync 的注释（反射拿不到 WinRT 成员，只能走强类型）。 */
-using Windows.Foundation;
+/* 不引 Windows.Foundation 整个命名空间：它里面的 Size 会与 System.Drawing.Size
+ * 撞成 CS0104（WebView2 那边也用 Size）。下面统一写全名。 */
 using Windows.Globalization;
 using Windows.Graphics.Imaging;
 using Windows.Media.Ocr;
@@ -436,20 +437,20 @@ static class Shell
      * 「'await' requires that the type ... have a suitable GetAwaiter method」
      * （Facades 一并引用后扩展方法解析被搅乱）。这里干脆自己包一层 TaskCompletionSource，
      * await 一个原生 Task，不依赖任何扩展方法。 */
-    static System.Threading.Tasks.Task<T> ToTask<T>(IAsyncOperation<T> op)
+    static System.Threading.Tasks.Task<T> ToTask<T>(Windows.Foundation.IAsyncOperation<T> op)
     {
         var tcs = new System.Threading.Tasks.TaskCompletionSource<T>();
         if (op == null) { tcs.SetException(new ArgumentNullException("op")); return tcs.Task; }
-        if (op.Status == AsyncStatus.Completed) { tcs.SetResult(op.GetResults()); return tcs.Task; }
-        if (op.Status != AsyncStatus.Started)
+        if (op.Status == Windows.Foundation.AsyncStatus.Completed) { tcs.SetResult(op.GetResults()); return tcs.Task; }
+        if (op.Status != Windows.Foundation.AsyncStatus.Started)
         {
             tcs.SetException(new InvalidOperationException("WinRT 异步失败：AsyncStatus=" + op.Status));
             return tcs.Task;
         }
         op.Completed = (o, st) =>
         {
-            if (st == AsyncStatus.Completed) { try { tcs.SetResult(o.GetResults()); } catch (Exception e) { tcs.SetException(e); } }
-            else if (st == AsyncStatus.Canceled) { tcs.SetCanceled(); }
+            if (st == Windows.Foundation.AsyncStatus.Completed) { try { tcs.SetResult(o.GetResults()); } catch (Exception e) { tcs.SetException(e); } }
+            else if (st == Windows.Foundation.AsyncStatus.Canceled) { tcs.SetCanceled(); }
             else { tcs.SetException(new InvalidOperationException("WinRT 异步失败：AsyncStatus=" + st)); }
         };
         return tcs.Task;
