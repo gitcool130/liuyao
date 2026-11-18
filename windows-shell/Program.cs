@@ -606,15 +606,55 @@ static class Shell
         return "";
     }
 
-    /* 同步文件放哪：<OneDrive>\莲斋六爻排盘\sync\
-     * 用中文目录名，用户在资源管理器里一眼知道是什么；sync 子目录避免和别的混。 */
+    /* 同步文件放哪：<OneDrive>\备份配置\莲斋六爻排盘\sync\
+     *
+     * 王哥 2026-11-18 要求统一放到「备份配置」下（那里已经放了 RimeSync 等
+     * 其它备份），所有需要同步的东西都在一个树里，好找也好整体搬走。
+     *
+     * 旧位置是 <OneDrive>\莲斋六爻排盘\sync。老用户升级后那里可能已经有
+     * 别的设备写过的文件，直接换目录会让那些记录「消失」，所以启动/列目录时
+     * 先做一次迁移（复制，不删旧文件）。 */
+    const string SyncSubDir = @"备份配置\莲斋六爻排盘\sync";
+    const string SyncSubDirLegacy = @"莲斋六爻排盘\sync";
+
     static string SyncDir()
     {
         var od = FindOneDriveRoot();
         if (string.IsNullOrEmpty(od)) return "";
-        var dir = Path.Combine(od, "莲斋六爻排盘", "sync");
+        var dir = Path.Combine(od, SyncSubDir);
         try { Directory.CreateDirectory(dir); } catch { return ""; }
         return dir;
+    }
+
+    /* 旧同步目录（升级前用的）。没有就返回空串。 */
+    static string LegacySyncDir()
+    {
+        var od = FindOneDriveRoot();
+        if (string.IsNullOrEmpty(od)) return "";
+        var dir = Path.Combine(od, SyncSubDirLegacy);
+        try { return Directory.Exists(dir) ? dir : ""; } catch { return ""; }
+    }
+
+    /* 把旧目录里的同步文件搬到新目录。
+     * 只复制新目录里**还没有**的文件：两边都有时以新目录为准（它才是当前在用的），
+     * 不覆盖，免得出问题。旧文件不动——删别人的数据必须有明确指令。 */
+    static void MigrateLegacySync()
+    {
+        try
+        {
+            var oldDir = LegacySyncDir();
+            if (string.IsNullOrEmpty(oldDir)) return;
+            var newDir = SyncDir();
+            if (string.IsNullOrEmpty(newDir) || string.Equals(oldDir, newDir, StringComparison.OrdinalIgnoreCase)) return;
+            foreach (var f in Directory.GetFiles(oldDir, "*.json"))
+            {
+                var target = Path.Combine(newDir, Path.GetFileName(f));
+                if (File.Exists(target)) continue;      // 新目录已有，不覆盖
+                try { File.Copy(f, target, false); Log("同步目录迁移→ " + target, null); }
+                catch (Exception ex) { Log("同步目录迁移失败 " + f, ex); }
+            }
+        }
+        catch (Exception ex) { Log("MigrateLegacySync", ex); }
     }
 
     /* 只允许 <deviceId>.json 这种名字，防目录穿越 */
@@ -645,6 +685,9 @@ static class Shell
             return SyncDir();
         if (string.Equals(action, "list", StringComparison.OrdinalIgnoreCase))
         {
+            /* 列目录前先把旧位置的文件迁过来：用户升级后第一次同步就能看到
+             * 之前同步过的内容，不会以为「记录丢了」。 */
+            MigrateLegacySync();
             var dir = SyncDir();
             if (string.IsNullOrEmpty(dir)) return "";
             var sb = new StringBuilder();

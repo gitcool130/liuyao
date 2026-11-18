@@ -65,7 +65,7 @@ async function makeDevice(browser, remote, label, seedRecs) {
             if (op === 'odsync') {
               const seg = name.split('\u0002');
               const action = seg[0], file = seg[1] || '';
-              if (action === 'dir') body = 'C:\\Users\\x\\OneDrive\\莲斋六爻排盘\\sync';
+              if (action === 'dir') body = 'C:\\Users\\x\\OneDrive\\备份配置\\莲斋六爻排盘\\sync';
               else if (action === 'list') body = Object.keys(dirFiles).join('\u0001');
               else if (action === 'read') body = dirFiles[file] || '';
               else if (action === 'write') { dirFiles[file] = payload; localStorage.setItem(KEY, JSON.stringify(dirFiles)); body = 'ok'; }
