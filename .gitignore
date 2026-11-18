@@ -22,3 +22,4 @@ l-probe.js
 node_modules/
 
 l-probe*.js
+.gitmsg.txt
