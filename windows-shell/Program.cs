@@ -691,6 +691,8 @@ static class Shell
      * （只管 <d:href>，任何前缀都认）。 */
     static string WebDav(string verb, string name, string payload)
     {
+        // XML 里的引号：用 char 拼，躲开 C# 字符串转义（直接写 \" 极易出错）
+        const char Q = '"';
         var lines = (payload ?? "").Split(new[] { '\n' }, 4);
         var url = lines.Length > 0 ? lines[0].Trim() : "";
         var user = lines.Length > 1 ? lines[1] : "";
@@ -753,8 +755,8 @@ static class Shell
         {
             req.Headers["Depth"] = "1";
             req.ContentType = "application/xml; charset=utf-8";
-            var xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
-                      "<d:propfind xmlns:d=\"DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>";
+            var xml = "<?xml version=" + Q + "1.0" + Q + " encoding=" + Q + "utf-8" + Q + "?>" +
+                      "<d:propfind xmlns:d=" + Q + "DAV:" + Q + "><d:prop><d:resourcetype/></d:prop></d:propfind>";
             var bytes = Encoding.UTF8.GetBytes(xml);
             req.ContentLength = bytes.Length;
             using (var s = req.GetRequestStream()) s.Write(bytes, 0, bytes.Length);
