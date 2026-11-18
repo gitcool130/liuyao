@@ -754,7 +754,7 @@ static class Shell
             req.Headers["Depth"] = "1";
             req.ContentType = "application/xml; charset=utf-8";
             var xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
-                      "<d:propfind xmlns:d=\"DAV:/"><d:prop><d:resourcetype/></d:prop></d:propfind>";
+                      "<d:propfind xmlns:d=\"DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>";
             var bytes = Encoding.UTF8.GetBytes(xml);
             req.ContentLength = bytes.Length;
             using (var s = req.GetRequestStream()) s.Write(bytes, 0, bytes.Length);
