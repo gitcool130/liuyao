@@ -335,6 +335,32 @@
       })();
     }
 
+    /* 整库落地（2026-11-18）：同步专用。
+     *
+     * 为什么不能逐条 POST：本地层每次写都会把 updated_at 刷成「现在」，
+     * 于是「谁的更新时间更晚」这个合并依据就被自己改写掉了——同步两轮之后
+     * 所有记录的时间戳都变成同一时刻，LWW 彻底失效，结果靠运气。
+     * 这里原样保留每条记录的 updated_at。
+     *
+     * 只在同步里用（?replace=1），页面代码不会碰到它。 */
+    if (q.get('replace')) {
+      return (async function () {
+        let b; try { b = await req.json(); } catch (e) { return json({ error: 'BAD_JSON' }, 400); }
+        const arr = b && Array.isArray(b.records) ? b.records : null;
+        if (!arr) return json({ error: 'BAD_FIELD', message: 'records 须为数组' }, 400);
+        if (arr.length > 5000) return json({ error: 'TOO_MANY', message: '记录过多（上限 5000）' }, 400);
+        const ok = [];
+        for (let i = 0; i < arr.length; i++) {
+          const r = arr[i];
+          if (!r || typeof r !== 'object') continue;
+          if (typeof r.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(r.id)) continue;
+          ok.push(r);
+        }
+        if (!(await writeRecs(ok))) return json({ error: 'STORAGE_FULL', message: '本机存储写入失败' }, 507);
+        return json({ ok: true, count: ok.length });
+      })();
+    }
+
     if (q.get('id')) {
       const id = q.get('id');
       const hit = recs.filter(function (r) { return r.id === id; })[0];

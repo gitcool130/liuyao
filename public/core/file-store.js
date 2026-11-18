@@ -82,6 +82,19 @@
       });
     },
     // 对图片跑系统 OCR → 返回 "top\tleft\ttext" 多行（首行是 "SIZE\tw\th"）
-    ocr: function (path) { return call('ocr', path, '', 120000); }
+    ocr: function (path) { return call('ocr', path, '', 120000); },
+
+    /* ---------- 卦例同步 ----------
+     * 两个后端都需要桌面壳：OneDrive 要写本机同步文件夹（没有 WebDAV 端点），
+     * WebDAV 要发 PROPFIND/PUT（浏览器跨域做不了），都由壳代劳。
+     * 动作与文件名用 \u0002 拼在 name 里——协议只有四段，name 不能含换行。 */
+    // action: 'dir' | 'list' | 'read' | 'write'
+    odSync: function (action, file, text) {
+      return call('odsync', action + '\u0002' + (file || ''), text == null ? '' : text, 120000);
+    },
+    // verb: 'LIST' | 'READ' | 'WRITE'；payload 四行 url/user/pass/body
+    dav: function (verb, file, payload) {
+      return call('dav', verb + '\u0002' + (file || ''), payload == null ? '' : payload, 120000);
+    }
   };
 })(typeof window !== 'undefined' ? window : globalThis);

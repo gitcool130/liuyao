@@ -235,6 +235,22 @@ static class Shell
                             case "pickimage":
                                 body = PickImagePath(ref status);
                                 break;
+                            /* 卦例同步：OneDrive 文件夹（本机路径，客户端负责上传） */
+                            /* name 里用 \u0002 拆成「动作 + 文件名」：
+                             * 协议只有 op/id/name/payload 四段，name 不能含换行。 */
+                            case "odsync":
+                                {
+                                    var seg = (name ?? "").Split(new[] { '\u0002' }, 2);
+                                    body = OneDriveSync(seg[0], seg.Length > 1 ? seg[1] : "", payload);
+                                }
+                                break;
+                            /* 卦例同步：WebDAV 代发请求（payload 四行：url/user/pass/body） */
+                            case "dav":
+                                {
+                                    var seg = (name ?? "").Split(new[] { '\u0002' }, 2);
+                                    body = WebDav(seg[0], seg.Length > 1 ? seg[1] : "", payload);
+                                }
+                                break;
                             /* 对指定图片跑系统 OCR（Windows.Media.Ocr），返回逐行
                              * "top\tleft\ttext"，与 core/ocr-paipan.js 的输入格式一致。
                              *
@@ -520,6 +536,275 @@ static class Shell
             "本机没装中文 OCR 识别包。请到「设置 → 时间和语言 → 语言和区域」，" +
             "在中文下添加「可选语言功能 → 光学字符识别」，装完重开程序。\n" +
             "（英文包不够用：排盘表里全是汉字。）");
+    }
+
+    /* ---------- 卦例同步：OneDrive 文件夹 + WebDAV ----------
+     *
+     * 为什么 OneDrive 走「本机文件夹」而不是 WebDAV：
+     *   OneDrive 早就没有公开的 WebDAV 端点了（早年 SkyDrive 有，2016 前后关闭），
+     *   现在只能靠官方客户端。所以直接把同步文件写进本机 OneDrive 文件夹，
+     *   由客户端负责上传/下载——不需要任何令牌，也不需要用户配密码。
+     *
+     * 为什么 WebDAV 必须放在壳里：
+     *   浏览器里发不了 WebDAV 的 PROPFIND（跨域预检必然失败），Basic 认证头
+     *   也会被 CORS 拦。所以由 .NET 的 HttpWebRequest 代发，页面只跟壳对话。
+     */
+
+    /* 在本机找 OneDrive 同步文件夹。顺序：
+     *   ① 环境变量 OneDrive / OneDriveCommercial（最准，装的时候由系统写入）
+     *   ② %USERPROFILE%\OneDrive（默认位置）
+     *   ③ 注册表 HKCU\Software\Microsoft\OneDrive\Accounts\*\UserFolder
+     *      （用户改过位置时只有这里记着；企业版还分 Personal / Business1）
+     * 找到的第一个存在的目录就返回；都没有则返回空，由页面提示「未装 OneDrive」。 */
+    static string FindOneDriveRoot()
+    {
+        var cands = new List<string>();
+        try
+        {
+            var e1 = Environment.GetEnvironmentVariable("OneDrive");
+            if (!string.IsNullOrEmpty(e1)) cands.Add(e1);
+            var e2 = Environment.GetEnvironmentVariable("OneDriveCommercial");
+            if (!string.IsNullOrEmpty(e2)) cands.Add(e2);
+            var e3 = Environment.GetEnvironmentVariable("OneDriveConsumer");
+            if (!string.IsNullOrEmpty(e3)) cands.Add(e3);
+        }
+        catch { }
+
+        try
+        {
+            var up = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(up)) cands.Add(Path.Combine(up, "OneDrive"));
+        }
+        catch { }
+
+        // 注册表：改过同步位置的用户只能从这里拿到真实路径
+        try
+        {
+            using (var accounts = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\OneDrive\Accounts"))
+            {
+                if (accounts != null)
+                {
+                    foreach (var sub in accounts.GetSubKeyNames())
+                    {
+                        using (var acct = accounts.OpenSubKey(sub))
+                        {
+                            if (acct == null) continue;
+                            var uf = acct.GetValue("UserFolder") as string;
+                            if (!string.IsNullOrEmpty(uf) && !cands.Contains(uf)) cands.Add(uf);
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+
+        foreach (var c in cands)
+        {
+            try { if (Directory.Exists(c)) return c; } catch { }
+        }
+        return "";
+    }
+
+    /* 同步文件放哪：<OneDrive>\莲斋六爻排盘\sync\
+     * 用中文目录名，用户在资源管理器里一眼知道是什么；sync 子目录避免和别的混。 */
+    static string SyncDir()
+    {
+        var od = FindOneDriveRoot();
+        if (string.IsNullOrEmpty(od)) return "";
+        var dir = Path.Combine(od, "莲斋六爻排盘", "sync");
+        try { Directory.CreateDirectory(dir); } catch { return ""; }
+        return dir;
+    }
+
+    /* 只允许 <deviceId>.json 这种名字，防目录穿越 */
+    static string SyncPath(string name)
+    {
+        var safe = new StringBuilder();
+        foreach (var ch in (name ?? ""))
+        {
+            if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.') safe.Append(ch);
+        }
+        var n = safe.ToString().Trim();
+        if (n.Length == 0 || n == ".json") throw new InvalidOperationException("同步文件名非法");
+        if (!n.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) n += ".json";
+        var dir = SyncDir();
+        if (string.IsNullOrEmpty(dir)) throw new InvalidOperationException("找不到 OneDrive 文件夹");
+        return Path.Combine(dir, n);
+    }
+
+    /* OneDrive 同步通道。
+     *   action=dir   → 返回同步目录（找不到 OneDrive 时返回空串，不抛错）
+     *   action=list  → 返回 "\u0001" 分隔的文件名
+     *   action=read  → 返回文件正文（不存在返回空串）
+     *   action=write → 写文件，返回路径
+     */
+    static string OneDriveSync(string action, string name, string payload)
+    {
+        if (string.Equals(action, "dir", StringComparison.OrdinalIgnoreCase))
+            return SyncDir();
+        if (string.Equals(action, "list", StringComparison.OrdinalIgnoreCase))
+        {
+            var dir = SyncDir();
+            if (string.IsNullOrEmpty(dir)) return "";
+            var sb = new StringBuilder();
+            foreach (var f in Directory.GetFiles(dir, "*.json"))
+            {
+                if (sb.Length > 0) sb.Append('\u0001');
+                sb.Append(Path.GetFileName(f));
+            }
+            return sb.ToString();
+        }
+        if (string.Equals(action, "read", StringComparison.OrdinalIgnoreCase))
+        {
+            var p = SyncPath(name);
+            return File.Exists(p) ? File.ReadAllText(p, Encoding.UTF8) : "";
+        }
+        if (string.Equals(action, "write", StringComparison.OrdinalIgnoreCase))
+        {
+            var p = SyncPath(name);
+            /* 先写临时文件再替换：OneDrive 客户端会盯着目录，
+             * 直接覆盖可能被它读到一个写了一半的文件（然后同步出去半份）。 */
+            var tmp = p + ".tmp";
+            File.WriteAllText(tmp, payload ?? "", new UTF8Encoding(false));
+            try
+            {
+                if (File.Exists(p)) File.Delete(p);
+                File.Move(tmp, p);
+            }
+            catch
+            {
+                // 被占用（OneDrive 正在上传）时退化成直接写，至少别丢数据
+                try { File.WriteAllText(p, payload ?? "", new UTF8Encoding(false)); } catch { }
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            }
+            return p;
+        }
+        throw new InvalidOperationException("未知的 OneDrive 动作：" + action);
+    }
+
+    /* WebDAV 通道。name 形如 "LIST" / "READ <file>" / "WRITE <file>"，
+     * payload 四行：url \n user \n pass \n body。
+     *
+     * 手搓 XML 只为 LIST：PROPFIND 的响应要解析出文件名。
+     * 不用 System.Xml 是因为壳走内嵌资源、只引了最小程序集；正则足够稳
+     * （只管 <d:href>，任何前缀都认）。 */
+    static string WebDav(string verb, string name, string payload)
+    {
+        var lines = (payload ?? "").Split(new[] { '\n' }, 4);
+        var url = lines.Length > 0 ? lines[0].Trim() : "";
+        var user = lines.Length > 1 ? lines[1] : "";
+        var pass = lines.Length > 2 ? lines[2] : "";
+        var body = lines.Length > 3 ? lines[3] : "";
+        if (string.IsNullOrEmpty(url)) throw new InvalidOperationException("WebDAV 地址为空");
+
+        var baseUrl = url.TrimEnd('/');
+        var file = (name ?? "").Trim();
+        // 文件名只允许简单字符：排盘生成的设备号都是这个形态
+        if (file.Length > 0)
+        {
+            var safe = new StringBuilder();
+            foreach (var ch in file)
+            {
+                if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.') safe.Append(ch);
+            }
+            if (safe.Length == 0) throw new InvalidOperationException("WebDAV 文件名非法");
+            file = safe.ToString();
+            if (!file.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) file += ".json";
+        }
+
+        var v = (verb ?? "").Trim().ToUpperInvariant();
+        string target;
+        string method;
+        if (v == "LIST")
+        {
+            // 目录本身必须带斜杠，否则某些服务端会 301
+            target = baseUrl + "/";
+            method = "PROPFIND";
+        }
+        else if (v == "READ")
+        {
+            target = baseUrl + "/" + Uri.EscapeDataString(file);
+            method = "GET";
+        }
+        else if (v == "WRITE")
+        {
+            target = baseUrl + "/" + Uri.EscapeDataString(file);
+            method = "PUT";
+        }
+        else
+        {
+            throw new InvalidOperationException("未知的 WebDAV 动作：" + verb);
+        }
+
+        var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(target);
+        req.Method = method;
+        req.Timeout = 30000;
+        req.ReadWriteTimeout = 60000;
+        req.UserAgent = "LianZhaiLiuYao/" + AppTitle;
+        req.AllowAutoRedirect = true;
+        if (!string.IsNullOrEmpty(user) || !string.IsNullOrEmpty(pass))
+        {
+            req.Headers["Authorization"] = "Basic " + Convert.ToBase64String(
+                Encoding.UTF8.GetBytes((user ?? "") + ":" + (pass ?? "")));
+        }
+
+        if (method == "PROPFIND")
+        {
+            req.Headers["Depth"] = "1";
+            req.ContentType = "application/xml; charset=utf-8";
+            var xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
+                      "<d:propfind xmlns:d=\"DAV:/"><d:prop><d:resourcetype/></d:prop></d:propfind>";
+            var bytes = Encoding.UTF8.GetBytes(xml);
+            req.ContentLength = bytes.Length;
+            using (var s = req.GetRequestStream()) s.Write(bytes, 0, bytes.Length);
+        }
+        else if (method == "PUT")
+        {
+            var bytes = new UTF8Encoding(false).GetBytes(body ?? "");
+            req.ContentType = "application/json; charset=utf-8";
+            req.ContentLength = bytes.Length;
+            using (var s = req.GetRequestStream()) s.Write(bytes, 0, bytes.Length);
+        }
+
+        try
+        {
+            using (var resp = (System.Net.HttpWebResponse)req.GetResponse())
+            using (var rs = resp.GetResponseStream())
+            using (var sr = new StreamReader(rs, Encoding.UTF8))
+            {
+                return sr.ReadToEnd();
+            }
+        }
+        catch (System.Net.WebException we)
+        {
+            /* WebDAV 的 404 / 409 在 .NET 里都表现成 WebException。
+             * 404 对 READ 是正常情况（远端还没有这个文件），返回空串让它继续；
+             * 别的错误把状态码和正文带出来，不然用户只看到「远程服务器返回错误」。 */
+            var r = we.Response as System.Net.HttpWebResponse;
+            if (r != null)
+            {
+                int code = (int)r.StatusCode;
+                string detail = "";
+                try
+                {
+                    using (var es = r.GetResponseStream())
+                    using (var er = new StreamReader(es, Encoding.UTF8))
+                        detail = er.ReadToEnd();
+                }
+                catch { }
+                if (code == 404 && method == "GET") return "";
+                if (detail.Length > 300) detail = detail.Substring(0, 300);
+                var hint = code == 401
+                    ? "（账号或密码不对，很多服务商要用「应用密码」而不是登录密码）"
+                    : (code == 404 ? "（地址不对，或这个目录还不存在）"
+                    : (code == 403 ? "（没有权限）" : ""));
+                throw new InvalidOperationException(
+                    "WebDAV " + method + " 失败：HTTP " + code + hint +
+                    (detail.Length > 0 ? "\n" + detail : ""));
+            }
+            throw new InvalidOperationException("WebDAV " + method + " 失败：" + we.Message);
+        }
     }
 
     /* ---------- 崩溃日志 ---------- */

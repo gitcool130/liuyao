@@ -4403,6 +4403,11 @@
       const res = await apiFetch('/api/records?id=' + encodeURIComponent(id), { method: 'DELETE' });
       const d = await res.json();
       if (!res.ok) throw new Error(d.message || '删除失败');
+      /* 记一条墓碑。没有墓碑，别的机器还留着这条，它一同步就把删掉的卦例
+       * 「复活」了——多人多机同步里这是最常见的诡异现象。 */
+      if (LY.syncEngine && LY.syncEngine.noteDeleted) {
+        LY.syncEngine.noteDeleted(id).catch(function () { });
+      }
       const item = document.querySelector('.lib-item[data-id="' + id + '"]'); // id 已过 ^[A-Za-z0-9_-]{1,64}$ 白名单
       if (item) item.remove();
       $('#libDetail').innerHTML = '';
@@ -4750,6 +4755,203 @@
       return panClassicText(p);
     } catch (e) { return ''; }
   };
+
+  /* ---------- 云同步界面（2026-11-18） ----------
+   *
+   * 王哥要「把个人卦例同步到 OneDrive 或 WebDAV」，参考 LightRead 的同步。
+   * 两件事必须在界面上说清楚，否则用户必然踩：
+   *   ① OneDrive 没有 WebDAV 端点（2016 年就关了），所以它同步的是
+   *      「你本机的 OneDrive 文件夹」，由客户端负责上传——不需要登录、不要令牌。
+   *   ② WebDAV 的目录要自己先建好，程序不会替你创建父目录（多数网盘不允许）。
+   *
+   * 同步是双向合并，不是覆盖：两边各改各的也不会丢，删除靠墓碑传播。
+   */
+  function syncMsg(text, isErr) {
+    const el = $('#syncMsg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = isErr ? '#a5352c' : (text ? '#3f5a33' : '');
+  }
+
+  function syncDetail(text) {
+    const el = $('#syncDetail');
+    if (el) el.innerHTML = text || '';
+  }
+
+  /* 把配置回填到界面：单选、勾选、WebDAV 三个输入框 */
+  function syncFillForm(cfg) {
+    const c = cfg || LY.syncEngine.loadCfg();
+    const radios = document.querySelectorAll('input[name="syncBackend"]');
+    for (let i = 0; i < radios.length; i++) radios[i].checked = (radios[i].value === c.backend);
+    if ($('#syncAuto')) $('#syncAuto').checked = !!c.auto;
+    if ($('#syncDavUrl')) $('#syncDavUrl').value = c.davUrl || '';
+    if ($('#syncDavUser')) $('#syncDavUser').value = c.davUser || '';
+    if ($('#syncDavPass')) $('#syncDavPass').value = c.davPass || '';
+    syncShowBackend(c.backend);
+  }
+
+  /* 只显示当前后端需要的那块设置 */
+  function syncShowBackend(backend) {
+    const od = $('#syncOdBox'), dav = $('#syncDavBox');
+    if (od) od.hidden = backend !== 'onedrive';
+    if (dav) dav.hidden = backend !== 'webdav';
+    if (backend === 'onedrive') syncOdDir();
+  }
+
+  async function syncOdDir() {
+    const el = $('#syncOdDir');
+    if (!el) return;
+    const FS = LY_FS;
+    if (!FS || !FS.available || !FS.odSync) {
+      el.textContent = '浏览器里没有本机文件能力：请用桌面版程序。';
+      el.style.color = '#a5352c';
+      return;
+    }
+    try {
+      const dir = await FS.odSync('dir', '', '');
+      if (!dir) {
+        el.innerHTML = '没找到 OneDrive 文件夹。' +
+          '<br>可能没装 OneDrive，或者同步目录被移到了别处。装好 OneDrive 并登录后重新打开本程序即可。';
+        el.style.color = '#a5352c';
+      } else {
+        el.innerHTML = '同步到：<b>' + esc(dir) + '</b>' +
+          '<br>由 OneDrive 客户端负责上传；文件很小（几百条卦例也就几百 KB）。';
+        el.style.color = '';
+      }
+    } catch (e) {
+      el.textContent = '取 OneDrive 目录失败：' + ((e && e.message) || e);
+      el.style.color = '#a5352c';
+    }
+  }
+
+  /* 当前界面上的配置（不落盘，供「立即同步 / 测试连接」用） */
+  function syncFormCfg() {
+    const checked = document.querySelector('input[name="syncBackend"]:checked');
+    return {
+      backend: checked ? checked.value : '',
+      davUrl: ($('#syncDavUrl') || {}).value || '',
+      davUser: ($('#syncDavUser') || {}).value || '',
+      davPass: ($('#syncDavPass') || {}).value || '',
+      auto: !!($('#syncAuto') && $('#syncAuto').checked)
+    };
+  }
+
+  function syncPersist() {
+    const c = LY.syncEngine.loadCfg();
+    const f = syncFormCfg();
+    c.backend = f.backend;
+    c.davUrl = f.davUrl.trim();
+    c.davUser = f.davUser.trim();
+    c.davPass = f.davPass;
+    c.auto = f.auto;
+    LY.syncEngine.saveCfg(c);
+    return c;
+  }
+
+  /* 同步一次。silent=true 时（自动同步）不弹错误框，只写状态行 */
+  async function syncRun(silent) {
+    const btn = $('#btnSyncNow');
+    const c = syncPersist();
+    if (!c.backend) { if (!silent) syncMsg('先选同步方式（OneDrive 或 WebDAV）', true); return; }
+    if (c.backend === 'webdav' && !c.davUrl.trim()) {
+      if (!silent) syncMsg('先填 WebDAV 地址', true);
+      return;
+    }
+    if (btn) btn.disabled = true;
+    syncMsg('同步中…');
+    if (!silent) syncDetail('');
+    try {
+      const r = await LY.syncEngine.run({ backend: c.backend });
+      const d = r.diff || {};
+      syncMsg('同步完成 · 本机 ' + r.localCount + ' 条');
+      syncDetail(
+        '这次从别的设备取来 <b>' + d.added + '</b> 条，移除 <b>' + d.removed + '</b> 条；' +
+        '共 ' + r.devices + ' 台设备的记录参与合并。<br>' +
+        '<span class="muted">合并按「谁最后改过就以谁为准」，删除会传播到所有设备。</span>');
+      // 落地后列表要重载，否则界面还停在旧数据上
+      try { await loadLibPage(0, false); } catch (e) { }
+    } catch (e) {
+      const m = (e && e.message) || String(e);
+      syncMsg('同步失败：' + m, true);
+      if (!silent) { /* 已在状态行里说清楚，不再弹框打断 */ }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  /* 测试连接：只列目录，不落地 */
+  async function syncProbe() {
+    const c = syncPersist();
+    const FS = LY_FS;
+    if (!FS || !FS.available) { syncMsg('需要桌面版程序', true); return; }
+    if (!c.backend) { syncMsg('先选同步方式', true); return; }
+    syncMsg('检查中…');
+    try {
+      if (c.backend === 'onedrive') {
+        if (!FS.odSync) throw new Error('这个版本的程序不支持 OneDrive 同步，请更新 exe');
+        const dir = await FS.odSync('dir', '', '');
+        if (!dir) throw new Error('没找到 OneDrive 文件夹（见下方说明）');
+        const txt = await FS.odSync('list', '', '');
+        const files = String(txt || '').split('\u0001').filter(Boolean);
+        syncMsg('OneDrive 正常');
+        syncDetail('目录：<b>' + esc(dir) + '</b><br>已有 ' + files.length + ' 台设备的同步文件。');
+      } else {
+        if (!FS.dav) throw new Error('这个版本的程序不支持 WebDAV，请更新 exe');
+        const txt = await FS.dav('LIST', '', [c.davUrl, c.davUser, c.davPass, ''].join('\n'));
+        const n = (String(txt || '').match(/\.json/gi) || []).length;
+        syncMsg('WebDAV 连接正常');
+        syncDetail('目录里已有 ' + n + ' 个同步文件。');
+      }
+    } catch (e) {
+      syncMsg('连接失败：' + ((e && e.message) || e), true);
+    }
+  }
+
+  (function bindSync() {
+    const open = $('#btnSync');
+    if (open) open.onclick = function () {
+      const p = $('#syncPanel');
+      if (!p) return;
+      if (!p.hidden) { p.hidden = true; return; }
+      p.hidden = false;
+      syncFillForm();
+      const c = LY.syncEngine.loadCfg();
+      if (c.lastResult) syncDetail('<span class="muted">上次同步：' + esc(c.lastAt || '') + '　' + esc(c.lastResult) + '</span>');
+    };
+
+    const close = $('#btnSyncClose');
+    if (close) close.onclick = function () { const p = $('#syncPanel'); if (p) p.hidden = true; };
+
+    const now = $('#btnSyncNow');
+    if (now) now.onclick = function () { syncRun(false); };
+
+    const probe = $('#btnSyncProbe');
+    if (probe) probe.onclick = syncProbe;
+
+    // 换后端：立刻存配置，并按需显示对应设置区
+    const radios = document.querySelectorAll('input[name="syncBackend"]');
+    for (let i = 0; i < radios.length; i++) {
+      radios[i].onchange = function () {
+        if (!this.checked) return;
+        syncShowBackend(this.value);
+        syncPersist();
+        syncMsg('');
+        syncDetail('');
+      };
+    }
+    ['syncDavUrl', 'syncDavUser', 'syncDavPass', 'syncAuto'].forEach(function (id) {
+      const el = $('#' + id);
+      if (el) el.onchange = function () { syncPersist(); };
+    });
+  })();
+
+  /* 自动同步：打开程序后跑一次。延迟几秒，别和首屏渲染抢时间。 */
+  (function autoSync() {
+    let cfg;
+    try { cfg = LY.syncEngine.loadCfg(); } catch (e) { return; }
+    if (!cfg.auto || !cfg.backend) return;
+    setTimeout(function () { syncRun(true); }, 4000);
+  })();
 
   $('#btnLib').onclick = async function () {
     /* 重新载入 = 想看全部。旧版保留上一次的筛选，于是点完看到「这一类还没有卦例」，

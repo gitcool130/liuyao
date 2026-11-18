@@ -42,10 +42,13 @@ jobs:
           node test-ganzhi.js
           node test-lunar.js
           node test-shensha.js
+          node test-sync.js
           node test-ocr-paipan.js
           node --check public/app.js
           node --check public/core/shensha.js
           node --check public/core/ocr-paipan.js
+          node --check public/core/sync.js
+          node --check public/core/sync-engine.js
           node --check public/core/calendar.js
           node --check public/core/paipan.js
           node --check public/core/local-api.js
@@ -87,6 +90,7 @@ jobs:
           Write-Host "静态服务就绪"
           node test-ui-ganzhi.js http://127.0.0.1:8931
           node test-ui-ocr.js http://127.0.0.1:8931
+          node test-ui-sync.js http://127.0.0.1:8931
 
       - name: 取 WebView2 SDK
         shell: pwsh
