@@ -307,24 +307,33 @@ function rec(id, updated, question, category) {
   }
 
   console.log('\n=== 6. 界面：有「同步」按钮，能展开设置 ===');
-  await B.page.click('#sideRail .tb-btn[data-k="lib"]');
-  await B.page.waitForTimeout(400);
-  ok('卦例库有「同步」按钮', await B.page.$('#btnSync') !== null);
-  await B.page.click('#btnSync');
-  await B.page.waitForTimeout(300);
-  ok('点开后有设置面板', await B.page.$eval('#syncPanel', e => !e.hidden));
-  ok('有 OneDrive / WebDAV 两个选项', (await B.page.$$('input[name="syncBackend"]')).length === 2);
-  ok('OneDrive 区显示同步目录', (await B.page.$eval('#syncOdDir', e => e.textContent)).indexOf('OneDrive') >= 0,
-    await B.page.$eval('#syncOdDir', e => e.textContent));
+  /* 界面这一节用**全新页面**，不复用跑过多轮同步的 B。
+   * 之前复用 B，CI 上点侧边栏 30 秒超时——那条链上创建了 4 个 context、
+   * 做了十几次同步，慢机器上容易踩到某个未完成的渲染。界面检查本来就该
+   * 在一个干净页面上做，跟同步逻辑无关。 */
+  const UI = await makeDevice(browser, null, 'UI', [rec('u1', '2026-11-19T10:00:00Z', '界面检查')]);
+  const up = UI.page;
+  await up.bringToFront();
+  await up.waitForTimeout(500);
+  await up.click('#sideRail .tb-btn[data-k="lib"]', { timeout: 20000 });
+  await up.waitForTimeout(500);
+  ok('卦例库有「同步」按钮', await up.$('#btnSync') !== null);
+  await up.click('#btnSync');
+  await up.waitForTimeout(400);
+  ok('点开后有设置面板', await up.$eval('#syncPanel', e => !e.hidden));
+  ok('有 OneDrive / WebDAV 两个选项', (await up.$$('input[name="syncBackend"]')).length === 2);
+  ok('OneDrive 区显示同步目录', (await up.$eval('#syncOdDir', e => e.textContent)).indexOf('OneDrive') >= 0,
+    await up.$eval('#syncOdDir', e => e.textContent));
   // 切到 WebDAV：应出现地址输入
-  await B.page.evaluate(() => {
+  await up.evaluate(() => {
     const r = document.querySelectorAll('input[name="syncBackend"]');
     r[1].checked = true;
     r[1].dispatchEvent(new Event('change', { bubbles: true }));
   });
-  await B.page.waitForTimeout(300);
-  ok('切到 WebDAV 后显示地址输入', await B.page.$eval('#syncDavBox', e => !e.hidden));
+  await up.waitForTimeout(400);
+  ok('切到 WebDAV 后显示地址输入', await up.$eval('#syncDavBox', e => !e.hidden));
 
+  await UI.ctx.close();
   await A.ctx.close();
   await B.ctx.close();
   await browser.close();
