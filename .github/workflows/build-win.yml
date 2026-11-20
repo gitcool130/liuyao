@@ -43,6 +43,7 @@ jobs:
           node test-lunar.js
           node test-shensha.js
           node test-sync.js
+          node test-sync-collision.js
           node test-ocr-paipan.js
           node --check public/app.js
           node --check public/core/shensha.js

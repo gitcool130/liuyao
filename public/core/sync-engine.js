@@ -56,6 +56,44 @@
     return clean;
   }
 
+  /* ---------- 机器指纹 ----------
+   *
+   * 设备号（deviceId）存在 data\同步状态.json 里，是「跟目录走」的：
+   * 用户把整个程序目录拷到另一台机器，设备号跟着过去 → 两台机器自称同一个设备，
+   * 写同一个文件、互相整份覆盖（2026-11-20 王哥实测：另一台的卦例全被本机盖掉）。
+   *
+   * 机器指纹要「跟机器走」：由桌面壳给「机器名|用户名」算短哈希。
+   * 撞号时靠它认出来，然后本机自动换一个新设备号，数据就不会再打架。 */
+  let _machine = null;
+
+  async function machineId() {
+    if (_machine != null) return _machine;
+    let raw = '';
+    const FS = W.LY_FS;
+    if (FS && FS.available && FS.machine) {
+      try { raw = await FS.machine(); } catch (e) { }
+    }
+    if (!raw) {
+      // 浏览器里没有壳：退回一个稳定但区分度低的值。同步本来就需要壳，
+      // 走到这儿只可能是自检，给个能跑的就行。
+      try { raw = 'web|' + (navigator.userAgent || ''); } catch (e) { raw = 'web'; }
+    }
+    _machine = String(raw);
+    return _machine;
+  }
+
+  /* 短哈希：只用来区分机器，不需要抗碰撞到加密强度 */
+  function shortHash(txt) {
+    let h1 = 0x811c9dc5, h2 = 0x01000193;
+    const s2 = String(txt || '');
+    for (let i = 0; i < s2.length; i++) {
+      const c = s2.charCodeAt(i);
+      h1 = (h1 ^ c) * 16777619 >>> 0;
+      h2 = (h2 + c * 31 + (h2 << 5)) >>> 0;
+    }
+    return ('0000000' + h1.toString(16)).slice(-8) + ('0000000' + h2.toString(16)).slice(-8);
+  }
+
   /* ---------- 设备号与墓碑 ---------- */
 
   function newDeviceId() {
@@ -241,6 +279,21 @@
     return null;
   }
 
+  /* 两份记录集是否等价（按 id + updated_at）。用来判断「自己名下的文件是不是我写的」：
+   * 内容与本地完全一致时，谁写的都无所谓（覆盖也等于没改），不该算撞号。 */
+  function sameRecordSet(a, b) {
+    const ka = Object.keys(a || {}), kb = Object.keys(b || {});
+    if (ka.length !== kb.length) return false;
+    for (let i = 0; i < ka.length; i++) {
+      const x = a[ka[i]], y = b[ka[i]];
+      if (!y) return false;
+      const ta = x && (x.updated_at || x.created_at) || '';
+      const tb = y && (y.updated_at || y.created_at) || '';
+      if (ta !== tb) return false;
+    }
+    return true;
+  }
+
   /* ---------- 一次同步 ---------- */
 
   /* opts: { backend: 'onedrive'|'webdav', dryRun } */
@@ -254,19 +307,50 @@
 
     const meta = await readMeta();
     const local = await readLocalRecords();
+    const machine = await machineId();
+    const machineTag = shortHash(machine);
 
     /* 本地也算一份文档：否则首次同步时远端还没有本机的文件，本地卦例会「消失」。 */
-    const localDoc = S2.toDoc(meta.deviceId, local, meta.tombstones);
+    const localDoc = S2.toDoc(meta.deviceId, local, meta.tombstones, machineTag);
     const docs = [localDoc];
 
     const names = await be.list();
+
+    /* ⚠ 这里**读所有文件，包括"自己名"的那个**。
+     * 以前是 `if (nm === ownName) continue;`，理由是「自己那份等于本地现状」。
+     * 那个理由只在「设备号全局唯一」时成立。一旦用户把程序目录拷到另一台机器，
+     * 两台就共用一个设备号 —— 于是对方写的记录永远读不进来，接着被这边整份覆盖，
+     * 对方那台的卦例全没了（2026-11-20 王哥实测）。
+     * 读自己那份没有坏处：合并是幂等的，本地文档已经代表最新状态。 */
     const ownName = meta.deviceId + '.json';
+    let foreign = 0;          // 同名但来自别台机器的文件数（撞号证据）
+    let docsRead = 0;
     for (let i = 0; i < names.length; i++) {
       const nm = names[i];
-      if (nm === ownName) continue;         // 自己那份已经用本地现状代替（更新）
       let doc = null;
       try { doc = await be.read(nm); } catch (e) { continue; }
-      if (S2.isDoc(doc)) docs.push(doc);
+      if (!S2.isDoc(doc)) continue;
+      docsRead++;
+      /* 撞号判定，两条证据任一成立就算：
+       *   ① 文件名是我的设备号，但里面的 machine 不是我（新版写的文件才有此字段）；
+       *   ② 文件名是我的设备号，但 savedAt 与我上次写它时记下的不一致
+       *      —— 说明这个文件被别人改写过了。
+       *
+       * ② 是为老文件兜底的：撞号事故（2026-11-20）里的文件是旧版写的、没有 machine，
+       * 只靠 ① 判不出来，另一台同步时还会覆盖。savedAt 是本机写完自己记下的，
+       * 对不上就一定是别人动过。
+       * 自己从没同步过（meta.ownSavedAt 空）时也按 ② 处理 —— 换号无害
+       * （只是多一个文件名），被覆盖才是真丢数据。 */
+      if (nm === ownName) {
+        const machineMismatch = !!doc.machine && doc.machine !== machineTag;
+        const stampMismatch = !doc.savedAt || doc.savedAt !== (meta.ownSavedAt || '');
+        /* 内容与本地完全一致 → 就是我写的（或等价），不算撞号。
+         * 少了这一条，本机升级后第一次同步会把自己的旧文件误判成「别人的」，
+         * 白换一次设备号（无害但多余，且会在网盘上多留一个文件）。 */
+        const sameContent = sameRecordSet(doc.records, localDoc.records);
+        if (!sameContent && (machineMismatch || stampMismatch)) foreign++;
+      }
+      docs.push(doc);
     }
 
     const merged = S2.mergeDocs(docs);
@@ -278,18 +362,58 @@
       return { ok: true, dryRun: true, stats: merged.stats, diff: diff, devices: docs.length, dir: await be.dir ? '' : '' };
     }
 
-    // ① 落地本地（整库替换，保持 updated_at 原样）
+    /* ① 落地前先过一道闸：本机记录不该无故减少。
+     *
+     * 只有「墓碑时间 >= 记录更新时间」才会被删，所以正常同步不会凭空少记录。
+     * 真出现「本地有、合并后没了、又没墓碑」的情况，说明合并逻辑或远端文件有问题，
+     * 这时宁可中止并报错，也不要静默把本机数据覆盖掉——数据丢一次就找不回来了。 */
+    const tomb = merged.tombstones || {};
+    const lost = [];
+    for (let i = 0; i < local.length; i++) {
+      const r = local[i];
+      if (afterIds.indexOf(r.id) >= 0) continue;
+      const tAt = tomb[r.id] ? S2.timeOf(tomb[r.id]) : 0;
+      if (tAt && tAt >= S2.stampOf(r)) continue;    // 有墓碑依据，正常删除
+      lost.push(r.id);
+    }
+    if (lost.length) {
+      throw new Error('同步已中止：有 ' + lost.length + ' 条本机卦例会被无依据地删掉' +
+        '（' + lost.slice(0, 3).join('、') + (lost.length > 3 ? ' 等' : '') + '）。' +
+        '为免丢数据，本次没有写入任何内容。请把网盘上的同步文件留着，反馈给开发者。');
+    }
+
+    // ② 落地本地（整库替换，保持 updated_at 原样）
     await writeLocalRecords(merged.records);
 
-    // ② 墓碑以合并结果为准（记录比墓碑新的那些清掉）
+    // ③ 墓碑以合并结果为准（记录比墓碑新的那些清掉）
     const m2 = await readMeta();
     m2.tombstones = merged.tombstones || {};
     await writeMeta(m2);
     await pruneTombstones(merged.records);
 
-    // ③ 写自己那份（只写自己的，绝不碰别人的文件）
-    const ownDoc = S2.toDoc(meta.deviceId, merged.records, (await readMeta()).tombstones);
-    await be.write(ownName, ownDoc);
+    /* ④ 写自己那份。
+     *
+     * 撞号（foreign > 0 或远端自己名的文件里 machine 不是我）时：**换一个新设备号**，
+     * 用自己的号写新文件，绝不覆盖对方那份。老文件原样留着——它里面是对方的记录，
+     * 删了就真丢了。换个号之后两台机器各写各的，从此不再打架。 */
+    const metaNow = await readMeta();
+    let writeName = metaNow.deviceId + '.json';
+    if (foreign > 0) {
+      const oldId = metaNow.deviceId;
+      metaNow.deviceId = newDeviceId();
+      await writeMeta(metaNow);
+      writeName = metaNow.deviceId + '.json';
+      try { console.warn('[sync] 检测到设备号撞车，已换新号：' + oldId + ' → ' + metaNow.deviceId); } catch (e) { }
+    }
+    const ownDoc = S2.toDoc(metaNow.deviceId, merged.records, (await readMeta()).tombstones, machineTag);
+    await be.write(writeName, ownDoc);
+
+    /* 记下「我上次写这个文件时的 savedAt」。下次同步拿它对账：
+     * 对不上就说明文件被别人改过（撞号），据此换号止损。 */
+    const mLast = await readMeta();
+    mLast.ownSavedAt = ownDoc.savedAt;
+    mLast.ownFile = writeName;
+    await writeMeta(mLast);
 
     const c2 = loadCfg();
     c2.lastAt = nowIso();
@@ -301,7 +425,12 @@
       stats: merged.stats,
       diff: diff,
       devices: docs.length,
-      localCount: merged.records.length
+      localCount: merged.records.length,
+      /* 撞号信息交给界面显示：这是「两台机器共用了一个设备号」的证据，
+       * 用户必须知道——否则他会以为同步正常，其实两边一直在互相覆盖。 */
+      collision: foreign > 0,
+      oldDeviceId: foreign > 0 ? meta.deviceId : '',
+      newDeviceId: foreign > 0 ? metaNow.deviceId : ''
     };
   }
 

@@ -58,8 +58,14 @@
 
   /* ---------- 单台设备的文档 ---------- */
 
-  /* 本地数组 → 设备文档（records 用 id 索引，方便合并时按 id 查） */
-  function toDoc(deviceId, records, tombstones) {
+  /* 本地数组 → 设备文档（records 用 id 索引，方便合并时按 id 查）
+   *
+   * machine：机器标识（桌面壳给「机器名|用户名」的短哈希）。
+   * 为什么要它：设备号存在 data\同步状态.json 里，用户把整个程序目录拷到
+   * 另一台机器时，这个文件跟着走 —— 两台机器就成了「同一个设备」，
+   * 写同一个文件、互相整份覆盖（2026-11-20 王哥实测栽过）。
+   * 机器标识是**跟着机器走、不跟目录走**的，能识别出这种撞号。 */
+  function toDoc(deviceId, records, tombstones, machine) {
     const recs = {};
     (records || []).forEach(function (r) {
       if (!isRecord(r)) return;
@@ -77,6 +83,7 @@
       format: FORMAT,
       version: VERSION,
       deviceId: deviceId,
+      machine: machine || '',
       savedAt: new Date().toISOString(),
       records: recs,
       tombstones: Object.assign({}, tombstones || {})

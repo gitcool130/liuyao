@@ -88,6 +88,8 @@
      * 两个后端都需要桌面壳：OneDrive 要写本机同步文件夹（没有 WebDAV 端点），
      * WebDAV 要发 PROPFIND/PUT（浏览器跨域做不了），都由壳代劳。
      * 动作与文件名用 \u0002 拼在 name 里——协议只有四段，name 不能含换行。 */
+    // 机器标识（机器名|用户名的哈希），同步用来识别「设备号撞车」
+    machine: function () { return call('machine', '', '', 10000); },
     // action: 'dir' | 'list' | 'read' | 'write'
     odSync: function (action, file, text) {
       return call('odsync', action + '\u0002' + (file || ''), text == null ? '' : text, 120000);

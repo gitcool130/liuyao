@@ -62,7 +62,8 @@ async function makeDevice(browser, remote, label, seedRecs) {
           const op = p[0], id = p[1], name = p[2] || '', payload = p.slice(3).join('\n');
           let body = '', status = 'ok';
           try {
-            if (op === 'odsync') {
+            if (op === 'machine') { body = label + '-machine'; }
+            else if (op === 'odsync') {
               const seg = name.split('\u0002');
               const action = seg[0], file = seg[1] || '';
               if (action === 'dir') body = 'C:\\Users\\x\\OneDrive\\备份配置\\莲斋六爻排盘\\sync';
@@ -248,6 +249,62 @@ function rec(id, updated, question, category) {
     return l.map(r => r.id + '|' + r.updated_at + '|' + (r.question || '')).sort();
   });
   eq('连续同步两次，内容与时间戳都不变', after, before);
+
+  console.log('\n=== 5b. 设备号撞车（同一份 data 拷到两台机器） ===');
+  {
+    /* 王哥 2026-11-20 的事故：程序目录整个拷过去，data\同步状态.json 也跟着走，
+     * 两台机器设备号相同 → 都写同一个文件 → 对方记录读不进来还被覆盖。
+     * 这里把两台设备的 deviceId 强改成一样，看能不能自愈。 */
+    const C1 = await makeDevice(browser, null, 'C1', [rec('c1', '2026-11-19T10:00:00Z', '撞号机甲的卦')]);
+    const C2 = await makeDevice(browser, null, 'C2', [rec('c2', '2026-11-19T12:00:00Z', '撞号机乙的卦')]);
+    const SAME = 'dSAMEID123';
+    for (const dev of [C1, C2]) {
+      await dev.page.evaluate(async (id) => {
+        const e = window.LY.syncEngine;
+        const m = await e.readMeta();
+        m.deviceId = id;
+        await e.writeMeta(m);
+        const c = e.loadCfg();
+        c.backend = 'onedrive';
+        e.saveCfg(c);
+      }, SAME);
+    }
+
+    // C1 先同步，写出 dSAMEID123.json
+    const r1 = await C1.page.evaluate(async () => {
+      const r = await window.LY.syncEngine.run({ backend: 'onedrive' });
+      return { dev: await window.LY.syncEngine.deviceId(), count: r.localCount };
+    });
+    eq('C1 用原设备号写文件', r1.dev, SAME);
+
+    // C2 同步：应认出撞号、换号、并且拿到 C1 的卦
+    await syncRemoteBetween(C1, C2);
+    const r2 = await C2.page.evaluate(async () => {
+      const r = await window.LY.syncEngine.run({ backend: 'onedrive' });
+      const dev = await window.LY.syncEngine.deviceId();
+      const local = await window.LY.syncEngine.readLocalRecords();
+      return { dev: dev, ids: local.map(x => x.id).sort(), count: r.localCount };
+    });
+    ok('C2 认出撞号并换了新设备号', r2.dev !== SAME, r2.dev + ' vs ' + SAME);
+    eq('C2 没有丢掉自己的卦，也拿到了 C1 的', r2.ids, ['c1', 'c2']);
+
+    // C1 再同步：应拿到 C2 的
+    await syncRemoteBetween(C2, C1);
+    const r3 = await C1.page.evaluate(async () => {
+      await window.LY.syncEngine.run({ backend: 'onedrive' });
+      const local = await window.LY.syncEngine.readLocalRecords();
+      return local.map(x => x.id).sort();
+    });
+    eq('C1 也拿到了 C2 的（数据没丢）', r3, ['c1', 'c2']);
+
+    // 远端应有两个文件：原号 + C2 的新号
+    const files = await C1.page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem('__fake_onedrive__') || '{}')));
+    ok('远端保留了两个文件，互不覆盖', files.length >= 2, files.join(','));
+    ok('原文件还在（没被 C2 抹掉）', files.indexOf(SAME + '.json') >= 0, files.join(','));
+
+    await C1.ctx.close();
+    await C2.ctx.close();
+  }
 
   console.log('\n=== 6. 界面：有「同步」按钮，能展开设置 ===');
   await B.page.click('#sideRail .tb-btn[data-k="lib"]');

@@ -4864,10 +4864,18 @@
       const r = await LY.syncEngine.run({ backend: c.backend });
       const d = r.diff || {};
       syncMsg('同步完成 · 本机 ' + r.localCount + ' 条');
-      syncDetail(
+      let detail =
         '这次从别的设备取来 <b>' + d.added + '</b> 条，移除 <b>' + d.removed + '</b> 条；' +
-        '共 ' + r.devices + ' 台设备的记录参与合并。<br>' +
-        '<span class="muted">合并按「谁最后改过就以谁为准」，删除会传播到所有设备。</span>');
+        '共 ' + r.devices + ' 份记录参与合并。<br>' +
+        '<span class="muted">合并按「谁最后改过就以谁为准」，删除会传播到所有设备。</span>';
+      if (r.collision) {
+        /* 两台机器共用设备号：多半是把程序目录整个拷过去，data\同步状态.json 跟着走了。
+         * 已自动换号止损，但用户必须知道，否则他会以为同步一直是好的。 */
+        detail = '<span style="color:#a5352c"><b>发现设备号重复</b>：网盘上有个同名文件其实来自另一台机器' +
+          '（通常是把程序目录整个拷到另一台电脑，data\同步状态.json 跟着过去了）。' +
+          '这台已自动换用新设备号，不会再互相覆盖。</span><br>' + detail;
+      }
+      syncDetail(detail);
       // 落地后列表要重载，否则界面还停在旧数据上
       try { await loadLibPage(0, false); } catch (e) { }
     } catch (e) {

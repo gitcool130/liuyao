@@ -235,6 +235,13 @@ static class Shell
                             case "pickimage":
                                 body = PickImagePath(ref status);
                                 break;
+                            /* 机器标识：机器名|用户名。同步用它识别「设备号撞车」——
+                             * 用户把程序目录拷到另一台机器时，data\同步状态.json 里的
+                             * 设备号跟着走，两台机器就自称同一台设备、互相覆盖。
+                             * 这个值是「跟机器走」的，正好用来认出来。 */
+                            case "machine":
+                                body = MachineTag();
+                                break;
                             /* 卦例同步：OneDrive 文件夹（本机路径，客户端负责上传） */
                             /* name 里用 \u0002 拆成「动作 + 文件名」：
                              * 协议只有 op/id/name/payload 四段，name 不能含换行。 */
@@ -604,6 +611,29 @@ static class Shell
             try { if (Directory.Exists(c)) return c; } catch { }
         }
         return "";
+    }
+
+    /* 机器标识：机器名 + 用户名的短哈希。
+     * 不直接用机器名，是怕把它随同步文件传到网盘上（隐私）。哈希只用来区分机器。 */
+    static string MachineTag()
+    {
+        var raw = "";
+        try
+        {
+            raw = Environment.MachineName + "|" + Environment.UserName;
+        }
+        catch (Exception ex) { Log("MachineTag", ex); }
+        if (string.IsNullOrEmpty(raw)) raw = "unknown";
+
+        // FNV-1a 64 位，两段拼成 16 位十六进制；只求区分度，不需要密码学强度
+        ulong h = 14695981039346656037UL;
+        foreach (var ch in raw)
+        {
+            h ^= ch;
+            h *= 1099511628211UL;
+        }
+        var tag = h.ToString("x16");
+        return tag.Length > 12 ? tag.Substring(0, 12) : tag;
     }
 
     /* 同步文件放哪：<OneDrive>\备份配置\莲斋六爻排盘\sync\
