@@ -352,7 +352,10 @@ eq('清除回执 → 200 且落库值为 SQL NULL', rOcClear.status === 200 && d
 // 列表下发 outcome（前端徽标与命中率统计的数据源）
 const dbList = mkDb();
 await get('', { 'X-Access-Code': 'k' }, { LIUYAO_DB: dbList, LIB_CODE: 'k' });
-eq('卦例列表 SQL 含 outcome 列', /SELECT id, created_at, datetime, question, hex, pillars, outcome FROM casts/.test(dbList.state.sqls[0]), true);
+/* 断言本意是「列表 SQL 带上了 outcome 列」，不该锁死列顺序——
+ * 后来 category 插在 outcome 与 FROM 之间，原来的整串正则就误红了。 */
+eq('卦例列表 SQL 含 outcome 列',
+  /SELECT[\s\S]*\boutcome\b[\s\S]*FROM casts/.test(dbList.state.sqls[0]), true);
 
 // 反向锁定：断卦后的自动保存（主 POST）绝不得触碰 outcome 列——否则回填会被下一次保存冲掉
 const dbMain = mkDb();
@@ -1274,7 +1277,10 @@ Object.keys(ogSrcs).forEach(function (f) {
 eq('白名单只有五种确定性模块 + 门面', Object.keys(ogSrcs).length >= 1 && allSpecs.length >= 6, true);
 
 // 全或无：任一锚点缺失 → 放弃改写、原样返回（不 500、etag 保留）
-const brokenHtml = ogHtml.replace(/<meta property="og:site_name"[^>]*>\n/, '');
+/* 注意：public/index.html 是 CRLF 行尾，正则必须兼容 \r\n，
+ * 否则删不掉锚点，「锚点缺失」这条用例其实没制造缺失（永远测不到回退分支）。 */
+const brokenHtml = ogHtml.replace(/<meta property="og:site_name"[^>]*>\r?\n?/, '');
+eq('确实删掉了 og:site_name 锚点', brokenHtml.indexOf('og:site_name') < 0, true);
 const rBroken = await ogGet(ogCtx('/?s=' + encodeURIComponent(ogCode), brokenHtml));
 const hBroken = await rBroken.text();
 eq('锚点缺失 → 200 回退原样（不 500）', rBroken.status, 200);
