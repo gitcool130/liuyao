@@ -70,7 +70,9 @@ jobs:
           const s=[...html.matchAll(/<script src=\"([^\"]+)\"><\/script>/g)].map(m=>m[1].replace(/\?.*$/,''));
           // 后六个为上层契约层：依赖 paipan/analyze 的输出，必须排在 analyze.js 之后
           // （M21 增 premise.js，M21 落地时漏同步本断言，导致 CI 自 M21 起恒红，2026-10-27 修正）
-          const expect=['core/data.js','core/data-jieqi.js','core/calendar.js','core/paipan.js','core/analyze.js','core/sensitive.js','core/domain-methods.js','core/question-shape.js','core/premise.js','core/fact-audit.js','core/coverage-audit.js','core/yingqi-window.js','core/share.js','core/prompt.js','core/file-store.js','core/local-api.js','core/guji-lib.js','core/board.js','core/toolbar.js','app.js','bgm.js'];
+          // 2026-11-26 又漏了 sync / sync-engine / shensha / ocr-paipan / data-lunar / lunar
+          // 六个（页面早已加载、断言清单没跟上），CI 从那时起恒红。补齐并按实际顺序排。
+          const expect=['core/data.js','core/data-jieqi.js','core/calendar.js','core/data-lunar.js','core/lunar.js','core/paipan.js','core/analyze.js','core/sensitive.js','core/domain-methods.js','core/question-shape.js','core/premise.js','core/fact-audit.js','core/coverage-audit.js','core/yingqi-window.js','core/share.js','core/prompt.js','core/sync.js','core/sync-engine.js','core/shensha.js','core/ocr-paipan.js','core/file-store.js','core/local-api.js','core/guji-lib.js','core/board.js','core/toolbar.js','app.js','bgm.js'];
           if(JSON.stringify(s)!==JSON.stringify(expect)){console.error('脚本加载顺序错误:',s);process.exit(1)}
           console.log('脚本加载顺序 ✓');
           "
