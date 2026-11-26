@@ -636,16 +636,28 @@ static class Shell
         return tag.Length > 12 ? tag.Substring(0, 12) : tag;
     }
 
-    /* 同步文件放哪：<OneDrive>\备份配置\莲斋六爻排盘\sync\
+    /* 同步文件放哪：<OneDrive>\备份配置\莲斋六爻备份\sync\
      *
      * 王哥 2026-11-18 要求统一放到「备份配置」下（那里已经放了 RimeSync 等
      * 其它备份），所有需要同步的东西都在一个树里，好找也好整体搬走。
      *
-     * 旧位置是 <OneDrive>\莲斋六爻排盘\sync。老用户升级后那里可能已经有
-     * 别的设备写过的文件，直接换目录会让那些记录「消失」，所以启动/列目录时
-     * 先做一次迁移（复制，不删旧文件）。 */
-    const string SyncSubDir = @"备份配置\莲斋六爻排盘\sync";
-    const string SyncSubDirLegacy = @"莲斋六爻排盘\sync";
+     * 2026-11-26 又把末级目录名从「莲斋六爻排盘」改成「莲斋六爻备份」——
+     * 「排盘」听着像程序本体，而这里其实只存同步用的卦例记录。
+     *
+     * 历次位置（越靠前越新），升级时逐个把里面的文件迁到当前目录：
+     *   ① <OneDrive>\备份配置\莲斋六爻备份\sync   ← 现在用的
+     *   ② <OneDrive>\备份配置\莲斋六爻排盘\sync   ← 2026-11-18 ~ 11-26
+     *   ③ <OneDrive>\莲斋六爻排盘\sync            ← 最初版本
+     *
+     * 为什么不直接换路径了事：老用户升级后，记录其实都躺在旧目录里，
+     * 换目录会让它们「看起来消失」（2026-11-20 那次的教训）。所以
+     * 启动/列目录时先做一次迁移（复制，**不删旧文件**）。 */
+    const string SyncSubDir = @"备份配置\莲斋六爻备份\sync";
+    static readonly string[] SyncSubDirsLegacy = new[]
+    {
+        @"备份配置\莲斋六爻排盘\sync",
+        @"莲斋六爻排盘\sync"
+    };
 
     static string SyncDir()
     {
@@ -656,32 +668,46 @@ static class Shell
         return dir;
     }
 
-    /* 旧同步目录（升级前用的）。没有就返回空串。 */
-    static string LegacySyncDir()
+    /* 旧同步目录清单（升级前用过的）。只返回**存在**的那些，按新→旧排序。 */
+    static List<string> LegacySyncDirs()
     {
+        var list = new List<string>();
         var od = FindOneDriveRoot();
-        if (string.IsNullOrEmpty(od)) return "";
-        var dir = Path.Combine(od, SyncSubDirLegacy);
-        try { return Directory.Exists(dir) ? dir : ""; } catch { return ""; }
+        if (string.IsNullOrEmpty(od)) return list;
+        foreach (var sub in SyncSubDirsLegacy)
+        {
+            try
+            {
+                var d = Path.Combine(od, sub);
+                if (Directory.Exists(d)) list.Add(d);
+            }
+            catch { }
+        }
+        return list;
     }
 
     /* 把旧目录里的同步文件搬到新目录。
      * 只复制新目录里**还没有**的文件：两边都有时以新目录为准（它才是当前在用的），
-     * 不覆盖，免得出问题。旧文件不动——删别人的数据必须有明确指令。 */
+     * 不覆盖，免得出问题。旧文件不动——删别人的数据必须有明确指令。
+     * 多个旧目录按新→旧依次处理，先到的先占位，后面的只补缺口。 */
     static void MigrateLegacySync()
     {
         try
         {
-            var oldDir = LegacySyncDir();
-            if (string.IsNullOrEmpty(oldDir)) return;
+            var olds = LegacySyncDirs();
+            if (olds.Count == 0) return;
             var newDir = SyncDir();
-            if (string.IsNullOrEmpty(newDir) || string.Equals(oldDir, newDir, StringComparison.OrdinalIgnoreCase)) return;
-            foreach (var f in Directory.GetFiles(oldDir, "*.json"))
+            if (string.IsNullOrEmpty(newDir)) return;
+            foreach (var oldDir in olds)
             {
-                var target = Path.Combine(newDir, Path.GetFileName(f));
-                if (File.Exists(target)) continue;      // 新目录已有，不覆盖
-                try { File.Copy(f, target, false); Log("同步目录迁移→ " + target, null); }
-                catch (Exception ex) { Log("同步目录迁移失败 " + f, ex); }
+                if (string.Equals(oldDir, newDir, StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (var f in Directory.GetFiles(oldDir, "*.json"))
+                {
+                    var target = Path.Combine(newDir, Path.GetFileName(f));
+                    if (File.Exists(target)) continue;      // 新目录已有，不覆盖
+                    try { File.Copy(f, target, false); Log("同步目录迁移→ " + target, null); }
+                    catch (Exception ex) { Log("同步目录迁移失败 " + f, ex); }
+                }
             }
         }
         catch (Exception ex) { Log("MigrateLegacySync", ex); }
@@ -712,7 +738,12 @@ static class Shell
     static string OneDriveSync(string action, string name, string payload)
     {
         if (string.Equals(action, "dir", StringComparison.OrdinalIgnoreCase))
+        {
+            /* 面板一打开就会问目录。顺手先迁移：用户看到的「同步到：」后面
+             * 那个目录里已经有内容，而不是空的、要等下次同步才冒出来。 */
+            MigrateLegacySync();
             return SyncDir();
+        }
         if (string.Equals(action, "list", StringComparison.OrdinalIgnoreCase))
         {
             /* 列目录前先把旧位置的文件迁过来：用户升级后第一次同步就能看到
