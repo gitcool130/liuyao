@@ -346,10 +346,21 @@
       // 工坊原文卦例：只有卦名与变卦名
       toss = tossFromNames(c.benGua, c.bianGua);
     }
+    /* 占问取值优先级：job（人工整理／从原文 head 抽出的准确占问）> question（旧字段）
+     * 两本书的 job 口径不同：《卜筮正宗》多为「占弟病业已临危？」「妻占夫近病？」，
+     * 本身带「占」字；《增删卜易》已去掉「占」。这里统一剥掉句首那一个「占」，
+     * 免得上屏变成「占问：占弟病…」。
+     * 剥不到东西（原文就只写「占得某卦」没记占问）时留空，盘面上就不显示占问。 */
+    let jobText = String(c.job || c.question || '').replace(/\s+/g, ' ').trim();
+    jobText = jobText.replace(/^占(?![问得卦])/, '').trim();
+
     const title = c.title
-      || (c.question ? String(c.question).replace(/\s+/g, ' ').slice(0, 60) : '')
+      || jobText
       || (c.head ? String(c.head).replace(/^例[:：]\s*/, '').slice(0, 60) : '')
-      || (c.benGua ? c.benGua + (c.bianGua ? ' 之 ' + c.bianGua : '') : '（无题）');
+      /* 《卜筮正宗》卦名在 gua 字段（benGua 为空），两者都要认，否则退成「（无题）」 */
+      || ((c.benGua || c.gua)
+        ? (c.benGua || c.gua) + ((c.bianGua) ? ' 之 ' + c.bianGua : '')
+        : '（无题）');
 
     return {
       __norm: true,
@@ -365,7 +376,7 @@
       toss: (toss && toss.length === 6) ? toss : null,
       benGua: c.benGua || c.gua || '',
       bianGua: c.bianGua || '',
-      question: c.question || '',
+      question: jobText,
       conclusion: c.conclusion || c.text || '',
       quote: c.quote || '',
       raw6: Array.isArray(c.raw6) ? c.raw6 : [],
@@ -455,7 +466,8 @@
         (mine ? '<button class="gu-edit" data-edit="' + i + '" title="改这一例的书名/干支/卦名/原文">编辑</button>' : '') +
         '</div>' +
         '<div class="guji-it-meta">' + (gz ? esc(gz) : '') + esc(hex) +
-        (c.question ? '　占问：' + esc(c.question) : '') +
+        /* title 本身就是占问（多数古籍用例没另起标题）时，meta 行不再重复一次 */
+        ((c.question && c.question !== c.title) ? '　占问：' + esc(c.question) : '') +
         (c.chapter ? '　' + esc(c.chapter) : '') +
         (c.toss ? '　<span class="muted">' + c.toss.map(yaoSym).join(' ') + '</span>' : '') + '</div>' +
         '</div>';
@@ -543,7 +555,7 @@
     box.innerHTML =
       '<div class="guji-d-title">' + esc(c.title) + '</div>' +
       '<div class="muted">' + esc(c.book) + (c.chapter ? '　·　' + esc(c.chapter) : '') + (gz ? '　·　' + esc(gz) : '') + '</div>' +
-      (c.question ? '<div class="muted">占问：' + esc(c.question) + '</div>' : '') +
+      (c.question && c.question !== c.title ? '<div class="muted">占问：' + esc(c.question) + '</div>' : '') +
       hexLine + raw +
       (c.quote ? '<div class="guji-quote">原文：' + esc(c.quote) + '</div>' : '') +
       (c.conclusion && c.kind !== 'duanyu' ? '<div class="guji-concl">' + esc(c.conclusion) + '</div>' : '') +

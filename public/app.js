@@ -758,7 +758,7 @@
       ok = true;
     }
     if (!ok) return;
-    if (c.question && typeof applyQuestionText === 'function') applyQuestionText(c.question);
+    if (typeof applyQuestionText === 'function') applyQuestionText(c.question || '');
     gzRefresh();
     computePan();
     /* 古籍卦例的价值一半在断语：装进来就填到盘面下方那一栏，省得来回翻。
@@ -1757,7 +1757,15 @@
      干支排盘与「按卦名起卦」共用这一个入口，避免两套写法。 */
   function applyQuestionText(q) {
     q = String(q || '').trim();
-    if (!q) return false;
+    /* 空值也要显式清掉：换装下一则古籍卦例时，若它原文没记占问，
+     * 不清就会把上一则的占问留在盘面首行（张冠李戴）。 */
+    if (!q) {
+      const sel = $('#useSelect');
+      if (sel && sel.value === '__custom__') sel.value = '';
+      const uc0 = $('#useCustom');
+      if (uc0) { uc0.value = ''; uc0.hidden = true; }
+      return false;
+    }
     $('#useSelect').value = '__custom__';
     const uc = $('#useCustom');
     if (uc) { uc.value = q; uc.hidden = false; }
