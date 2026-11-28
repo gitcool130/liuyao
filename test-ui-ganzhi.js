@@ -618,6 +618,14 @@ async function launchBrowser() {
   ok('卦例列表已渲染', items.length > 0, 'count=' + items.length);
   const firstMeta = await items[0].innerText();
   ok('条目显示干支与卦名', /月|日/.test(firstMeta), firstMeta.split('\n').slice(1).join(' ').slice(0, 80));
+  /* 「装入后用本例的月建日辰」这句断言，期望值必须**从这条卦例本身取**。
+   * 原来写死「午月 甲子日」——那是旧数据集（自录的增删卜易 404 例）首条的月日；
+   * 换成本仓现在用的那套语料后首条变成了别的月日，断言就永远是红的
+   * （2026-11-28 查：用 HEAD 版 app.js 复跑同样红，属历史遗留，非当日改动）。
+   * 列表条目首段正是「酉月丁亥日」这种写法，正则取出来即可。 */
+  const mMeta = firstMeta.match(/^\s*([子丑寅卯辰巳午未申酉戌亥])月\s*([甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥])日/);
+  const wantMonth = mMeta ? mMeta[1] : '';
+  const wantDay = mMeta ? mMeta[2] : '';
 
   await items[0].click();
   await page.waitForSelector('#gujiDetail:not([hidden])', { timeout: 5000 });
@@ -632,7 +640,8 @@ async function launchBrowser() {
   await page.waitForTimeout(400);
   const afterLoad = await page.$eval('#gzPreview', e => e.innerText);
   ok('装入后干支页刷新出卦名', /宫：/.test(afterLoad), afterLoad.replace(/\n/g, ' | ').slice(0, 100));
-  ok('装入后月建日辰用的是本例的（午月 甲子日）', /午月/.test(afterLoad) && /甲子日/.test(afterLoad),
+  ok('装入后月建日辰用的是本例的（' + (wantMonth ? wantMonth + '月 ' + wantDay + '日' : '列表首条的月日') + '）',
+    !!mMeta && afterLoad.indexOf(wantMonth + '月') >= 0 && afterLoad.indexOf(wantDay + '日') >= 0,
     afterLoad.split('\n')[0]);
   eq('装入后切到干支模式', await page.$eval('#gzCard', e => e.hidden), false);
 

@@ -129,12 +129,19 @@ function eq(name, got, want) {
   await page.waitForTimeout(1300);
 
   const pan1 = await page.evaluate(function () {
-    const head = document.getElementById('classicText').textContent.split('\n');
+    const lines = document.getElementById('classicText').textContent.split('\n');
+    /* 导入的盘会多印一行「阳历：…」（截图上有就照抄），所以定位不能写死下标，
+     * 按内容找：干支行 / 宫名卦名行。 */
+    const pick = function (kw) {
+      return lines.filter(function (l) { return l.indexOf(kw) >= 0; })[0] || '';
+    };
     return {
       gzMode: document.getElementById('btnModeGz').className.indexOf('primary') >= 0,
       gzCard: !document.getElementById('gzCard').hidden,
       panShown: !document.getElementById('panCard').hidden,
-      head0: head[0], head1: head[1],
+      solarLine: pick('阳历'),
+      head0: pick('干支：'),
+      head1: pick('宫：'),
       moves: Array.from(document.querySelectorAll('#gzYao .gz-move'))
         .map(function (e, i) { return e.checked ? (6 - i) : 0; }).filter(Boolean),
       pane: (document.querySelector('#sideRail .tb-btn.on') || {}).textContent
@@ -143,6 +150,9 @@ function eq(name, got, want) {
   ok('装入后切到干支口径', pan1.gzMode);
   ok('干支排盘面板展开', pan1.gzCard);
   ok('卦象卡出现', pan1.panShown);
+  /* 王哥 2026-11-28 的要求：截图导入要把图上那行阳历（年月日时）一起带进来 */
+  ok('古籍版式印出截图上的阳历（2026年11月17日 16:35）',
+    pan1.solarLine.indexOf('2026年11月17日 16:35') >= 0, pan1.solarLine);
   ok('四柱与截图一致（丙午年 己亥月 乙未日）',
     pan1.head0.indexOf('丙午年') >= 0 && pan1.head0.indexOf('己亥月') >= 0 && pan1.head0.indexOf('乙未日') >= 0,
     pan1.head0);
@@ -175,14 +185,18 @@ function eq(name, got, want) {
   await page.waitForTimeout(1300);
   const pan2 = await page.evaluate(function () {
     const t = document.getElementById('classicText').textContent;
+    const lines = t.split('\n');
     return {
-      head1: t.split('\n')[1],
+      head1: lines.filter(function (l) { return l.indexOf('宫：') >= 0; })[0] || '',
+      solarLine: lines.filter(function (l) { return l.indexOf('阳历') >= 0; })[0] || '',
       staticGua: t.indexOf('静卦') >= 0,
       question: (document.getElementById('castQuestion') || {}).value,
       moves: Array.from(document.querySelectorAll('#gzYao .gz-move')).filter(function (e) { return e.checked; }).length
     };
   });
   ok('盘二 · 本卦雷天大壮', pan2.head1.indexOf('雷天大壮') >= 0, pan2.head1);
+  ok('盘二 · 阳历照旧带进来（每张图各自的那一行）',
+    pan2.solarLine.indexOf('2026年11月17日 16:35') >= 0, pan2.solarLine);
   /* 「静卦」两字只印在**表格版**（旧版既定写法，古籍版式不印）。
    * 这里验真正的判据：古籍版式第二行没有「之 某卦」，且干支面板无动爻。 */
   ok('盘二 · 古籍版式无变卦（静卦）', pan2.head1.indexOf('之') < 0, pan2.head1);
@@ -214,13 +228,18 @@ function eq(name, got, want) {
   await page.click('#btnOcrLoad');
   await page.waitForTimeout(1400);
   const txtPan = await page.evaluate(function () {
+    const lines = document.getElementById('classicText').textContent.split(String.fromCharCode(10));
+    const pick = function (kw) { return lines.filter(function (l) { return l.indexOf(kw) >= 0; })[0] || ''; };
     return {
-      head0: document.getElementById('classicText').textContent.split(String.fromCharCode(10))[0],
+      head0: pick('干支：'),
+      solarLine: pick('阳历'),
       question: (document.getElementById('castQuestion') || {}).value,
       pane: (document.querySelector('#sideRail .tb-btn.on') || {}).textContent
     };
   });
   ok('文本导入的盘排出来了', txtPan.head0.indexOf('乙未日') >= 0 && txtPan.head0.indexOf('辰巳') >= 0, txtPan.head0);
+  ok('文本导入也认下阳历那行（2026年11月17日 16:35）',
+    txtPan.solarLine.indexOf('2026年11月17日 16:35') >= 0, txtPan.solarLine);
   eq('文本导入的占问回填', txtPan.question, '这笔货款何时到');
   eq('文本导入后也跳回首页', txtPan.pane, '首页排盘');
 

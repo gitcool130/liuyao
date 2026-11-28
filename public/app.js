@@ -192,6 +192,11 @@
     monthZhi: 2,                         // 0..11（默认寅月）
     dayIdx: 0,                           // 0..59（默认甲子）
     hourZhi: GZ_NONE,                    // 0..11
+    /* 截图导入时那张图上印的「阳历 2026年11月28日13时18分」。
+     * 干支口径排盘用不到它（四柱是直接指定的），但人拿它跟原截图对勘、
+     * 存进卦例库时都要有——只作展示，绝不反向去推四柱。
+     * 手改年/月建/日辰/时辰时会清掉：改了干支，这个阳历就不再对应了。 */
+    solar: null,                         // null | {y,m,d,hh,mm}
     // 六爻是唯一真源：阴阳 + 动静。卦名（本卦/变卦）由它推出来，
     // 上方下拉只是它的另一种输入方式——两边改了都立刻同步。
     yang: [true, true, true, true, true, true],
@@ -318,7 +323,7 @@
     if (!box) return;
     let html = '';
     try {
-      const p = C.paipan(gzVals(), null, { pillars: gzPillars() });
+      const p = withSolar(C.paipan(gzVals(), null, { pillars: gzPillars() }));
       html = panClassicHTML(p);   // 预览与结果页同口径：旬空/月破一样标出来
     } catch (e) {
       html = esc('（' + (e.message || e) + '）');
@@ -361,6 +366,22 @@
     return s;
   }
 
+  /* 截图带进来的阳历时刻（年月日时）文本；没有就返回空串。
+   * 只在「从截图/文本导入」的那条路上有值，手选干支排盘时一律为空。 */
+  function gzSolarText() {
+    const s = gzState.solar;
+    if (!s) return '';
+    const p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return s.y + '年' + s.m + '月' + s.d + '日 ' + p(s.hh) + ':' + p(s.mm);
+  }
+
+  /* 把阳历时刻挂到这张盘上（不是全局读 gzState）：盘一旦排出，就是自洽的快照，
+   * 复制文本、画板画图、存库都从 p 上取，不会因为后来改了干支而错位。 */
+  function withSolar(p) {
+    if (p && gzState.solar) p.solarText = gzSolarText();
+    return p;
+  }
+
   // 干支模式下的 #timeInfo：与公历模式同格式，但标注口径与旬空
   function renderGzTime() {
     let pil;
@@ -368,8 +389,14 @@
     const ben = gzBenName();
     let bian = gzBianName();
     if (bian === ben) bian = '';
+    /* 从截图/文本导入的盘，图上那行阳历时刻照原样显示出来（年月日时）——
+     * 干支口径本身用不到它，但人要拿它跟截图对照，也常常要誊到别处去。 */
+    const solarTxt = gzSolarText();
     $('#timeInfo').innerHTML =
-      '<div class="muted">干支排盘（不经公历换算）· 本卦' + (ben ? ' ' + ben : '未选') +
+      (solarTxt
+        ? '<div class="muted">阳历 <b class="gz-hi">' + solarTxt + '</b>（自截图读入，仅作对照；四柱以干支为准）</div>'
+        : '') +
+      '<div class="muted">干支排盘' + (solarTxt ? '' : '（不经公历换算）') + '· 本卦' + (ben ? ' ' + ben : '未选') +
       (bian ? ' 之 ' + bian : '（静卦）') + '</div>' +
       '<div class="gz">' + (pil.yearGZ ? pil.yearGZ + '年 · ' : '') + pil.monthGZ + '月 · <b>' + pil.dayGZ + '日</b>' +
       (pil.hourGZ ? ' · ' + pil.hourGZ + '时' : '') + '</div>' +
@@ -400,6 +427,9 @@
     $('#btnModeRand').className = 'btn ' + (castMode === 'rand' ? 'primary' : 'ghost');
     // 切口径即作废当前盘：两种占时口径的盘不能混着看
     records = []; pan = null; lastBullets = []; lastAnalysis = null;
+    /* 截图带进来的阳历时刻也一起作废：它属于「上一张盘」，
+     * 换了口径还挂着就会张冠李戴。导入流程（ocrLoadToPan）在本函数之后才写入。 */
+    gzState.solar = null;
     setDuan('', '');          // 断语跟着盘一起作废，别把上一卦的断语带过来
     resetSaveCat();           // 存入分类同理：新卦不该带上一卦的类
     resetTossState();
@@ -661,7 +691,7 @@
   function computePan() {
     if (castMode === 'ganzhi') {
       // 干支口径：四柱由用户指定，selectedDate 不参与（传 null 明确表态）
-      applyPan(C.paipan(gzVals(), null, { pillars: gzPillars() }));
+      applyPan(withSolar(C.paipan(gzVals(), null, { pillars: gzPillars() })));
       return;
     }
     applyPan(C.paipan(records.map(function (r) { return r.val; }), selectedDate));
@@ -683,6 +713,9 @@
       else if (id === 'gzMonth') gzState.monthZhi = v;
       else if (id === 'gzDay') gzState.dayIdx = v;
       else gzState.hourZhi = v;
+      /* 干支被手改了，从截图读来的那个阳历就不再对应这张盘——宁可丢掉，
+       * 也不能让盘面上印着一个跟干支对不上的日期。 */
+      gzState.solar = null;
       renderGzPreview();
       renderGzTime();
     };
@@ -897,6 +930,11 @@
     };
     const rows = [];                       // 每行是「段数组」：{t: 文本, cls: 样式名}
     const flat = function (txt) { rows.push([{ t: txt }]); };
+
+    /* 0) 阳历时刻：只有「从截图/文本导入」的盘才有（p.solarText），
+     * 手选干支排盘、古籍卦例都没有这一行——版式与旧版逐字相同，回归不受影响。
+     * 放在干支行之前，与截图上「时间: 阳历…」的位置一致，便于对勘。 */
+    if (p.solarText) flat('阳历：' + p.solarText);
 
     // 1) 干支 + 旬空 + 占问
     let head = '干支：';
@@ -1165,7 +1203,8 @@
       if (q) head += '　占问：' + q;
       let gongLine = pan.palace + '宫：' + pan.benName + hexTag(pan);
       if (pan.hasBian) gongLine += '　之　' + pan.bianPalace + '宫：' + pan.bianName + hexTag(pan);
-      headHtml = '<div class="meta-line gz-meta">' + head + '</div>' +
+      headHtml = (pan.solarText ? '<div class="meta-line gz-solar">阳历 ' + esc(pan.solarText) + '</div>' : '') +
+        '<div class="meta-line gz-meta">' + head + '</div>' +
         '<div class="hex-title gz-title">' + gongLine + '</div>';
     } else {
       headHtml = '<div class="hex-title">' + title + '</div>' +
@@ -1414,7 +1453,7 @@
     rows += '<tr><td class="k">动爻</td><td class="v">' + esc(dongTxt) + '　<span class="muted" style="font-size:12px">' + esc(dongSrc) + '</span></td></tr>';
     rows += '<tr><td class="k">四柱</td><td class="v">' +
       esc([pil.yearGZ || '—', pil.monthGZ || '—', pil.dayGZ || '—', pil.hourGZ || '—'].join('　')) + '</td></tr>';
-    rows += '<tr><td class="k">占时</td><td class="v">' + esc(solarTxt) + '</td></tr>';
+    rows += '<tr><td class="k">阳历</td><td class="v">' + esc(solarTxt) + '</td></tr>';
     if (res.question) rows += '<tr><td class="k">占问</td><td class="v">' + esc(res.question) + '</td></tr>';
     if (res.method) rows += '<tr><td class="k">起卦方式</td><td class="v">' + esc(res.method) + '</td></tr>';
 
@@ -1488,6 +1527,24 @@
     if (typeof pil.monthZhi === 'number' && pil.monthZhi >= 0) gzState.monthZhi = pil.monthZhi;
     if (typeof pil.dayIdx === 'number' && pil.dayIdx >= 0) gzState.dayIdx = pil.dayIdx;
     if (typeof pil.hourZhi === 'number' && pil.hourZhi >= 0) gzState.hourZhi = pil.hourZhi;
+
+    /* 截图顶上那行「时间: 阳历2026年11月28日13时18分」要留下（年月日时）。
+     * 排盘本身不用它——四柱已由干支指定，绝不由阳历反推（两个 App 的历法
+     * 常有一两天差，一反推就把原盘的日辰改掉了）。它只干两件事：
+     *   ① 在盘面上照原样显示出来，方便跟截图逐字对勘；
+     *   ② 顺手把 selectedDate 拨到这个时刻，切「公历时刻」时不必再手改。
+     * res.solar 为空（图上就没印阳历）时置 null，别把上一张图的时刻留在这儿。 */
+    gzState.solar = res.solar
+      ? { y: res.solar.y, m: res.solar.m, d: res.solar.d, hh: res.solar.hh, mm: res.solar.mm }
+      : null;
+    if (gzState.solar) {
+      try {
+        selectedDate = C.dateOfWall({
+          y: gzState.solar.y, m: gzState.solar.m, d: gzState.solar.d,
+          h: gzState.solar.hh, min: gzState.solar.mm
+        });
+      } catch (e) { /* 历法表越界之类：阳历只作对照，拨不过去不影响排盘 */ }
+    }
 
     gzState.yang = bits.map(function (b) { return b === 1; });
     gzState.moving = bits.map(function (b, i) { return (res.dong || []).indexOf(i + 1) >= 0; });
@@ -2045,7 +2102,9 @@
     let txt = '【六爻排盘】\n';
     if (pil.ganzhiMode) {
       // 干支口径：不能写「时间：2026-…（北京时间）」——四柱并非由公历推得，
-      // 写公历会让人以为两者对得上（实际常常对不上，这正是干支排盘的用途）
+      // 写公历会让人以为两者对得上（实际常常对不上，这正是干支排盘的用途）。
+      // 例外：截图/文本导入的盘本来就带着图上印的阳历，照抄，并注明是原文。
+      if (pan.solarText) txt += '阳历：' + pan.solarText + '（截图原文，仅作对照）\n';
       txt += '时间：' + gzPillarText(pil) + '（干支排盘，不经公历换算；旬空' + pil.kongStr + '）\n';
     } else {
       txt += '时间：' + fmtDT(selectedDate) + '（北京时间；' + pil.yearGZ + '年 ' + pil.monthGZ + '月 ' + pil.dayGZ + '日 ' + pil.hourGZ + '时，旬空' + pil.kongStr + '）\n';

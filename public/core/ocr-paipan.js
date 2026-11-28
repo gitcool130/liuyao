@@ -351,14 +351,35 @@
     return '';
   }
 
-  function readSolar(fullCompact) {
-    const m = fullCompact.match(/(?:阳历|公历)?(\d{4})年(\d{1,2})月(\d{1,2})日(\d{1,2})?[时点]?(\d{1,2})?分?/);
+  /* 把一次匹配整理成 {y,m,d,hh,mm}；不像个真实日期的直接丢（返回 null） */
+  function solarFromMatch(m) {
     if (!m) return null;
     const y = +m[1], mo = +m[2], d = +m[3];
-    const hh = m[4] == null || m[4] === '' ? 0 : +m[4];
-    const mm = m[5] == null || m[5] === '' ? 0 : +m[5];
-    if (y < 1900 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    if (!(y >= 1900 && y <= 2100) || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    /* 「16时75分」这种读歪的时分不当作有效时刻，退回整点 */
+    let hh = (m[4] == null || m[4] === '') ? 0 : +m[4];
+    let mm = (m[5] == null || m[5] === '') ? 0 : +m[5];
+    if (hh > 23) hh = 0;
+    if (mm > 59) mm = 0;
     return { y: y, m: mo, d: d, hh: hh, mm: mm };
+  }
+
+  /* 公历时刻。截图里那一行通常长这样：
+   *   「时间: 阳历2026年11月28日13时18分」（排盘宝这类 App 的口语写法）
+   * 三种写法都要吃，OCR 出来什么样都得认：
+   *   ① 阳历 2026年11月28日13时18分 —— 汉字写法，时分可缺（缺则记 0）
+   *   ② 2026-11-28 13:18 / 2026/11/28 / 2026.11.28
+   *   ③ 只有日期没有时刻
+   * 「阳历/公历」前缀的优先：一张盘里常常同时还有农历日期、节气交接日，
+   * 先把带前缀那个抓走，别让别的数字抢先占位。 */
+  const SOLAR_CN = '(\\d{4})\\s*年\\s*(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*日\\s*(?:(\\d{1,2})\\s*[时点]\\s*(?:(\\d{1,2})\\s*分?)?)?';
+  const SOLAR_DASH = '(\\d{4})\\s*[-/.]\\s*(\\d{1,2})\\s*[-/.]\\s*(\\d{1,2})(?:\\s*[T\\s]\\s*(\\d{1,2})\\s*[:时点]\\s*(\\d{1,2})?)?';
+
+  function readSolar(fullCompact) {
+    const s = String(fullCompact || '');
+    return solarFromMatch(s.match(new RegExp('(?:阳历|公历)\\s*' + SOLAR_CN)))
+      || solarFromMatch(s.match(new RegExp(SOLAR_CN)))
+      || solarFromMatch(s.match(new RegExp(SOLAR_DASH)));
   }
 
   /* ---------- 5. 总入口 ---------- */
