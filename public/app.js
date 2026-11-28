@@ -396,7 +396,9 @@
       (solarTxt
         ? '<div class="muted">阳历 <b class="gz-hi">' + solarTxt + '</b>（自截图读入，仅作对照；四柱以干支为准）</div>'
         : '') +
-      '<div class="muted">干支排盘' + (solarTxt ? '' : '（不经公历换算）') + '· 本卦' + (ben ? ' ' + ben : '未选') +
+      /* 「干支排盘」后面那个空格不能省：有阳历时后缀括号整段不出现，
+       * 少了它就印成「干支排盘· 本卦」（真机第一版就是这么出去的）。 */
+      '<div class="muted">干支排盘' + (solarTxt ? ' · ' : '（不经公历换算）· ') + '本卦' + (ben ? ' ' + ben : '未选') +
       (bian ? ' 之 ' + bian : '（静卦）') + '</div>' +
       '<div class="gz">' + (pil.yearGZ ? pil.yearGZ + '年 · ' : '') + pil.monthGZ + '月 · <b>' + pil.dayGZ + '日</b>' +
       (pil.hourGZ ? ' · ' + pil.hourGZ + '时' : '') + '</div>' +
